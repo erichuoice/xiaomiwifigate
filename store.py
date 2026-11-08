@@ -274,18 +274,132 @@ def load_builtin_questions():
     return validate_questions(data["questions"], allow_empty=True)
 
 
+DEFAULT_CONFIG = {
+    "server": {
+        "host": "0.0.0.0",
+        "port": 8080,
+        "max_wrong_per_window": 3,
+        "lock_seconds": 60,
+        "reblock_minutes": 60,
+        "trust_x_forwarded_for": False,
+        "admin_password": "",
+        "note": "答对后可以上网，到时间会自动断开，需要再答一次。",
+        "daily_cap_minutes": 0,
+    },
+    "router": {
+        "mode": "mock",
+        "model": "Xiaomi 路由器 BE7000 (RC06)",
+        "base_url": "http://192.168.31.1",
+        "admin_password": "",
+        "stok": "",
+        "login_path": "/cgi-bin/luci/api/xqsystem/login",
+        "device_list_path": "/cgi-bin/luci/;stok={stok}/api/misystem/devicelist",
+        "device_list_fallback_path": "/cgi-bin/luci/;stok={stok}/api/xqsystem/get_device_list",
+        "set_mac_filter_path": "/cgi-bin/luci/;stok={stok}/api/xqsystem/set_mac_filter",
+        "set_filter_method": "both",
+        "wan_allow": "1",
+        "wan_block": "0",
+        "dry_run": True,
+    },
+}
+
+
+def gen_password(groups=3, size=4):
+    """生成好念好抄的密码，形如 oNfH-lLwi-3XN9。已排除易混字符 0/O/1/l/I。"""
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+    raw = "".join(secrets.choice(alphabet) for _ in range(groups * size))
+    return "-".join(raw[i:i + size] for i in range(0, len(raw), size))
+
+
 class Store:
     def __init__(self):
         self._lock = threading.RLock()
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            self._static = json.load(f)
+        self._config_file = CONFIG_PATH
+        self._config_exists = os.path.isfile(CONFIG_PATH)
+        if self._config_exists:
+            try:
+                with open(CONFIG_PATH, encoding="utf-8") as f:
+                    self._static = json.load(f)
+            except (OSError, ValueError) as exc:
+                raise StoreError("config.json 无法读取：%s" % exc)
+        else:
+            # 首次启动、还没配置：先用内置默认值把服务跑起来，
+            # 所有页面跳转到 /setup，等用户填完路由器密码再落盘。
+            self._static = copy.deepcopy(DEFAULT_CONFIG)
         self.trust_x_forwarded_for = bool(
             self._static["server"].get("trust_x_forwarded_for", False))
+
         os.makedirs(STATE, exist_ok=True)
         self._builtin = load_builtin_questions()
         self._runtime = self._load_runtime()
         self._sessions = {}
         self._login_fail = {}
+
+    # ---- 首次配置 ----
+
+    @property
+    def configured(self):
+        """是否已完成首次配置。
+
+        判定标准是「路由器管理密码非空」，而不是「config.json 是否存在」：
+        容器部署时入口脚本会先放一份空密码模板，文件存在但等于没配置。
+        """
+        with self._lock:
+            router = self._static.get("router") or {}
+            return bool(str(router.get("admin_password") or "").strip())
+
+    @property
+    def config_path(self):
+        return self._config_file
+
+    def save_config(self, router_password, admin_password=None,
+                    base_url=None, mode="miwifi", dry_run=True):
+        """首次配置：校验后写入 config.json（权限 600），立即生效，无需重启。
+
+        仅在尚未配置时调用；已配置时由上层拒绝，避免未登录者改写密码。
+        返回实际使用后台密码（用户留空时是自动生成的）。
+        """
+        if self.configured:
+            raise StoreError("已经配置过了，如需重配请先删除 config.json 再重启")
+        router_password = str(router_password or "").strip()
+        if not router_password:
+            raise StoreError("请填写路由器管理密码")
+        mode = str(mode or "miwifi").strip().lower()
+        if mode not in ("miwifi", "mock"):
+            raise StoreError("路由器模式只能是 miwifi 或 mock")
+        base_url = str(base_url or "").strip() or DEFAULT_CONFIG["router"]["base_url"]
+        if not base_url.startswith(("http://", "https://")):
+            raise StoreError("路由器地址要以 http:// 开头，例如 http://192.168.31.1")
+        admin_password = str(admin_password or "").strip() or gen_password()
+        if len(admin_password) < 6:
+            raise StoreError("后台密码至少 6 位")
+
+        with self._lock:
+            cfg = copy.deepcopy(self._static)
+            cfg.setdefault("server", {})
+            cfg.setdefault("router", {})
+            cfg["server"]["admin_password"] = admin_password
+            cfg["router"].update({
+                "mode": mode,
+                "base_url": base_url.rstrip("/"),
+                "admin_password": router_password,
+                "stok": "",
+                "dry_run": bool(dry_run),
+            })
+            tmp = self._config_file + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, self._config_file)
+            self._static = cfg
+            self._config_exists = True
+            self.trust_x_forwarded_for = bool(
+                cfg["server"].get("trust_x_forwarded_for", False))
+        return {"admin_password": admin_password, "config_path": self._config_file,
+                "mode": mode, "base_url": cfg["router"]["base_url"]}
 
     # ---- 初始化 / 迁移 ----
 

@@ -17,10 +17,13 @@ services:
       # NAS 上若 state 目录写不进去，把这两个值改成宿主机目录属主的 uid/gid
       PUID: "1000"
       PGID: "1000"
+      # 配置文件放在挂载目录内。首次启动时 /setup 要把密码写回这里，
+      # 所以不能再用单文件只读挂载（那样引导模式存不下配置）。
+      WIFIGATE_CONFIG: /config/config.json
 
     volumes:
-      # 真实配置（含管理密码）只存在于宿主机，不进镜像层
-      - ./config.json:/app/config.json:ro
+      # 配置目录（可写）：含路由器密码与后台密码，宿主权限建议 700
+      - ./config:/config
       - ./state:/app/state
 
     logging:

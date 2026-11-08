@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#f6f7f9">
+<title>首次配置 · 上网先答题</title>
+<style>
+  :root {
+    --bg: #f4f6f8;
+    --card: #ffffff;
+    --line: #e2e6ea;
+    --text: #171b21;
+    --muted: #6b7280;
+    --accent: #1a6fd4;
+    --accent-soft: #eaf2fd;
+    --ok: #0f7a5a;
+    --ok-bg: #e4f6ee;
+    --no: #b03030;
+    --no-bg: #fdeaea;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 20px 16px 40px;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 16px; line-height: 1.6; -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 21px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 16px; padding: 18px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 15px; font-weight: 600; margin: 0 0 12px; }
+
+  label { display: block; font-size: 13.5px; font-weight: 600; margin: 14px 0 6px; }
+  label:first-of-type { margin-top: 0; }
+  .hint { font-size: 12.5px; color: var(--muted); font-weight: 400; margin: 4px 0 0; }
+
+  input[type=text], input[type=password] {
+    width: 100%; padding: 11px 13px; font-size: 15px;
+    border: 1.5px solid var(--line); border-radius: 12px;
+    background: #fff; color: var(--text); font-family: inherit;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+
+  .check { display: flex; align-items: flex-start; gap: 9px; margin-top: 16px; }
+  .check input { width: 18px; height: 18px; margin: 3px 0 0; flex: 0 0 auto; accent-color: var(--accent); }
+  .check span { font-size: 13.5px; }
+
+  button {
+    width: 100%; margin-top: 18px; padding: 13px;
+    font-size: 16px; font-weight: 600; font-family: inherit;
+    border: none; border-radius: 13px; background: var(--accent); color: #fff;
+    cursor: pointer;
+  }
+  button:disabled { opacity: .55; cursor: default; }
+
+  .msg { margin-top: 14px; padding: 11px 13px; border-radius: 11px; font-size: 13.5px; display: none; }
+  .msg.show { display: block; }
+  .msg.err { background: var(--no-bg); color: var(--no); }
+  .msg.ok  { background: var(--ok-bg);  color: var(--ok); }
+  .msg.warn { background: #fdf4e3; color: #8a5a0b; }
+
+  .pwd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 19px; letter-spacing: .5px; background: var(--accent-soft);
+    color: var(--accent); padding: 12px; border-radius: 11px;
+    text-align: center; margin: 10px 0; user-select: all;
+  }
+  .kv { display: flex; gap: 10px; font-size: 13.5px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+  .kv:last-child { border-bottom: none; }
+  .kv .k { color: var(--muted); flex: 0 0 84px; }
+  .kv .v { word-break: break-all; }
+
+  a.btn {
+    display: block; text-align: center; text-decoration: none;
+    margin-top: 14px; padding: 13px; border-radius: 13px;
+    background: var(--accent); color: #fff; font-size: 16px; font-weight: 600;
+  }
+  .hide { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>首次配置</h1>
+  <p class="sub">还差一步：填一下路由器的管理密码，程序才有权替你放行设备。</p>
+
+  <form id="form" class="card" autocomplete="off">
+    <h2>连接小米路由器</h2>
+
+    <label for="base">路由器地址</label>
+    <input type="text" id="base" value="http://192.168.31.1" placeholder="http://192.168.31.1">
+    <p class="hint">一般不用改。就是你在浏览器里进路由器后台的那个地址。</p>
+
+    <label for="rpwd">路由器管理密码</label>
+    <input type="password" id="rpwd" placeholder="登录路由器后台用的密码" autocomplete="new-password">
+    <p class="hint">注意不是 Wi-Fi 密码，是登录 192.168.31.1 后台的那个密码。</p>
+
+    <label for="apwd">答题后台密码（可留空）</label>
+    <input type="password" id="apwd" placeholder="留空则自动生成一个" autocomplete="new-password">
+    <p class="hint">家长管理题库、分配设备时用。留空的话系统会生成一个随机密码给你。</p>
+
+    <div class="check">
+      <input type="checkbox" id="dry" checked>
+      <span><b>先演练，不真改规则</b><br>
+        <span class="hint">只登录路由器、读取设备列表，但不会真的拦截或放行。
+        等验证没问题再关掉。</span></span>
+    </div>
+
+    <button type="submit" id="submit">保存并验证</button>
+    <div class="msg" id="msg"></div>
+  </form>
+
+  <div id="done" class="card hide">
+    <h2>配置完成</h2>
+    <div id="doneMsg"></div>
+    <div id="pwdBox" class="hide">
+      <p class="hint" style="margin-top:12px">这是自动生成的答题后台密码，请记下来（只显示这一次）：</p>
+      <div class="pwd" id="pwd"></div>
+    </div>
+    <div class="kv"><span class="k">配置文件</span><span class="v" id="cfgPath"></span></div>
+    <a class="btn" href="/admin">进入答题后台</a>
+    <a class="btn" href="/" style="background:#6b7280">去答题页看看</a>
+  </div>
+</div>
+
+<script>
+(function () {
+  var form = document.getElementById('form');
+  var msg = document.getElementById('msg');
+  var btn = document.getElementById('submit');
+
+  function show(text, kind) {
+    msg.textContent = text;
+    msg.className = 'msg show ' + (kind || 'err');
+  }
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var rpwd = document.getElementById('rpwd').value.trim();
+    var apwd = document.getElementById('apwd').value.trim();
+    if (!rpwd) { return show('请填写路由器管理密码'); }
+
+    btn.disabled = true;
+    btn.textContent = '正在保存…';
+    msg.className = 'msg';
+
+    fetch('/api/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        router_password: rpwd,
+        admin_password: apwd,
+        base_url: document.getElementById('base').value.trim(),
+        mode: 'miwifi',
+        dry_run: document.getElementById('dry').checked
+      })
+    }).then(function (r) {
+      return r.json().then(function (data) { return { status: r.status, data: data }; });
+    }).then(function (res) {
+      var d = res.data || {};
+      if (!res.status || res.status >= 400 || !d.ok) {
+        btn.disabled = false;
+        btn.textContent = '保存并验证';
+        return show(d.detail || '保存失败，请重试');
+      }
+      // 成功：切到结果卡
+      form.classList.add('hide');
+      document.getElementById('done').classList.remove('hide');
+
+      var dm = document.getElementById('doneMsg');
+      if (d.router_check === 'ok') {
+        dm.innerHTML = '<div class="msg show ok">已连接到路由器，能正常读取设备列表。</div>';
+      } else if (d.router_check === 'fail') {
+        dm.innerHTML = '<div class="msg show warn">配置已保存，但登录路由器失败：' +
+          (d.router_detail || '未知原因') +
+          '<br>请检查密码是否正确；密码错了放行会失败。</div>';
+      } else {
+        dm.innerHTML = '<div class="msg show ok">配置已保存。</div>';
+      }
+
+      if (!apwd) {
+        document.getElementById('pwdBox').classList.remove('hide');
+        document.getElementById('pwd').textContent = d.admin_password;
+      }
+      document.getElementById('cfgPath').textContent = d.config_path || 'config.json';
+    }).catch(function (err) {
+      btn.disabled = false;
+      btn.textContent = '保存并验证';
+      show('网络中断：' + err);
+    });
+  });
+})();
+</script>
+</body>
+</html>

@@ -64,6 +64,12 @@ STORE = store.Store()
 ADAPTER = router_adapter.build(STORE.snapshot()["router"], log)
 
 
+def _reload_adapter():
+    """配置变更后重建适配器（密码 / 地址 / 模式都可能变）。"""
+    global ADAPTER
+    ADAPTER = router_adapter.build(STORE.snapshot()["router"], log)
+
+
 class NotManaged(Exception):
     """设备未归属任何题库，不调用放行接口。"""
 
@@ -380,6 +386,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _redirect(self, location, code=302):
+        self.send_response(code)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+
     def _admin(self, method):
         size = int(self.headers.get("Content-Length", "0") or 0) if method == "POST" else 0
         raw = self.rfile.read(size) if size else b""
@@ -405,6 +418,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path in ("/setup", "/setup.html"):
+            # 配置完成后不再暴露引导页，避免有人靠它改写密码
+            if STORE.configured:
+                return self._redirect("/")
+            return self._static("setup.html", "text/html; charset=utf-8")
+        if not STORE.configured:
+            if path in ("/", "/index.html", "/admin", "/admin.html"):
+                return self._redirect("/setup")
+            if path.startswith("/api/") and path != "/api/health":
+                return self._json({
+                    "ok": False, "setup_required": True,
+                    "detail": "还没完成初始化，请打开 /setup",
+                }, 428)
         if path in ("/", "/index.html"):
             return self._static("index.html", "text/html; charset=utf-8")
         if path in ("/admin", "/admin.html"):
@@ -418,6 +444,7 @@ class Handler(BaseHTTPRequestHandler):
             summary = STORE.summary()
             return self._json({
                 "ok": True,
+                "configured": STORE.configured,
                 "mode": cfg["router"]["mode"],
                 "adapter": ADAPTER.describe(),
                 "bind": "%s:%s" % (cfg["server"]["host"], cfg["server"]["port"]),
@@ -468,6 +495,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/api/setup":
+            return self._setup()
+        if not STORE.configured:
+            return self._json({
+                "ok": False, "setup_required": True,
+                "detail": "还没完成初始化，请打开 /setup",
+            }, 428)
         if path.startswith("/api/admin/"):
             return self._admin("POST")
         if path == "/api/start":
@@ -475,6 +509,46 @@ class Handler(BaseHTTPRequestHandler):
         if path != "/api/answer":
             return self._json({"error": "not found"}, 404)
         return self._answer()
+
+    def _setup(self):
+        """首次配置：接收路由器密码，写 config.json 并立即生效。"""
+        if STORE.configured:
+            return self._json({"ok": False, "detail": "已经配置过了"}, 403)
+        payload = self._payload()
+        if payload is None:
+            return self._json({"ok": False, "detail": "请求格式不正确"}, 400)
+        try:
+            result = STORE.save_config(
+                payload.get("router_password"),
+                payload.get("admin_password"),
+                payload.get("base_url"),
+                payload.get("mode") or "miwifi",
+                payload.get("dry_run", True),
+            )
+        except store.StoreError as exc:
+            return self._json({"ok": False, "detail": str(exc)}, 400)
+
+        _reload_adapter()
+        log("SETUP 完成首次配置 mode=%s base_url=%s config=%s"
+            % (result["mode"], result["base_url"], result["config_path"]))
+
+        # 顺手验一次能不能登录路由器；失败不影响保存，只回显提示
+        checked, detail = "skipped", ""
+        if result["mode"] == "miwifi":
+            try:
+                ADAPTER.get_stok(force_refresh=True)
+                checked = "ok"
+            except Exception as exc:
+                checked, detail = "fail", str(exc)
+                log("SETUP 路由器登录验证失败：%s" % exc)
+
+        return self._json({
+            "ok": True,
+            "admin_password": result["admin_password"],
+            "config_path": result["config_path"],
+            "router_check": checked,
+            "router_detail": detail,
+        })
 
     def _payload(self):
         size = int(self.headers.get("Content-Length", "0") or 0)

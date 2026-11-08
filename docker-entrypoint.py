@@ -16,17 +16,45 @@ import sys
 import tempfile
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-CONFIG = os.path.join(BASE, "config.json")
+CONFIG = os.environ.get("WIFIGATE_CONFIG") or os.path.join(BASE, "config.json")
 DEFAULT = os.path.join(BASE, "config.default.json")
 STATE = os.path.join(BASE, "state")
 RUNTIME_CONFIG = os.path.join(tempfile.gettempdir(), "wifigate-config.json")
 
 
 def prepare():
-    if not os.path.exists(CONFIG):
-        shutil.copyfile(DEFAULT, CONFIG)
-        print("[init] 未挂载 config.json，已复制镜像内默认配置（mock 模式）", flush=True)
+    """准备状态目录与配置占位。
+
+    没有 config.json 时**不再**复制一份「能直接用」的配置，而是放一份空密码模板：
+    服务据此判定「尚未配置」，所有页面跳转到 /setup 引导页。
+    """
     os.makedirs(STATE, exist_ok=True)
+    if os.path.exists(CONFIG):
+        return
+    try:
+        with open(DEFAULT, encoding="utf-8") as f:
+            data = f.read()
+        with open(CONFIG, "w", encoding="utf-8") as f:
+            f.write(data)
+        os.chmod(CONFIG, 0o600)
+        print("[init] 未找到 config.json，已放一份待配置模板（打开网页填密码）", flush=True)
+    except OSError as exc:
+        print("[init] 无法写入 %s（%s），将以引导模式运行" % (CONFIG, exc), flush=True)
+
+
+def needs_setup():
+    """配置里没有路由器密码 = 还没配置过。"""
+    try:
+        with open(CONFIG, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        return True
+    return not str((cfg.get("router") or {}).get("admin_password") or "").strip()
+
+
+def load_default():
+    with open(DEFAULT, encoding="utf-8") as f:
+        return json.load(f)
 
 
 def load_cfg():
@@ -35,11 +63,11 @@ def load_cfg():
 
 
 def check():
-    prepare()
-    cfg = load_cfg()
+    exists = os.path.exists(CONFIG)
+    cfg = load_cfg() if exists else load_default()
     s, r = cfg["server"], cfg["router"]
-    st = os.stat(CONFIG)
-    print("配置文件       : %s" % CONFIG)
+    print("配置文件       : %s（%s）" % (
+        CONFIG, "已存在" if exists else "不存在，首次启动会进入网页引导 /setup"))
     print("监听地址       : %s:%s" % (s["host"], s["port"]))
     print("路由器模式     : %s" % r.get("mode"))
     print("已配置管理密码 : %s" % ("是" if r.get("admin_password") else "否"))
@@ -53,9 +81,13 @@ def check():
         runtime, "已存在" if os.path.exists(runtime) else "启动后自动创建"))
     print("目标 UID/GID   : %s/%s（只影响 state 目录写入）" % (
         os.environ.get("PUID", "1000"), os.environ.get("PGID", "1000")))
-    print("config 属主/权限: uid=%s gid=%s mode=%s" % (
-        st.st_uid, st.st_gid, oct(st.st_mode & 0o777)))
-    print("配置读取方式   : 启动时复制到容器内 %s，config.json 保持 600 也可读" % RUNTIME_CONFIG)
+    if exists:
+        st = os.stat(CONFIG)
+        print("config 属主/权限: uid=%s gid=%s mode=%s" % (
+            st.st_uid, st.st_gid, oct(st.st_mode & 0o777)))
+        print("配置读取方式   : 复制到容器内 %s，config.json 保持 600 也可读" % RUNTIME_CONFIG)
+    else:
+        print("配置读取方式   : 引导模式，直接读写 %s（填完密码后落盘到此）" % CONFIG)
     print("提醒           : 必须用 network_mode: host，否则客户端 IP 会被 NAT")
     if r.get("mode") == "mock":
         print("当前是 mock 模式，答对只写日志，不会改动路由器。")
@@ -106,7 +138,16 @@ def main():
         return
     prepare()
     uid, gid = target_ids()
-    os.environ["WIFIGATE_CONFIG"] = prepare_runtime_config(uid, gid)
+    if needs_setup():
+        # 引导模式：必须指向真实路径，否则 /setup 填的密码会落在临时文件里、重启即丢
+        try:
+            os.chown(CONFIG, uid, gid)
+        except OSError:
+            pass
+        os.environ["WIFIGATE_CONFIG"] = CONFIG
+        print("[init] 尚未配置，以引导模式启动：打开网页会进入 /setup", flush=True)
+    else:
+        os.environ["WIFIGATE_CONFIG"] = prepare_runtime_config(uid, gid)
     drop_privileges(uid, gid)
     cmd = list(sys.argv[1:])
     if cmd and cmd[0] in ("python3", "python"):

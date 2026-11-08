@@ -24,6 +24,6 @@ CMD ["python3", "/app/server.py"]
 
 # 端口从挂载的 config.json 读取，改端口不需要重建镜像
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD python3 -c "import json,urllib.request; p=json.load(open('/app/config.json'))['server']['port']; r=urllib.request.urlopen('http://127.0.0.1:%s/api/health'%p,timeout=3); raise SystemExit(0 if r.status==200 else 1)"
+  CMD python3 -c "import json,os,urllib.request; c=os.environ.get('WIFIGATE_CONFIG','/app/config.json'); p=json.load(open(c))['server']['port']; r=urllib.request.urlopen('http://127.0.0.1:%s/api/health'%p,timeout=3); raise SystemExit(0 if r.status==200 else 1)"
 
 EXPOSE 8080
