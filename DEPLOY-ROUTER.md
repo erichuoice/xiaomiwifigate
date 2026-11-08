@@ -116,7 +116,34 @@ docker pull hello-world
 
 ## 第三步：把源码放进 U 盘
 
-在 U 盘根目录建一个 `wifi-gate` 文件夹，放入以下文件：
+### 方式一：路由器直接从 GitHub 拉（推荐）
+
+仓库：<https://github.com/erichuoice/xiaomiwifigate>（公开仓库，匿名可下载）
+
+在 SimpleDocker 终端里跑这一段，文件会直接落到 U 盘：
+
+```sh
+docker run --rm -v /mnt/usb-fa757357:/target alpine sh -c '
+  apk add --no-cache ca-certificates >/dev/null &&
+  wget -q -O /tmp/repo.tgz https://github.com/erichuoice/xiaomiwifigate/archive/refs/heads/main.tar.gz &&
+  tar xzf /tmp/repo.tgz -C /tmp &&
+  mkdir -p /target/wifi-gate &&
+  cp -a /tmp/xiaomiwifigate-main/. /target/wifi-gate/ &&
+  ls -l /target/wifi-gate && echo "=== 下载完成 ==="
+'
+```
+
+若 `wget` 卡住不动，说明路由器出网到 GitHub 有问题（国内常见），先在同一个终端测：
+
+```sh
+docker run --rm alpine sh -c 'wget -q --timeout=10 -O /dev/null https://github.com && echo OK || echo FAIL'
+```
+
+`FAIL` 就改用方式二。
+
+### 方式二：从电脑手动拷贝
+
+在 U 盘根目录建 `wifi-gate` 文件夹，放入以下文件：
 
 ```
 /mnt/usb-xxxx/wifi-gate/
@@ -133,6 +160,8 @@ docker pull hello-world
 │   └── setup.html       ← 首次配置引导页
 └── state/               ← 需要可写，程序会在这里写授权记录
 ```
+
+目录里的 `usb-fa757357` 是本机实测挂载点，换机器时用 `docker info | grep "Docker Root Dir"` 重新确认。
 
 > **不需要准备 `config.json`。** 首次启动时程序发现没有配置，会自动进入引导模式：
 > 所有页面跳转到 `/setup`，在浏览器里填完路由器密码后，它自己生成 `config.json`
