@@ -545,6 +545,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({
             "ok": True,
             "admin_password": result["admin_password"],
+            "same_as_router": result["same_as_router"],
             "config_path": result["config_path"],
             "router_check": checked,
             "router_detail": detail,

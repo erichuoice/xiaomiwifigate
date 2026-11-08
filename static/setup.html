@@ -66,12 +66,6 @@
   .msg.ok  { background: var(--ok-bg);  color: var(--ok); }
   .msg.warn { background: #fdf4e3; color: #8a5a0b; }
 
-  .pwd {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 19px; letter-spacing: .5px; background: var(--accent-soft);
-    color: var(--accent); padding: 12px; border-radius: 11px;
-    text-align: center; margin: 10px 0; user-select: all;
-  }
   .kv { display: flex; gap: 10px; font-size: 13.5px; padding: 7px 0; border-bottom: 1px solid var(--line); }
   .kv:last-child { border-bottom: none; }
   .kv .k { color: var(--muted); flex: 0 0 84px; }
@@ -99,11 +93,8 @@
 
     <label for="rpwd">路由器管理密码</label>
     <input type="password" id="rpwd" placeholder="登录路由器后台用的密码" autocomplete="new-password">
-    <p class="hint">注意不是 Wi-Fi 密码，是登录 192.168.31.1 后台的那个密码。</p>
-
-    <label for="apwd">答题后台密码（可留空）</label>
-    <input type="password" id="apwd" placeholder="留空则自动生成一个" autocomplete="new-password">
-    <p class="hint">家长管理题库、分配设备时用。留空的话系统会生成一个随机密码给你。</p>
+    <p class="hint">注意不是 Wi-Fi 密码，是登录 192.168.31.1 后台的那个密码。
+    答题后台也用这个密码，不用再单独设。</p>
 
     <div class="check">
       <input type="checkbox" id="dry" checked>
@@ -119,10 +110,7 @@
   <div id="done" class="card hide">
     <h2>配置完成</h2>
     <div id="doneMsg"></div>
-    <div id="pwdBox" class="hide">
-      <p class="hint" style="margin-top:12px">这是自动生成的答题后台密码，请记下来（只显示这一次）：</p>
-      <div class="pwd" id="pwd"></div>
-    </div>
+    <p class="hint" style="margin-top:12px">答题后台的登录密码就是刚才填的路由器管理密码，无需另外设置。</p>
     <div class="kv"><span class="k">配置文件</span><span class="v" id="cfgPath"></span></div>
     <a class="btn" href="/admin">进入答题后台</a>
     <a class="btn" href="/" style="background:#6b7280">去答题页看看</a>
@@ -143,7 +131,6 @@
   form.addEventListener('submit', function (e) {
     e.preventDefault();
     var rpwd = document.getElementById('rpwd').value.trim();
-    var apwd = document.getElementById('apwd').value.trim();
     if (!rpwd) { return show('请填写路由器管理密码'); }
 
     btn.disabled = true;
@@ -155,7 +142,7 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         router_password: rpwd,
-        admin_password: apwd,
+        admin_password: '',
         base_url: document.getElementById('base').value.trim(),
         mode: 'miwifi',
         dry_run: document.getElementById('dry').checked
@@ -184,10 +171,6 @@
         dm.innerHTML = '<div class="msg show ok">配置已保存。</div>';
       }
 
-      if (!apwd) {
-        document.getElementById('pwdBox').classList.remove('hide');
-        document.getElementById('pwd').textContent = d.admin_password;
-      }
       document.getElementById('cfgPath').textContent = d.config_path || 'config.json';
     }).catch(function (err) {
       btn.disabled = false;

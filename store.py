@@ -357,7 +357,8 @@ class Store:
         """首次配置：校验后写入 config.json（权限 600），立即生效，无需重启。
 
         仅在尚未配置时调用；已配置时由上层拒绝，避免未登录者改写密码。
-        返回实际使用后台密码（用户留空时是自动生成的）。
+        admin_password 留空时，后台密码默认与路由器管理密码相同（只填一次）；
+        显式填写则以后台密码为准。
         """
         if self.configured:
             raise StoreError("已经配置过了，如需重配请先删除 config.json 再重启")
@@ -370,8 +371,12 @@ class Store:
         base_url = str(base_url or "").strip() or DEFAULT_CONFIG["router"]["base_url"]
         if not base_url.startswith(("http://", "https://")):
             raise StoreError("路由器地址要以 http:// 开头，例如 http://192.168.31.1")
-        admin_password = str(admin_password or "").strip() or gen_password()
-        if len(admin_password) < 6:
+        admin_password = str(admin_password or "").strip()
+        same_as_router = not admin_password
+        if same_as_router:
+            # 默认与路由器管理密码一致，用户只需填一次
+            admin_password = router_password
+        elif len(admin_password) < 6:
             raise StoreError("后台密码至少 6 位")
 
         with self._lock:
@@ -399,7 +404,8 @@ class Store:
             self.trust_x_forwarded_for = bool(
                 cfg["server"].get("trust_x_forwarded_for", False))
         return {"admin_password": admin_password, "config_path": self._config_file,
-                "mode": mode, "base_url": cfg["router"]["base_url"]}
+                "mode": mode, "base_url": cfg["router"]["base_url"],
+                "same_as_router": same_as_router}
 
     # ---- 初始化 / 迁移 ----
 
