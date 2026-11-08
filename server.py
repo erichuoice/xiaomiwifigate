@@ -26,6 +26,7 @@ from urllib.parse import urlparse
 import admin_api
 import router_adapter
 import store
+import updater
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(BASE, "static")
@@ -38,6 +39,8 @@ GRANTS_PATH = os.path.join(STATE, "grants.json")
 SESSION_TTL = 1800
 MAC_CACHE_TTL = 120
 REBLOCK_INTERVAL = 20
+UPDATE_CHECK_INTERVAL = 6 * 3600   # 自动检查更新：每 6 小时
+UPDATE_FIRST_DELAY = 120           # 启动后先让业务跑稳，再去看有没有新版本
 
 _log_lock = threading.Lock()
 _grants_lock = threading.Lock()
@@ -339,10 +342,39 @@ def reblock_worker():
             log("REBLOCK-WORKER err=%s" % exc)
 
 
-# ---- HTTP ----
+def update_worker():
+    """定时看远端版本；开了「自动安装」就直接换代码并重启。
 
+    检查失败只记日志、不重试轰炸：下一轮（6 小时后）或用户手动点一次就好。
+    """
+    time.sleep(UPDATE_FIRST_DELAY)
+    while True:
+        try:
+            settings = STORE.snapshot()["settings"]
+            if settings.get("update_auto_check", True):
+                rec = updater.check()
+                if rec.get("error"):
+                    log("UPDATE-CHECK-FAIL %s" % rec["error"])
+                elif not rec.get("newer"):
+                    log("UPDATE-CHECK 已是最新版本 %s" % rec.get("current"))
+                else:
+                    log("UPDATE-CHECK 发现新版本 %s → %s"
+                        % (rec.get("current"), rec.get("latest")))
+                    if settings.get("update_auto_apply"):
+                        done = updater.install(expect=rec["latest"])
+                        log("UPDATE-APPLY %s → %s（%s 个文件，备份 %s），准备重启"
+                            % (done["from"], done["to"], done["files"],
+                               done["backup"]))
+                        updater.schedule_restart()
+                        return
+        except Exception as exc:  # 守护线程不能死
+            log("UPDATE-WORKER err=%s" % exc)
+        time.sleep(UPDATE_CHECK_INTERVAL)
+
+
+# ---- HTTP ----
 class Handler(BaseHTTPRequestHandler):
-    server_version = "wifi-gate/3.0"
+    server_version = "wifi-gate/" + updater.version()
 
     def log_message(self, fmt, *args):
         pass
@@ -452,6 +484,7 @@ class Handler(BaseHTTPRequestHandler):
                 "questions": summary["questions"],
                 "managed_devices": summary["managed_devices"],
                 "daily_cap_minutes": cfg["settings"]["daily_cap_minutes"],
+                "version": updater.version(),
                 "lan_ip": lan_ip(),
                 "client_ip": client_ip(self),
             })
@@ -758,6 +791,7 @@ def main():
     # 环境变量覆盖，见 store.py），这里只管用。
     cfg = STORE.snapshot()["server"]
     threading.Thread(target=reblock_worker, daemon=True).start()
+    threading.Thread(target=update_worker, daemon=True).start()
     server = ThreadingHTTPServer((cfg["host"], int(cfg["port"])), Handler)
     server.daemon_threads = True
 
@@ -768,8 +802,9 @@ def main():
     signal.signal(signal.SIGTERM, on_term)
     signal.signal(signal.SIGINT, on_term)
     summary = STORE.summary()
-    log("服务启动 port=%s 适配器=%s 题库=%s 套/%s 道"
-        % (cfg["port"], ADAPTER.describe(), summary["banks"], summary["questions"]))
+    log("服务启动 port=%s 版本=%s 适配器=%s 题库=%s 套/%s 道"
+        % (cfg["port"], updater.version(), ADAPTER.describe(),
+           summary["banks"], summary["questions"]))
     for b in summary["by_bank"]:
         print("  · %-8s %3s 道题 %s 台设备 %s 档"
               % (b["name"], b["questions"], b["devices"], b["tiers"]))

@@ -230,7 +230,18 @@ def validate_settings(settings, current):
         raise StoreError("每日累计上限必须是数字")
     if not 0 <= cap <= MAX_MINUTES:
         raise StoreError("每日累计上限需在 0-%s 分钟之间（0 = 不限）" % MAX_MINUTES)
-    return {"note": note, "daily_cap_minutes": cap}
+    return {"note": note, "daily_cap_minutes": cap,
+            "update_auto_check": _flag(settings.get(
+                "update_auto_check", current.get("update_auto_check", True))),
+            "update_auto_apply": _flag(settings.get(
+                "update_auto_apply", current.get("update_auto_apply", False)))}
+
+
+def _flag(value):
+    """把 true/"true"/1/"on" 之类都当布尔处理，避免前端传字符串踩坑。"""
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
 
 
 def validate_macs(macs):
@@ -477,6 +488,8 @@ class Store:
             "settings": {
                 "note": str(s.get("note", "")),
                 "daily_cap_minutes": int(s.get("daily_cap_minutes", 0) or 0),
+                "update_auto_check": bool(s.get("update_auto_check", True)),
+                "update_auto_apply": bool(s.get("update_auto_apply", False)),
             },
         }
 

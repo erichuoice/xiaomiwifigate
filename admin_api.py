@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 import importer
 import router_adapter
 import store
+import updater
 
 COOKIE = "wifigate_admin"
 COOKIE_RE = re.compile(r"wifigate_admin=([A-Za-z0-9_\-]+)")
@@ -91,6 +92,24 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
             "settings": cfg["settings"],
             "summary": st.summary(),
         }, None
+
+    if path == "/api/admin/update" and method == "GET":
+        return 200, dict(ok=True, **updater.status()), None
+
+    if path == "/api/admin/update/check" and method == "POST":
+        rec = updater.check()
+        return 200, dict(ok=True, **updater.status(), checked=rec), None
+
+    if path == "/api/admin/update/apply" and method == "POST":
+        want = str(_body(raw).get("version") or "").strip()
+        try:
+            rec = updater.install(expect=want)
+        except updater.UpdaterError as exc:
+            return 502, {"ok": False, "detail": str(exc)}, None
+        updater.schedule_restart()
+        return 200, {"ok": True, "from": rec.get("from"), "to": rec.get("to"),
+                     "files": rec.get("files"), "backup": rec.get("backup"),
+                     "restarting": True}, None
 
     if path == "/api/admin/bank" and method == "POST":
         data = _body(raw)

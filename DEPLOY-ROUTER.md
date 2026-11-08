@@ -311,6 +311,41 @@ docker exec wifi-gate wget -qO- http://127.0.0.1:8088/api/health
 
 ---
 
+## 第七步：以后怎么升级
+
+`3.1.0` 起程序自带更新功能，**不用再进终端敲 wget**：
+
+1. 浏览器打开后台 `http://192.168.31.1:8088/admin` → **设置** → 拉到最下面「程序更新」
+2. 点 **检查更新**：会读远端 `VERSION` 和本地比对，几秒内出结果
+3. 有新版本就点 **立即更新并重启**：下载主干代码 → 覆盖程序文件 → 2 秒后进程自己重启
+4. 想全自动就勾上「每 6 小时自动检查」，再决定要不要勾「发现新版本自动安装并重启」
+
+它只覆盖程序文件，`config.json`、`state/`（题库、授权记录、日志）都不动；替换前会把旧文件
+打包到 `state/backup/`，要回退就解包回去再重启。自动安装会打断正在答题的人约 2–3 秒。
+
+路由器直连 GitHub 通常不通，更新器默认先走 `https://gh-proxy.com/` 加速站、失败再直连。
+要换源，重建容器时加：
+
+```sh
+-e WIFIGATE_MIRROR=https://gh-proxy.com/,direct
+```
+
+**兜底：后台进不去 / 更新器连不上外网**，还是用老办法手动覆盖两个文件：
+
+```sh
+docker run --rm -v /mnt/usb-fa757357/wifi-gate:/app alpine sh -c '
+  wget -q -O /app/server.py https://gh-proxy.com/https://raw.githubusercontent.com/erichuoice/xiaomiwifigate/main/server.py &&
+  wget -q -O /app/static/index.html https://gh-proxy.com/https://raw.githubusercontent.com/erichuoice/xiaomiwifigate/main/static/index.html &&
+  echo OK
+'
+docker restart wifi-gate
+docker exec wifi-gate wget -qO- http://127.0.0.1:8088/api/health
+```
+
+`health` 里现在带 `"version"` 字段，能直接看出跑的是哪一版。
+
+---
+
 ## 已知限制与风险
 
 | 风险 | 影响 | 应对 |
@@ -322,6 +357,7 @@ docker exec wifi-gate wget -qO- http://127.0.0.1:8088/api/health
 | 8080 端口冲突 | 容器起不来，报 `Address in use` | BE7000 实测 8080 已被占用，启动统一加 `-e WIFIGATE_PORT=8088` |
 | 路由器拉不到 Docker Hub 镜像 | `docker pull` 超时 | 走国内镜像站，见第四步 |
 | 路由器直连 GitHub 超时 | 无法从仓库拉源码 | 改用加速站前缀 `https://gh-proxy.com/` + 原地址，或用电脑拷进 U 盘 |
+| 自动更新把带 bug 的版本装上去 | 服务起不来，孩子断网期间没人能答题 | 只开「自动检查」不开「自动安装」；`state/backup/` 里留 5 份旧文件可回退 |
 
 ---
 
