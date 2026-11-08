@@ -1,0 +1,20 @@
+# ===== 安全：绝不允许入库 =====
+# 含路由器管理密码 + 后台管理密码（明文）
+config.json
+
+# ===== 运行态数据 =====
+# 授权记录、题库归属、访问日志；含设备 MAC 等隐私
+state/*
+!state/.gitkeep
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ===== 部署产物 / 系统垃圾 =====
+*.tar.gz
+*.zip
+.DS_Store
+.venv/
+venv/

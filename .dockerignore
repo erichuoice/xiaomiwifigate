@@ -1,0 +1,12 @@
+config.json
+state/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.git/
+.gitignore
+.DS_Store
+README.md
+docker-compose*.yml
+gate.sh

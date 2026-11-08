@@ -1,0 +1,28 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "max_wrong_per_window": 3,
+    "lock_seconds": 60,
+    "reblock_minutes": 60,
+    "trust_x_forwarded_for": false,
+    "admin_password": "",
+    "note": "答对后可上网一段时间，到期后需重新答题。若提示放行失败，请找管理员在小米 WiFi App 里手动允许联网。",
+    "daily_cap_minutes": 0
+  },
+  "router": {
+    "mode": "mock",
+    "model": "Xiaomi 路由器 BE7000 (RC06)",
+    "base_url": "http://192.168.31.1",
+    "admin_password": "",
+    "stok": "",
+    "login_path": "/cgi-bin/luci/api/xqsystem/login",
+    "device_list_path": "/cgi-bin/luci/;stok={stok}/api/misystem/devicelist",
+    "device_list_fallback_path": "/cgi-bin/luci/;stok={stok}/api/xqsystem/get_device_list",
+    "set_mac_filter_path": "/cgi-bin/luci/;stok={stok}/api/xqsystem/set_mac_filter",
+    "set_filter_method": "both",
+    "wan_allow": "1",
+    "wan_block": "0",
+    "dry_run": false
+  }
+}

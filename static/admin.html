@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>上网答题 · 管理后台</title>
+<style>
+  :root {
+    --bg:#f4f6f8; --card:#fff; --line:#e2e6ea; --text:#171b21; --muted:#6b7280;
+    --accent:#1a6fd4; --soft:#eaf2fd; --ok:#0f7a5a; --oksoft:#e4f6ee;
+    --warn-bg:#fff6e5; --warn-line:#d99a2b; --no:#b03030; --nosoft:#fdeaea;
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; padding:20px 16px 64px; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    font-size:15px; line-height:1.6; -webkit-text-size-adjust:100%; }
+  .wrap { max-width:820px; margin:0 auto; }
+  h1 { font-size:21px; font-weight:600; margin:0 0 4px; }
+  h2 { font-size:16px; font-weight:600; margin:0 0 12px; }
+  .sub { color:var(--muted); font-size:13.5px; margin:0 0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px;
+    padding:18px; margin-bottom:14px; }
+  .bar { display:flex; align-items:center; justify-content:space-between; gap:10px;
+    margin-bottom:10px; flex-wrap:wrap; }
+  .badge { font-size:12.5px; padding:4px 10px; border-radius:20px; background:var(--soft); color:var(--accent); }
+  .badge.mock { background:var(--warn-bg); color:#8a5a00; }
+  .tabs { display:flex; gap:6px; margin-bottom:12px; }
+  .tabs button { flex:1; padding:10px 4px; }
+  .tabs button.off { background:#e9edf2; color:var(--text); }
+  button { border:0; border-radius:9px; padding:10px 15px; font-size:14px; font-weight:600;
+    color:#fff; background:var(--accent); cursor:pointer; font-family:inherit; }
+  button.mini { padding:6px 11px; font-size:12.5px; font-weight:500; background:#e9edf2; color:var(--text); }
+  button.ghost { background:var(--soft); color:var(--accent); }
+  button.danger { background:var(--nosoft); color:var(--no); }
+  button:disabled { background:#b9c0c9; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; }
+  input[type=text], input[type=number], input[type=password], textarea, select {
+    border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:14px;
+    font-family:inherit; color:var(--text); background:#fff; }
+  input[type=text], textarea, select { width:100%; }
+  input[type=number] { width:104px; }
+  label.fld { display:block; font-size:13px; color:var(--muted); margin:12px 0 4px; }
+  .hint { font-size:12.5px; color:var(--muted); background:#f2f4f6; border-radius:8px;
+    padding:9px 11px; margin:0 0 12px; }
+  .hint.warn { background:var(--warn-bg); color:#7a5200; }
+  .bankbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+    background:#f7f9fb; border:1px solid var(--line); border-radius:11px; padding:10px; }
+  .bankbar select { flex:1 1 160px; width:auto; font-weight:600; }
+  .tier-row { display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap; }
+  .tier-row .sep { font-size:13px; color:var(--muted); }
+  .tier-row input[type=number] { width:86px; }
+  .tier-row .unit { font-size:12.5px; color:var(--muted); margin-right:2px; }
+  .filters { display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap; }
+  .filters select, .filters input { width:auto; flex:1 1 120px; }
+  .count { font-size:12.5px; color:var(--muted); font-weight:400; margin-left:6px; }
+  .qcard { border:1px solid var(--line); border-radius:11px; padding:12px; margin-bottom:9px; }
+  .qhead { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
+  .qbrief { font-size:14px; flex:1; }
+  .qmeta { font-size:12px; color:var(--muted); margin-top:2px; }
+  .qbody { margin-top:10px; display:none; }
+  .qcard.open .qbody { display:block; }
+  .opt { display:flex; align-items:center; gap:7px; margin-bottom:6px; }
+  .opt input[type=radio], .opt input[type=checkbox] { width:17px; height:17px; flex:0 0 17px; accent-color:var(--accent); }
+  .opt input[type=text] { flex:1; }
+  .pager { display:flex; align-items:center; gap:10px; justify-content:center; margin:6px 0 2px;
+    font-size:13px; color:var(--muted); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  th { color:var(--muted); font-weight:500; }
+  td.mono { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px; }
+  td select { width:auto; min-width:120px; padding:5px 8px; font-size:12.5px; }
+  .tag { font-size:11.5px; padding:2px 7px; border-radius:10px; background:var(--oksoft); color:#085041; }
+  .tag.off { background:#f2f4f6; color:var(--muted); }
+  .imp-out { margin-top:12px; font-size:13px; }
+  .imp-err { background:var(--nosoft); border-radius:8px; padding:9px 11px; color:#8a2626; max-height:180px; overflow:auto; }
+  .imp-ok { background:var(--oksoft); border-radius:8px; padding:9px 11px; color:#0a5b43; }
+  .sample { border-left:2px solid var(--line); padding:4px 0 4px 10px; margin:6px 0; color:#333; }
+  #toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%); background:#171b21;
+    color:#fff; padding:10px 18px; border-radius:10px; font-size:13.5px; opacity:0;
+    pointer-events:none; transition:opacity .2s; max-width:90vw; z-index:9; }
+  #toast.show { opacity:1; }
+  code { background:#e6e9ed; padding:1px 5px; border-radius:4px; font-size:12px; }
+  .foot { color:var(--muted); font-size:12px; margin-top:16px; line-height:1.8; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>上网答题 · 管理后台</h1>
+  <p class="sub">每套题库管一组设备，每档题数换一段上网时间</p>
+
+  <div id="login" class="card">
+    <h2>管理员登录</h2>
+    <label class="fld" for="pwd">管理密码</label>
+    <input id="pwd" type="password" autocomplete="current-password" placeholder="见 config.json 的 server.admin_password">
+    <div class="row"><button id="login-btn">登录</button></div>
+    <p class="hint" style="margin-top:14px">初始密码写在 <code>config.json</code> 的 <code>server.admin_password</code>。</p>
+  </div>
+
+  <div id="main" style="display:none">
+    <div class="bar">
+      <span id="mode" class="badge"></span>
+      <button class="mini" id="logout">退出登录</button>
+    </div>
+    <div class="tabs">
+      <button id="tabbtn-quiz" data-tab="quiz">题库</button>
+      <button id="tabbtn-import" data-tab="import" class="off">导入</button>
+      <button id="tabbtn-devices" data-tab="devices" class="off">设备</button>
+      <button id="tabbtn-settings" data-tab="settings" class="off">设置</button>
+    </div>
+
+    <!-- 题库 -->
+    <div id="tab-quiz" class="card">
+      <h2>题库</h2>
+      <div class="bankbar">
+        <select id="bank-sel"></select>
+        <button class="mini ghost" id="bank-new">+ 新建题库</button>
+        <button class="mini danger" id="bank-del">删除</button>
+      </div>
+
+      <label class="fld" for="bank-name">题库名称</label>
+      <input id="bank-name" type="text" maxlength="24" placeholder="例如：小学低年级 / 姐姐的题">
+
+      <label class="fld">奖励档位：答对几道题 → 换多少分钟（分钟填 0 = 一直放行）</label>
+      <div id="tier-list"></div>
+      <div class="row"><button class="mini" id="tier-add">+ 加一档</button></div>
+      <div class="hint" id="bank-dev" style="margin-top:12px"></div>
+
+      <h2 style="margin-top:20px">题目<span id="qcount" class="count"></span></h2>
+      <div class="filters">
+        <select id="f-stage"><option value="">全部学段</option></select>
+        <select id="f-subject"><option value="">全部科目</option></select>
+        <input id="f-kw" type="text" placeholder="搜索题干关键词">
+      </div>
+      <div id="qlist"></div>
+      <div class="pager">
+        <button class="mini" id="prev">上一页</button>
+        <span id="pinfo">1 / 1</span>
+        <button class="mini" id="next">下一页</button>
+      </div>
+      <div class="row">
+        <button class="ghost" id="add-q">+ 新增题目</button>
+        <button id="save-bank">保存本题库</button>
+        <a id="dl-csv" href="/api/admin/export.csv"><button type="button" class="mini">导出 CSV</button></a>
+      </div>
+      <p class="hint" style="margin-top:12px">答案只存在服务端，答题页看不到。保存后立即生效，不用重启。</p>
+    </div>
+
+    <!-- 导入 -->
+    <div id="tab-import" class="card" style="display:none">
+      <h2>导入题目</h2>
+      <p class="hint">支持 CSV / TSV / JSON。Excel 里编辑后「另存为 CSV」即可；表头用中文即可识别：
+        题型、学段、年级、科目、题干、选项A~D、答案、解析、难度。答案可以写 <code>B</code>、<code>A,C</code>、
+        <code>对</code>/<code>错</code>、<code>1</code>。</p>
+      <label class="fld" for="imp-bank">导入到哪个题库</label>
+      <select id="imp-bank"></select>
+      <div class="row">
+        <input id="imp-file" type="file" accept=".csv,.txt,.json,text/csv,application/json" style="font-size:13px">
+        <a id="dl-tpl" href="/api/admin/template.csv"><button type="button" class="mini">下载模板 CSV</button></a>
+      </div>
+      <label class="fld" for="imp-text">或者直接粘贴内容</label>
+      <textarea id="imp-text" rows="8" placeholder="题型,学段,年级,科目,题干,选项A,选项B,选项C,选项D,答案,解析,难度&#10;单选,小学,三年级,数学,3+4=?,6,7,8,9,B,3+4=7,1"></textarea>
+      <div class="row">
+        <select id="imp-format" style="width:auto">
+          <option value="auto">自动识别格式</option>
+          <option value="csv">CSV / TSV</option>
+          <option value="json">JSON</option>
+        </select>
+        <select id="imp-stage" style="width:auto">
+          <option value="">不指定学段</option>
+          <option value="小学">默认学段：小学</option>
+          <option value="初中">默认学段：初中</option>
+        </select>
+        <select id="imp-mode" style="width:auto">
+          <option value="append">追加到该题库</option>
+          <option value="replace">覆盖该题库</option>
+        </select>
+      </div>
+      <div class="row">
+        <button class="ghost" id="imp-preview">先预览</button>
+        <button id="imp-run">开始导入</button>
+      </div>
+      <div id="imp-out" class="imp-out"></div>
+
+      <h2 style="margin-top:22px">整份备份</h2>
+      <p class="hint">备份包含全部题库、档位、设备归属与提示语，换 NAS 时可直接恢复。</p>
+      <div class="row">
+        <a id="dl-backup" href="/api/admin/export.json"><button type="button" class="mini">导出备份 JSON</button></a>
+        <input id="bak-file" type="file" accept=".json,application/json" style="font-size:13px">
+        <button class="mini" id="bak-run">导入备份</button>
+      </div>
+
+      <h2 style="margin-top:22px">内置题库</h2>
+      <p class="hint">内置 134 道小学 + 初中题目（语文/数学/英语/科学/物理/化学/生物/历史/地理）。
+        题库名含「小学」或「初中」时，只灌对应学段。</p>
+      <div class="row">
+        <button class="ghost" id="builtin-append">追加内置题库</button>
+        <button class="mini" id="builtin-replace">用内置题库覆盖</button>
+      </div>
+    </div>
+
+    <!-- 设备 -->
+    <div id="tab-devices" class="card" style="display:none">
+      <h2>设备归属</h2>
+      <p class="hint">给每台设备选一套题库；选「不受控」的设备，程序一律不碰。
+        初始断网仍由管理员在小米 WiFi App 里手动操作。</p>
+      <p id="dev-hint" class="hint warn" style="display:none"></p>
+      <div class="row"><button class="ghost" id="refresh-dev">刷新设备列表</button></div>
+      <div id="devlist" style="margin-top:12px"></div>
+    </div>
+
+    <!-- 设置 -->
+    <div id="tab-settings" class="card" style="display:none">
+      <h2>全局设置</h2>
+      <label class="fld" for="cap">每人每天最多获得多少分钟（0 = 不限）</label>
+      <input id="cap" type="number" min="0" max="1440" value="0">
+      <p class="hint" style="margin-top:10px">防止反复答题无限加时。到上限后答题会提示「今天额度已用完」。</p>
+      <label class="fld" for="note">答题页底部提示语</label>
+      <textarea id="note" rows="3"></textarea>
+      <div class="row"><button id="save-settings">保存设置</button></div>
+
+      <h2 style="margin-top:22px">答题锁定</h2>
+      <p class="hint">孩子连错几轮会被锁定一段时间。解锁后可以立刻重新答题，
+        不会清除题库，也不会改变已经发放的上网时间。</p>
+      <div class="row"><button class="ghost" id="unlock">清除所有答题锁定</button></div>
+      <div class="foot">
+        管理密码改这儿改不了：编辑 <code>config.json</code> 的 <code>server.admin_password</code> 后重启容器。<br>
+        本页改动写入 <code>state/runtime.json</code>，即时生效、容器重建不丢。
+      </div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+</div>
+
+<script>
+(function () {
+  var el = function (id) { return document.getElementById(id); };
+  var state = null, banks = [], cur = 0, Q = [], tiers = [], devices = [];
+  var page = 0, PAGE = 8, openSet = {}, toastTimer = null, curId = '';
+
+  function toast(msg) {
+    var t = el('toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.remove('show'); }, 2800);
+  }
+  function api(path, data) {
+    var opt = { method: data === undefined ? 'GET' : 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin' };
+    if (data !== undefined) opt.body = JSON.stringify(data);
+    return fetch(path, opt).then(function (r) {
+      return r.json().then(function (j) { return { status: r.status, data: j }; });
+    });
+  }
+  function requireAuth(res) {
+    if (res.status === 401) { showLogin(); return false; }
+    return true;
+  }
+  function showLogin() { el('main').style.display = 'none'; el('login').style.display = 'block'; }
+  function showMain() { el('login').style.display = 'none'; el('main').style.display = 'block'; }
+
+  // ---------- 题库 ----------
+
+  function pickBank(i, keepPage) {
+    if (!banks.length) return;
+    cur = Math.max(0, Math.min(i, banks.length - 1));
+    var b = banks[cur];
+    curId = b.id;
+    Q = JSON.parse(JSON.stringify(b.questions || []));
+    tiers = JSON.parse(JSON.stringify(b.tiers || []));
+    el('bank-sel').value = b.id;
+    el('bank-name').value = b.name;
+    el('dl-csv').href = '/api/admin/export.csv?bank=' + encodeURIComponent(b.id);
+    if (!keepPage) page = 0;
+    renderTiers();
+    renderBankDev();
+    fillFilters();
+    renderList();
+    syncImportBank();
+  }
+
+  function renderBankSel() {
+    var sel = el('bank-sel');
+    sel.innerHTML = '';
+    banks.forEach(function (b) {
+      var o = document.createElement('option');
+      o.value = b.id;
+      o.textContent = b.name + '（' + (b.questions || []).length + ' 题 / ' +
+        (b.devices || []).length + ' 台）';
+      sel.appendChild(o);
+    });
+  }
+
+  function renderBankDev() {
+    var b = banks[cur] || { devices: [] };
+    var box = el('bank-dev');
+    var n = (b.devices || []).length;
+    box.innerHTML = n
+      ? '本题库管辖 <b>' + n + '</b> 台设备，在「设备」页可以改归属。'
+      : '本题库还没有设备：去「设备」页把要管控的设备分配给这套题。';
+  }
+
+  function numInput(value, min, max, onchange) {
+    var inp = document.createElement('input');
+    inp.type = 'number'; inp.min = min; inp.max = max; inp.value = value;
+    inp.onchange = function () {
+      var v = Number(inp.value);
+      if (isNaN(v)) v = min;
+      v = Math.max(min, Math.min(max, Math.round(v)));
+      inp.value = v;
+      onchange(v);
+    };
+    return inp;
+  }
+
+  function renderTiers() {
+    var box = el('tier-list');
+    box.innerHTML = '';
+    if (!tiers.length) {
+      box.innerHTML = '<p class="hint">还没有档位，至少加一档。</p>';
+      return;
+    }
+    tiers.forEach(function (t, i) {
+      var row = document.createElement('div');
+      row.className = 'tier-row';
+      var a = numInput(t.questions, 1, 50, function (v) { tiers[i].questions = v; });
+      var lab1 = document.createElement('span'); lab1.className = 'unit'; lab1.textContent = '道题';
+      var sep = document.createElement('span'); sep.className = 'sep'; sep.textContent = '→';
+      var b = numInput(t.minutes, 0, 1440, function (v) { tiers[i].minutes = v; });
+      var lab2 = document.createElement('span'); lab2.className = 'unit'; lab2.textContent = '分钟';
+      var del = document.createElement('button');
+      del.type = 'button'; del.className = 'mini danger'; del.textContent = '删除';
+      del.onclick = function () { tiers.splice(i, 1); renderTiers(); };
+      row.appendChild(a); row.appendChild(lab1); row.appendChild(sep);
+      row.appendChild(b); row.appendChild(lab2); row.appendChild(del);
+      box.appendChild(row);
+    });
+  }
+
+  function filtered() {
+    var st = el('f-stage').value, su = el('f-subject').value;
+    var kw = el('f-kw').value.trim().toLowerCase();
+    return Q.map(function (q, i) { return { q: q, i: i }; }).filter(function (x) {
+      if (st && x.q.stage !== st) return false;
+      if (su && x.q.subject !== su) return false;
+      if (kw && (x.q.text || '').toLowerCase().indexOf(kw) < 0) return false;
+      return true;
+    });
+  }
+
+  function fillFilters() {
+    var st = {}, su = {};
+    Q.forEach(function (q) {
+      if (q.stage) st[q.stage] = (st[q.stage] || 0) + 1;
+      if (q.subject) su[q.subject] = (su[q.subject] || 0) + 1;
+    });
+    var fs = el('f-stage'), cv = fs.value;
+    fs.innerHTML = '<option value="">全部学段</option>';
+    Object.keys(st).sort().forEach(function (k) {
+      var o = document.createElement('option');
+      o.value = k; o.textContent = k + '（' + st[k] + '）'; fs.appendChild(o);
+    });
+    fs.value = cv;
+    var fb = el('f-subject'), cv2 = fb.value;
+    fb.innerHTML = '<option value="">全部科目</option>';
+    Object.keys(su).sort().forEach(function (k) {
+      var o = document.createElement('option');
+      o.value = k; o.textContent = k + '（' + su[k] + '）'; fb.appendChild(o);
+    });
+    fb.value = cv2;
+  }
+
+  function answerWidget(i, q, wrap) {
+    var multi = q.type === 'multi';
+    var box = document.createElement('div');
+    (q.options || []).forEach(function (opt, idx) {
+      var row = document.createElement('div'); row.className = 'opt';
+      var inp = document.createElement('input');
+      inp.type = multi ? 'checkbox' : 'radio';
+      inp.name = 'ans-' + i;
+      inp.checked = multi ? (q.answer || []).indexOf(idx) >= 0 : q.answer === idx;
+      inp.onchange = function () {
+        if (multi) {
+          var set = Q[i].answer || [];
+          var at = set.indexOf(idx);
+          if (inp.checked && at < 0) set.push(idx);
+          if (!inp.checked && at >= 0) set.splice(at, 1);
+          Q[i].answer = set.sort(function (a, b) { return a - b; });
+        } else {
+          Q[i].answer = idx;
+        }
+      };
+      var txt = document.createElement('input');
+      txt.type = 'text'; txt.className = 'q-opt'; txt.value = opt;
+      txt.placeholder = '选项 ' + (idx + 1);
+      txt.oninput = function () { Q[i].options[idx] = txt.value; };
+      var rm = document.createElement('button');
+      rm.type = 'button'; rm.className = 'mini'; rm.textContent = '×'; rm.title = '删除选项';
+      rm.onclick = function () {
+        if (Q[i].options.length <= 2) { toast('至少保留 2 个选项'); return; }
+        Q[i].options.splice(idx, 1);
+        if (Q[i].type === 'multi') {
+          Q[i].answer = (Q[i].answer || []).filter(function (x) { return x !== idx; })
+            .map(function (x) { return x > idx ? x - 1 : x; });
+        } else if (Q[i].answer >= Q[i].options.length) {
+          Q[i].answer = 0;
+        } else if (Q[i].answer > idx) {
+          Q[i].answer -= 1;
+        }
+        renderList();
+      };
+      row.appendChild(inp); row.appendChild(txt); row.appendChild(rm);
+      box.appendChild(row);
+    });
+    var add = document.createElement('button');
+    add.type = 'button'; add.className = 'mini'; add.textContent = '+ 添加选项';
+    add.onclick = function () {
+      if (Q[i].options.length >= 8) { toast('最多 8 个选项'); return; }
+      Q[i].options.push('');
+      renderList();
+    };
+    box.appendChild(add);
+    wrap.appendChild(box);
+  }
+
+  function renderList() {
+    var list = filtered();
+    var pages = Math.max(1, Math.ceil(list.length / PAGE));
+    if (page >= pages) page = pages - 1;
+    var slice = list.slice(page * PAGE, page * PAGE + PAGE);
+    var box = el('qlist');
+    box.innerHTML = '';
+    if (!list.length) {
+      box.innerHTML = '<p class="hint">没有符合条件的题目。</p>';
+    }
+    slice.forEach(function (item) {
+      var i = item.i, q = item.q;
+      var card = document.createElement('div');
+      card.className = 'qcard' + (openSet[i] ? ' open' : '');
+      var head = document.createElement('div'); head.className = 'qhead';
+      var brief = document.createElement('div'); brief.className = 'qbrief';
+      brief.textContent = q.text || '（未填写题干）';
+      var meta = document.createElement('div'); meta.className = 'qmeta';
+      var typeCn = { single: '单选', multi: '多选', judge: '判断' }[q.type] || '单选';
+      meta.textContent = [typeCn, q.stage || '未分学段', q.grade, q.subject,
+        q.star ? '★' + q.star : ''].filter(Boolean).join(' · ') +
+        (q.id ? ' · ' + q.id : ' · 保存后分配 ID');
+      brief.appendChild(meta);
+      var ops = document.createElement('div'); ops.style.flex = '0 0 auto';
+      var edit = document.createElement('button');
+      edit.type = 'button'; edit.className = 'mini'; edit.textContent = openSet[i] ? '收起' : '编辑';
+      edit.onclick = function () {
+        if (openSet[i]) delete openSet[i]; else openSet[i] = true;
+        renderList();
+      };
+      var del = document.createElement('button');
+      del.type = 'button'; del.className = 'mini danger'; del.textContent = '删除';
+      del.style.marginLeft = '6px';
+      del.onclick = function () {
+        Q.splice(i, 1); openSet = {}; renderList();
+      };
+      ops.appendChild(edit); ops.appendChild(del);
+      head.appendChild(brief); head.appendChild(ops);
+      card.appendChild(head);
+
+      var body = document.createElement('div'); body.className = 'qbody';
+      var t = document.createElement('input');
+      t.type = 'text'; t.value = q.text; t.placeholder = '题干';
+      t.oninput = function () { Q[i].text = t.value; };
+      body.appendChild(t);
+
+      var line = document.createElement('div'); line.className = 'row';
+      var selType = document.createElement('select');
+      [['single', '单选'], ['multi', '多选'], ['judge', '判断']].forEach(function (p) {
+        var o = document.createElement('option');
+        o.value = p[0]; o.textContent = p[1]; selType.appendChild(o);
+      });
+      selType.value = q.type || 'single';
+      selType.style.width = 'auto';
+      selType.onchange = function () {
+        Q[i].type = selType.value;
+        Q[i].answer = selType.value === 'multi' ? [] : 0;
+        if (selType.value === 'judge' && Q[i].options.length !== 2) {
+          Q[i].options = ['正确', '错误']; Q[i].answer = 0;
+        }
+        renderList();
+      };
+      line.appendChild(selType);
+      [['stage', '学段'], ['grade', '年级'], ['subject', '科目']].forEach(function (f) {
+        var inp = document.createElement('input');
+        inp.type = 'text'; inp.value = q[f[0]] || ''; inp.placeholder = f[1];
+        inp.style.width = '86px'; inp.style.flex = '0 0 auto';
+        inp.oninput = function () { Q[i][f[0]] = inp.value; };
+        line.appendChild(inp);
+      });
+      var star = document.createElement('select');
+      star.style.width = 'auto';
+      [1, 2, 3, 4, 5].forEach(function (n) {
+        var o = document.createElement('option');
+        o.value = String(n); o.textContent = '难度 ' + n + ' 星'; star.appendChild(o);
+      });
+      star.value = String(q.star || 2);
+      star.onchange = function () { Q[i].star = Number(star.value); };
+      line.appendChild(star);
+      body.appendChild(line);
+
+      answerWidget(i, q, body);
+
+      var ex = document.createElement('input');
+      ex.type = 'text'; ex.value = q.explain || ''; ex.placeholder = '解析（答完题后展示给孩子）';
+      ex.style.marginTop = '8px';
+      ex.oninput = function () { Q[i].explain = ex.value; };
+      body.appendChild(ex);
+
+      card.appendChild(body);
+      box.appendChild(card);
+    });
+    el('pinfo').textContent = (page + 1) + ' / ' + pages + '　共 ' + list.length + ' 题';
+    el('qcount').textContent = '　' + Q.length + ' 题' +
+      (list.length !== Q.length ? '（筛选出 ' + list.length + '）' : '');
+    el('prev').disabled = page <= 0;
+    el('next').disabled = page >= pages - 1;
+  }
+
+  function applyState(data) {
+    state = data;
+    banks = data.banks || [];
+    showMain();
+    var badge = el('mode');
+    if (state.mode === 'mock') {
+      badge.textContent = 'mock 模式：不会改动任何路由器规则';
+      badge.className = 'badge mock';
+    } else if (state.dry_run) {
+      badge.textContent = '演练模式：已连上 ' + (state.model || '小米路由器') +
+        '，会登录并解析设备，但不改规则';
+      badge.className = 'badge mock';
+    } else {
+      badge.textContent = 'miwifi 模式：已连接 ' + (state.model || '小米路由器');
+      badge.className = 'badge';
+    }
+    el('cap').value = state.settings.daily_cap_minutes;
+    el('note').value = state.settings.note || '';
+    renderBankSel();
+    var idx = banks.map(function (b) { return b.id; }).indexOf(curId);
+    pickBank(idx < 0 ? 0 : idx, true);
+  }
+
+  function loadState() {
+    return api('/api/admin/state').then(function (res) {
+      if (!requireAuth(res)) return;
+      if (!res.data.ok) { toast(res.data.detail || '读取失败'); return; }
+      applyState(res.data);
+    });
+  }
+
+  function saveBank() {
+    var b = banks[cur];
+    if (!b) return;
+    api('/api/admin/bank', {
+      id: b.id,
+      name: el('bank-name').value,
+      enabled: b.enabled !== false,
+      tiers: tiers,
+      devices: b.devices || [],
+      questions: Q
+    }).then(function (res) {
+      if (!requireAuth(res)) return;
+      if (!res.data.ok) { toast(res.data.detail || '保存失败'); return; }
+      curId = res.data.bank.id;
+      toast('已保存，立即生效');
+      loadState();
+    }).catch(function () { toast('保存请求失败'); });
+  }
+
+  // ---------- 导入 ----------
+
+  function syncImportBank() {
+    var sel = el('imp-bank');
+    if (!sel) return;
+    sel.innerHTML = '';
+    banks.forEach(function (b) {
+      var o = document.createElement('option');
+      o.value = b.id; o.textContent = b.name;
+      sel.appendChild(o);
+    });
+    if (banks[cur]) sel.value = banks[cur].id;
+  }
+
+  function showImportResult(d) {
+    var out = el('imp-out');
+    out.innerHTML = '';
+    if (d.ok === false && d.detail) {
+      var e0 = document.createElement('div');
+      e0.className = 'imp-err'; e0.textContent = d.detail;
+      out.appendChild(e0);
+      return;
+    }
+    var ok = document.createElement('div');
+    ok.className = 'imp-ok';
+    var parts = ['识别 ' + (d.parsed !== undefined ? d.parsed : d.added) + ' 题'];
+    if (d.added !== undefined && d.mode) {
+      parts = [d.mode === 'replace' ? '已覆盖题库' : '已追加 ' + d.added + ' 题'];
+      parts.push('现在共 ' + d.total + ' 题');
+      if (d.skipped) parts.push('跳过重复 ' + d.skipped + ' 题');
+    }
+    if (d.errors && d.errors.length) parts.push('有 ' + d.errors.length + ' 行报错');
+    ok.textContent = parts.join('，');
+    out.appendChild(ok);
+    if (d.errors && d.errors.length) {
+      var errBox = document.createElement('div');
+      errBox.className = 'imp-err'; errBox.style.marginTop = '8px';
+      d.errors.slice(0, 30).forEach(function (e) {
+        var line = document.createElement('div');
+        line.textContent = '第 ' + e.row + ' 行：' + e.msg + (e.raw ? '　「' + e.raw + '」' : '');
+        errBox.appendChild(line);
+      });
+      if (d.errors.length > 30) {
+        var more = document.createElement('div');
+        more.textContent = '……另有 ' + (d.errors.length - 30) + ' 行未显示';
+        errBox.appendChild(more);
+      }
+      out.appendChild(errBox);
+    }
+    if (d.sample && d.sample.length) {
+      var sm = document.createElement('div'); sm.style.marginTop = '10px';
+      d.sample.forEach(function (q) {
+        var one = document.createElement('div'); one.className = 'sample';
+        var ans = Array.isArray(q.answer)
+          ? q.answer.map(function (i) { return 'ABCDEFGH'[i]; }).join(',')
+          : 'ABCDEFGH'[q.answer];
+        one.textContent = q.text + '　[' + (q.stage || '-') + '/' + (q.subject || '-') +
+          '] 答案 ' + ans + (q.explain ? '　解析：' + q.explain : '');
+        sm.appendChild(one);
+      });
+      out.appendChild(sm);
+    }
+  }
+
+  function importPayload(preview) {
+    return {
+      text: el('imp-text').value,
+      format: el('imp-format').value,
+      stage: el('imp-stage').value,
+      mode: el('imp-mode').value,
+      bank_id: el('imp-bank').value,
+      preview: !!preview
+    };
+  }
+
+  // ---------- 设备 ----------
+
+  function renderDevices() {
+    var box = el('devlist'); box.innerHTML = '';
+    if (!devices.length) { box.innerHTML = '<p class="hint">还没有设备记录。</p>'; return; }
+    var tb = document.createElement('table');
+    tb.innerHTML = '<thead><tr><th>名称</th><th>IP</th><th>MAC</th><th>外网</th><th>答题题库</th></tr></thead>';
+    var body = document.createElement('tbody');
+    devices.forEach(function (d) {
+      var tr = document.createElement('tr');
+      var td0 = document.createElement('td'); td0.textContent = d.name || '—';
+      tr.appendChild(td0);
+      [((d.ip || []).join(', ') || '—'), d.mac].forEach(function (v) {
+        var td = document.createElement('td'); td.textContent = v;
+        td.className = 'mono'; tr.appendChild(td);
+      });
+      var td4 = document.createElement('td');
+      var tag = document.createElement('span');
+      var on = d.wan === 1 || d.wan === '1';
+      tag.className = 'tag' + (on ? '' : ' off');
+      tag.textContent = d.wan === null || d.wan === undefined ? '未知' : (on ? '可上网' : '已阻断');
+      td4.appendChild(tag); tr.appendChild(td4);
+
+      var td5 = document.createElement('td');
+      var sel = document.createElement('select');
+      var none = document.createElement('option');
+      none.value = ''; none.textContent = '不受控'; sel.appendChild(none);
+      banks.forEach(function (b) {
+        var o = document.createElement('option');
+        o.value = b.id;
+        o.textContent = b.name + (b.enabled ? '' : '（已停用）');
+        sel.appendChild(o);
+      });
+      sel.value = d.bank_id || '';
+      sel.onchange = function () { assign(d, sel); };
+      td5.appendChild(sel); tr.appendChild(td5);
+      body.appendChild(tr);
+    });
+    tb.appendChild(body); box.appendChild(tb);
+  }
+
+  function assign(device, sel) {
+    sel.disabled = true;
+    api('/api/admin/bank/assign', { mac: device.mac, bank_id: sel.value })
+      .then(function (res) {
+        sel.disabled = false;
+        if (!requireAuth(res)) return;
+        if (!res.data.ok) { toast(res.data.detail || '分配失败'); refreshDevices(); return; }
+        device.bank_id = sel.value;
+        toast(sel.value ? '已分配给「' + res.data.result.bank_name + '」' : '已设为不受控');
+        loadState();
+      }).catch(function () { sel.disabled = false; toast('分配失败'); });
+  }
+
+  function refreshDevices() {
+    api('/api/admin/devices').then(function (res) {
+      if (!requireAuth(res)) return;
+      devices = res.data.devices || [];
+      var h = el('dev-hint');
+      if (res.data.hint) { h.textContent = res.data.hint; h.style.display = 'block'; }
+      else h.style.display = 'none';
+      renderDevices();
+    });
+  }
+
+  // ---------- 交互 ----------
+
+  function switchTab(name) {
+    ['quiz', 'import', 'devices', 'settings'].forEach(function (n) {
+      el('tab-' + n).style.display = n === name ? 'block' : 'none';
+      el('tabbtn-' + n).className = n === name ? '' : 'off';
+    });
+    if (name === 'devices') refreshDevices();
+    if (name === 'import') syncImportBank();
+  }
+
+  el('login-btn').onclick = function () {
+    api('/api/admin/login', { password: el('pwd').value }).then(function (res) {
+      if (res.data.ok) { el('pwd').value = ''; loadState(); }
+      else toast(res.data.detail || '登录失败');
+    }).catch(function () { toast('无法连接后台服务'); });
+  };
+  el('pwd').onkeydown = function (e) { if (e.key === 'Enter') el('login-btn').click(); };
+  el('logout').onclick = function () { api('/api/admin/logout', {}).then(showLogin); };
+  ['quiz', 'import', 'devices', 'settings'].forEach(function (n) {
+    el('tabbtn-' + n).onclick = function () { switchTab(n); };
+  });
+
+  el('bank-sel').onchange = function () {
+    var b = banks.filter(function (x) { return x.id === el('bank-sel').value; })[0];
+    if (b) { openSet = {}; pickBank(banks.indexOf(b)); }
+  };
+  el('bank-new').onclick = function () {
+    var name = prompt('新题库名称（例如：妹妹的题 / 小学低年级）',
+      '新题库 ' + (banks.length + 1));
+    if (!name) return;
+    api('/api/admin/bank', {
+      name: name,
+      tiers: [{ questions: 3, minutes: 30 }],
+      devices: [],
+      questions: [{
+        type: 'single', stage: '', grade: '', subject: '', star: 1,
+        text: '（示例）1 + 1 = ?', options: ['1', '2', '3'], answer: 1, explain: '1 + 1 = 2。'
+      }]
+    }).then(function (res) {
+      if (!requireAuth(res)) return;
+      if (!res.data.ok) { toast(res.data.detail || '新建失败'); return; }
+      curId = res.data.bank.id;
+      toast('已新建题库，接着补充题目和档位');
+      loadState();
+    });
+  };
+  el('bank-del').onclick = function () {
+    var b = banks[cur];
+    if (!b) return;
+    if (banks.length <= 1) { toast('至少要保留一个题库'); return; }
+    if (!confirm('确定删除题库「' + b.name + '」？其中 ' + (b.questions || []).length +
+      ' 道题会一并删除，管辖的设备会变成不受控。')) return;
+    api('/api/admin/bank/delete', { id: b.id }).then(function (res) {
+      if (!requireAuth(res)) return;
+      if (!res.data.ok) { toast(res.data.detail || '删除失败'); return; }
+      curId = '';
+      toast('已删除');
+      loadState();
+    });
+  };
+  el('tier-add').onclick = function () {
+    var last = tiers[tiers.length - 1];
+    tiers.push(last ? { questions: Math.min(50, last.questions + 2),
+                        minutes: Math.min(1440, last.minutes + 30) }
+                    : { questions: 3, minutes: 30 });
+    renderTiers();
+  };
+
+  el('f-stage').onchange = function () { page = 0; renderList(); };
+  el('f-subject').onchange = function () { page = 0; renderList(); };
+  el('f-kw').oninput = function () { page = 0; renderList(); };
+  el('prev').onclick = function () { if (page > 0) { page--; renderList(); } };
+  el('next').onclick = function () { page++; renderList(); };
+
+  el('add-q').onclick = function () {
+    Q.unshift({ id: '', stage: '', grade: '', subject: '', type: 'single',
+                star: 2, text: '', options: ['', ''], answer: 0, explain: '' });
+    openSet = { 0: true }; page = 0;
+    el('f-stage').value = ''; el('f-subject').value = ''; el('f-kw').value = '';
+    renderList();
+  };
+  el('save-bank').onclick = saveBank;
+
+  el('imp-file').onchange = function () {
+    var f = el('imp-file').files[0];
+    if (!f) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      el('imp-text').value = String(reader.result || '');
+      if (/\.json$/i.test(f.name)) el('imp-format').value = 'json';
+      toast('已读取 ' + f.name);
+    };
+    reader.readAsText(f, 'utf-8');
+  };
+  el('imp-preview').onclick = function () {
+    api('/api/admin/import', importPayload(true)).then(function (res) {
+      if (!requireAuth(res)) return;
+      showImportResult(res.data);
+    });
+  };
+  el('imp-run').onclick = function () {
+    var btn = el('imp-run');
+    btn.disabled = true;
+    api('/api/admin/import', importPayload(false)).then(function (res) {
+      if (!requireAuth(res)) { btn.disabled = false; return; }
+      showImportResult(res.data);
+      if (res.data.ok) {
+        toast('导入成功');
+        curId = res.data.bank_id || curId;
+        loadState();
+      } else {
+        toast(res.data.detail || '导入失败');
+      }
+      btn.disabled = false;
+    }).catch(function () { btn.disabled = false; });
+  };
+  el('builtin-append').onclick = function () {
+    api('/api/admin/restore-builtin',
+      { mode: 'append', bank_id: el('imp-bank').value }).then(function (res) {
+      if (!requireAuth(res)) return;
+      showImportResult(res.data);
+      if (res.data.ok) { toast('已追加内置题库'); loadState(); }
+    });
+  };
+  el('builtin-replace').onclick = function () {
+    if (!confirm('确定用内置题库覆盖所选题库？当前自定义题目会被清掉。')) return;
+    api('/api/admin/restore-builtin',
+      { mode: 'replace', bank_id: el('imp-bank').value }).then(function (res) {
+      if (!requireAuth(res)) return;
+      showImportResult(res.data);
+      if (res.data.ok) { toast('已改用内置题库'); loadState(); }
+    });
+  };
+  el('bak-run').onclick = function () {
+    var f = el('bak-file').files[0];
+    if (!f) { toast('请先选择备份文件'); return; }
+    var reader = new FileReader();
+    reader.onload = function () {
+      var data;
+      try { data = JSON.parse(String(reader.result || '')); }
+      catch (e) { toast('备份文件不是有效 JSON'); return; }
+      api('/api/admin/backup/import', { data: data }).then(function (res) {
+        if (!requireAuth(res)) return;
+        if (res.data.ok) {
+          var s = res.data.summary;
+          toast('已恢复 ' + s.banks + ' 套题库 / ' + s.questions + ' 道题');
+          curId = '';
+          loadState();
+        } else toast(res.data.detail || '恢复失败');
+      });
+    };
+    reader.readAsText(f, 'utf-8');
+  };
+
+  el('refresh-dev').onclick = refreshDevices;
+  el('unlock').onclick = function () {
+    api('/api/admin/unlock', {}).then(function (res) {
+      if (!requireAuth(res)) return;
+      toast(res.data.ok ? '已清除答题锁定，可以重新答题了'
+                        : (res.data.detail || '操作失败'));
+    });
+  };
+  el('save-settings').onclick = function () {
+    api('/api/admin/settings', {
+      settings: { daily_cap_minutes: Number(el('cap').value), note: el('note').value }
+    }).then(function (res) {
+      if (!requireAuth(res)) return;
+      toast(res.data.ok ? '设置已保存，立即生效' : (res.data.detail || '保存失败'));
+    });
+  };
+
+  api('/api/admin/session').then(function (res) {
+    if (res.data.authed) loadState(); else showLogin();
+  }).catch(showLogin);
+})();
+</script>
+</body>
+</html>

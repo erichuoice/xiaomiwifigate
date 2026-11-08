@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="上网答题">
+<meta name="theme-color" content="#f6f7f9">
+<title>上网先答题</title>
+<style>
+  :root {
+    --bg: #f4f6f8;
+    --card: #ffffff;
+    --line: #e2e6ea;
+    --text: #171b21;
+    --muted: #6b7280;
+    --accent: #1a6fd4;
+    --accent-soft: #eaf2fd;
+    --ok: #0f7a5a;
+    --ok-bg: #e4f6ee;
+    --no: #b03030;
+    --no-bg: #fdeaea;
+    --star: #d99a2b;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 20px 16px 40px;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 16px; line-height: 1.6; -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 21px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 14px; }
+
+  .status {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    background: #fff; border: 1px solid var(--line); border-radius: 12px;
+    padding: 11px 14px; margin-bottom: 14px; font-size: 13.5px; color: var(--muted);
+  }
+  .status b { color: var(--text); font-size: 15px; font-variant-numeric: tabular-nums; }
+  .status .pill {
+    font-size: 12px; padding: 2px 9px; border-radius: 20px;
+    background: var(--accent-soft); color: var(--accent);
+  }
+  .status .pill.off { background: #f0f2f5; color: var(--muted); }
+
+  .progress { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+  .dot {
+    width: 26px; height: 6px; border-radius: 3px; background: #dfe4ea; flex: 0 0 auto;
+    transition: background .2s;
+  }
+  .dot.now { background: var(--accent); }
+  .dot.ok { background: var(--ok); }
+  .dot.no { background: var(--no); }
+  .pcount { margin-left: auto; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 16px; padding: 18px; margin-bottom: 16px;
+  }
+  .ptitle { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .pdesc { font-size: 13px; color: var(--muted); margin: 0 0 12px; }
+
+  .tier {
+    display: flex; align-items: center; gap: 12px; width: 100%;
+    border: 1.5px solid var(--line); border-radius: 13px; background: #fff;
+    padding: 13px 14px; margin-bottom: 10px; cursor: pointer; text-align: left;
+    font-family: inherit; color: var(--text);
+  }
+  .tier:last-child { margin-bottom: 0; }
+  .tier:active, .tier.on { border-color: var(--accent); background: var(--accent-soft); }
+  .tier .num {
+    flex: 0 0 auto; min-width: 52px; text-align: center;
+    font-size: 20px; font-weight: 700; color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .tier .num small { display: block; font-size: 11px; font-weight: 500; color: var(--muted); }
+  .tier .txt { flex: 1; }
+  .tier .txt b { font-size: 15.5px; }
+  .tier .txt span { display: block; font-size: 12.5px; color: var(--muted); }
+  .tier .go { flex: 0 0 auto; font-size: 13px; color: var(--accent); font-weight: 600; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .chip {
+    font-size: 12px; padding: 3px 9px; border-radius: 20px;
+    background: var(--accent-soft); color: var(--accent);
+  }
+  .chip.plain { background: #f0f2f5; color: var(--muted); }
+  .chip.star { background: #fdf3e2; color: #8a5a00; letter-spacing: 1px; }
+
+  .qtext { font-size: 18px; font-weight: 600; line-height: 1.55; margin-bottom: 16px; white-space: pre-wrap; }
+
+  .opt {
+    display: flex; align-items: center; gap: 12px;
+    border: 1.5px solid var(--line); border-radius: 12px;
+    padding: 14px; margin-bottom: 10px; background: #fff;
+    cursor: pointer; min-height: 54px; transition: border-color .15s, background .15s;
+  }
+  .opt:last-child { margin-bottom: 0; }
+  .opt .mark {
+    width: 28px; height: 28px; flex: 0 0 28px; border-radius: 50%;
+    border: 1.5px solid #c9d0d8; color: var(--muted);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 600;
+  }
+  .opt .label { flex: 1; font-size: 16px; }
+  .opt.picked { border-color: var(--accent); background: var(--accent-soft); }
+  .opt.picked .mark { border-color: var(--accent); background: var(--accent); color: #fff; }
+  .opt.correct { border-color: var(--ok); background: var(--ok-bg); }
+  .opt.correct .mark { border-color: var(--ok); background: var(--ok); color: #fff; }
+  .opt.wrong { border-color: var(--no); background: var(--no-bg); }
+  .opt.wrong .mark { border-color: var(--no); background: var(--no); color: #fff; }
+  .opt.locked { cursor: default; }
+
+  .feedback { display: none; margin-top: 16px; border-radius: 12px; padding: 13px 14px; font-size: 14px; }
+  .feedback.on { display: block; }
+  .feedback.ok { background: var(--ok-bg); color: #0a5b43; }
+  .feedback.no { background: var(--no-bg); color: #8a2626; }
+  .feedback b { display: block; font-size: 15px; margin-bottom: 3px; }
+  .feedback p { margin: 0; opacity: .92; }
+
+  button {
+    width: 100%; border: 0; border-radius: 14px; padding: 16px;
+    font-size: 17px; font-weight: 600; color: #fff; background: var(--accent);
+    cursor: pointer; font-family: inherit;
+  }
+  button:disabled { background: #b9c0c9; }
+  button.ghost { background: #e9edf2; color: var(--text); }
+
+  .panel { border-radius: 16px; padding: 20px; margin-bottom: 16px; display: none; }
+  .panel.ok { background: var(--ok-bg); border: 1px solid #7fc3a8; color: #08543e; }
+  .panel.no { background: var(--no-bg); border: 1px solid #e0a0a0; color: #7d2020; }
+  .panel.info { background: var(--card); border: 1px solid var(--line); color: var(--text); }
+  .panel h2 { font-size: 19px; margin: 0 0 6px; }
+  .panel p { margin: 0; font-size: 14px; line-height: 1.65; }
+  .panel .big { font-size: 26px; font-weight: 700; margin: 6px 0; font-variant-numeric: tabular-nums; }
+
+  .foot { color: var(--muted); font-size: 12.5px; margin-top: 20px; line-height: 1.8; }
+  .foot code { background: #e6e9ed; padding: 1px 5px; border-radius: 4px; }
+  .loading { color: var(--muted); font-size: 14px; padding: 8px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="title">上网先答题</h1>
+  <p class="sub" id="subtitle">答对题目，换这台设备的上网时间</p>
+
+  <div class="status" id="status" style="display:none"></div>
+
+  <div class="progress" id="progress" style="display:none"></div>
+  <div id="result" class="panel"></div>
+
+  <!-- 选档位 -->
+  <div class="card" id="pick-card" style="display:none">
+    <div class="ptitle" id="pick-title">选一个目标开始答题</div>
+    <p class="pdesc" id="pick-desc">一轮全部答对才生效，答错一道要重来。</p>
+    <div id="tiers"></div>
+  </div>
+
+  <!-- 答题 -->
+  <div class="card" id="quiz-card">
+    <div class="loading" id="loading">正在读取题目…</div>
+    <div id="quiz" style="display:none">
+      <div class="chips" id="chips"></div>
+      <div class="qtext" id="qtext"></div>
+      <div id="options"></div>
+      <div class="feedback" id="feedback"></div>
+    </div>
+  </div>
+
+  <button id="main" disabled style="display:none">确认答案</button>
+
+  <div class="foot">
+    <div id="devinfo"></div>
+    <div id="note"></div>
+    <div style="margin-top:8px">打开的是本机固定地址，断网也能用；建议「添加到主屏幕」。</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var el = function (id) { return document.getElementById(id); };
+  var S = {
+    info: null, question: null, index: 0, total: 0, results: [],
+    picked: [], locked: false, busy: false, answered: false,
+    next: null, tier: 0, timer: null
+  };
+  var LETTERS = 'ABCDEFGH';
+
+  function showPanel(kind, title, html) {
+    var p = el('result');
+    p.className = 'panel ' + kind;
+    p.innerHTML = '';
+    var h = document.createElement('h2');
+    h.textContent = title;
+    p.appendChild(h);
+    if (html) {
+      var box = document.createElement('div');
+      box.innerHTML = html;
+      p.appendChild(box);
+    }
+    p.style.display = 'block';
+  }
+  function hidePanel() {
+    el('result').style.display = 'none';
+    el('result').className = 'panel';
+  }
+  function setMain(text, enabled) {
+    var b = el('main');
+    b.textContent = text;
+    b.disabled = !enabled;
+    b.style.display = 'block';
+  }
+  function hideMain() { el('main').style.display = 'none'; }
+  function showQuiz(show) {
+    el('quiz').style.display = show ? 'block' : 'none';
+    el('loading').style.display = show ? 'none' : 'block';
+    el('progress').style.display = show ? 'flex' : 'none';
+    if (!show) hideMain();
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+  function hhmm(ts) {
+    if (!ts) return '';
+    var d = new Date(ts * 1000);
+    return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  }
+
+  // ---------- 设备状态 ----------
+
+  function renderStatus(info) {
+    var box = el('status');
+    box.style.display = 'flex';
+    box.innerHTML = '';
+    if (!info.need) { box.style.display = 'none'; return; }
+    var left = info.remaining_minutes;
+    var txt;
+    if (left === null) txt = '<b>已永久放行</b>';
+    else if (left > 0) txt = '当前还能上网 <b>' + left + '</b> 分钟';
+    else txt = '<span class="pill off">已断网</span> 答题后即可恢复';
+    box.innerHTML = txt;
+    if (info.today_minutes > 0 || info.daily_cap_minutes > 0) {
+      var pill = document.createElement('span');
+      pill.className = 'pill';
+      pill.textContent = info.daily_cap_minutes
+        ? '今日已得 ' + info.today_minutes + ' / ' + info.daily_cap_minutes + ' 分钟'
+        : '今日已得 ' + info.today_minutes + ' 分钟';
+      box.appendChild(pill);
+    }
+  }
+
+  function renderTiers(info) {
+    var box = el('tiers');
+    box.innerHTML = '';
+    el('pick-title').textContent = (info.bank ? info.bank.name + ' · ' : '') + '选一个目标开始答题';
+    el('pick-desc').textContent = info.today_left === 0
+      ? '今天的额度已经用完，明天再来。'
+      : '一轮全部答对才生效，答错一道要重来。';
+    info.tiers.forEach(function (t, i) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tier';
+      var num = document.createElement('div');
+      num.className = 'num';
+      num.innerHTML = t.questions + '<small>道题</small>';
+      var txt = document.createElement('div');
+      txt.className = 'txt';
+      var b1 = document.createElement('b');
+      b1.textContent = t.minutes === 0 ? '一直可以上网' : t.minutes + ' 分钟';
+      var s1 = document.createElement('span');
+      s1.textContent = t.minutes === 0 ? '答对就长期有效' : '答对 ' + t.questions + ' 道全部正确';
+      txt.appendChild(b1); txt.appendChild(s1);
+      var go = document.createElement('div');
+      go.className = 'go';
+      go.textContent = '开始 ›';
+      b.appendChild(num); b.appendChild(txt); b.appendChild(go);
+      b.onclick = function () { startTier(i); };
+      box.appendChild(b);
+    });
+    el('pick-card').style.display = 'block';
+  }
+
+  function renderProgress() {
+    var box = el('progress');
+    box.innerHTML = '';
+    for (var i = 0; i < S.total; i++) {
+      var d = document.createElement('span');
+      d.className = 'dot';
+      if (S.results[i] === true) d.className += ' ok';
+      else if (S.results[i] === false) d.className += ' no';
+      else if (i === S.index) d.className += ' now';
+      box.appendChild(d);
+    }
+    var c = document.createElement('span');
+    c.className = 'pcount';
+    c.textContent = '第 ' + Math.min(S.index + 1, S.total) + ' / ' + S.total + ' 题';
+    box.appendChild(c);
+  }
+
+  function renderChips(q) {
+    var box = el('chips');
+    box.innerHTML = '';
+    var items = [];
+    if (q.stage) items.push(q.stage + (q.grade ? ' · ' + q.grade : ''));
+    if (q.subject) items.push(q.subject);
+    if (q.type === 'multi') items.push('多选');
+    if (q.type === 'judge') items.push('判断');
+    items.forEach(function (t, i) {
+      var s = document.createElement('span');
+      s.className = 'chip' + (i === 0 && q.stage ? '' : ' plain');
+      s.textContent = t;
+      box.appendChild(s);
+    });
+    if (q.star) {
+      var st = document.createElement('span');
+      st.className = 'chip star';
+      st.textContent = '难度 ' + new Array(Math.max(1, Math.min(5, q.star)) + 1).join('★');
+      box.appendChild(st);
+    }
+  }
+
+  function renderOptions(q) {
+    var box = el('options');
+    box.innerHTML = '';
+    S.picked = [];
+    var multi = q.type === 'multi';
+    q.options.forEach(function (text, idx) {
+      var row = document.createElement('div');
+      row.className = 'opt';
+      row.dataset.idx = String(idx);
+      var mark = document.createElement('div');
+      mark.className = 'mark';
+      mark.textContent = LETTERS[idx];
+      var label = document.createElement('div');
+      label.className = 'label';
+      label.textContent = text;
+      row.appendChild(mark);
+      row.appendChild(label);
+      row.onclick = function () {
+        if (S.answered || S.locked) return;
+        if (multi) {
+          var at = S.picked.indexOf(idx);
+          if (at >= 0) S.picked.splice(at, 1); else S.picked.push(idx);
+        } else {
+          S.picked = [idx];
+        }
+        Array.prototype.forEach.call(box.children, function (n, i) {
+          n.classList.toggle('picked', S.picked.indexOf(i) >= 0);
+        });
+        setMain('确认答案', S.picked.length > 0);
+      };
+      box.appendChild(row);
+    });
+    setMain('确认答案', false);
+  }
+
+  function renderQuestion(payload) {
+    S.question = payload.question;
+    S.index = payload.index;
+    S.total = payload.total;
+    S.results = payload.results || [];
+    S.next = null;
+    S.answered = false;
+    S.busy = false;
+    hidePanel();
+    el('pick-card').style.display = 'none';
+    showQuiz(true);
+    el('main').onclick = submit;
+    renderProgress();
+    renderChips(S.question);
+    el('qtext').textContent = S.question.text;
+    el('feedback').className = 'feedback';
+    el('feedback').textContent = '';
+    renderOptions(S.question);
+  }
+
+  function markAnswer(picked, answer) {
+    var correctSet = Array.isArray(answer) ? answer : [answer];
+    Array.prototype.forEach.call(el('options').children, function (n, i) {
+      n.classList.add('locked');
+      n.classList.remove('picked');
+      if (correctSet.indexOf(i) >= 0) n.classList.add('correct');
+      else if (picked.indexOf(i) >= 0) n.classList.add('wrong');
+    });
+    S.answered = true;
+  }
+
+  function showFeedback(ok, explain, answer) {
+    var fb = el('feedback');
+    fb.className = 'feedback on ' + (ok ? 'ok' : 'no');
+    fb.innerHTML = '';
+    var b = document.createElement('b');
+    b.textContent = ok ? '答对了' : '答错了';
+    fb.appendChild(b);
+    var p = document.createElement('p');
+    var right = Array.isArray(answer)
+      ? answer.map(function (i) { return LETTERS[i]; }).join('、')
+      : LETTERS[answer];
+    p.textContent = (ok ? '' : '正确答案：' + right + '。') + (explain || '');
+    fb.appendChild(p);
+    markAnswer(S.picked, answer);
+  }
+
+  function startLock(seconds) {
+    S.locked = true;
+    showQuiz(false);
+    el('pick-card').style.display = 'none';
+    var left = seconds;
+    function tick() {
+      if (left <= 0) {
+        clearInterval(S.timer);
+        S.locked = false;
+        hidePanel();
+        loadInfo();
+        return;
+      }
+      showPanel('no', '答题暂停', '<p>答错次数太多，请等 <b>' + left +
+        '</b> 秒后再试。</p>');
+      left -= 1;
+    }
+    tick();
+    S.timer = setInterval(tick, 1000);
+  }
+
+  // ---------- 流程 ----------
+
+  function loadInfo() {
+    hidePanel();
+    showQuiz(false);
+    el('pick-card').style.display = 'none';
+    el('loading').textContent = '正在读取题目…';
+    el('loading').style.display = 'block';
+    fetch('/api/quiz', { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        S.info = data;
+        el('devinfo').textContent = '本机地址：' + (data.ip || '');
+        el('note').textContent = data.note || '';
+        el('loading').style.display = 'none';
+        if (data.reason === 'router_error') {
+          showPanel('no', '读不到路由器', '<p>请确认 NAS 与路由器在同一网络，或稍后刷新重试。</p>');
+          return;
+        }
+        if (!data.ok) {
+          showPanel('no', '出错了', '<p>' + esc(data.detail || '请刷新页面') + '</p>');
+          return;
+        }
+        if (data.locked_for > 0) { startLock(data.locked_for); return; }
+        if (!data.need) {
+          showPanel('info', '这台设备不用答题',
+            '<p>' + esc(data.message || '它不在管理员设定的受控清单里。') + '</p>');
+          return;
+        }
+        renderStatus(data);
+        renderTiers(data);
+        if (data.tiers.length === 1) startTier(0);
+      })
+      .catch(function () {
+        el('loading').style.display = 'block';
+        el('loading').textContent = '无法连接到答题服务，请确认已连上家里 Wi-Fi 后刷新页面。';
+      });
+  }
+
+  function startTier(tier) {
+    if (S.busy) return;
+    S.busy = true;
+    S.tier = tier;
+    el('pick-card').style.display = 'none';
+    el('loading').style.display = 'block';
+    el('loading').textContent = '正在出题…';
+    fetch('/api/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ tier: tier })
+    }).then(function (r) {
+      return r.json().then(function (j) { return { status: r.status, data: j }; });
+    }).then(function (res) {
+      var d = res.data || {};
+      S.busy = false;
+      if (res.status === 429 || d.reason === 'locked') { startLock(d.seconds || 60); return; }
+      if (d.reason === 'daily_cap') {
+        showPanel('info', '今天的额度用完了', '<p>' + esc(d.detail || '') + '</p>');
+        return;
+      }
+      if (d.reason === 'not_managed') {
+        showPanel('info', '这台设备不用答题', '<p>它不在管理员设定的受控清单里。</p>');
+        return;
+      }
+      if (d.reason === 'router_error') {
+        showPanel('no', '读不到路由器', '<p>' + esc(d.detail || '') + '</p>');
+        return;
+      }
+      if (!d.ok) {
+        showPanel('no', '出题失败', '<p>' + esc(d.detail || '请刷新页面重试') + '</p>');
+        return;
+      }
+      renderQuestion(d);
+    }).catch(function () {
+      S.busy = false;
+      showPanel('no', '出题失败', '<p>网络似乎断了，请刷新页面重试。</p>');
+    });
+  }
+
+  function submit() {
+    if (S.busy || S.answered || !S.question || S.picked.length === 0) return;
+    S.busy = true;
+    setMain('正在判卷…', false);
+    fetch('/api/answer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ id: S.question.id, choices: S.picked })
+    }).then(function (r) {
+      return r.json().then(function (j) { return { status: r.status, data: j }; });
+    }).then(function (res) {
+      var d = res.data || {};
+      S.busy = false;
+      if (res.status === 429 || d.reason === 'locked') { startLock(d.seconds || 60); return; }
+      if (d.reason === 'stale') { loadInfo(); return; }
+      if (d.reason === 'daily_cap') {
+        showQuiz(false);
+        showPanel('info', '今天的额度用完了', '<p>' + esc(d.detail || '') + '</p>');
+        return;
+      }
+      if (d.reason === 'not_managed') {
+        showQuiz(false);
+        showPanel('info', '这台设备不用答题', '<p>它不在管理员设定的受控清单里。</p>');
+        return;
+      }
+      if (d.reason === 'router_error') {
+        showQuiz(false);
+        showPanel('no', '答案对了，但放行失败',
+          '<p>请管理员在小米 WiFi App 里手动允许本机联网，或查看服务日志。</p>');
+        return;
+      }
+      if (!d.ok) { setMain('确认答案', true); return; }
+
+      S.results = d.results || S.results;
+      S.index = d.index;
+      showFeedback(d.correct, d.explain, d.answer);
+      renderProgress();
+
+      if (!d.done) {
+        S.next = d.question;
+        setMain('下一题', true);
+        el('main').onclick = nextQuestion;
+        return;
+      }
+
+      if (d.all_correct) {
+        showQuiz(false);
+        var left = d.remaining_minutes;
+        var leftText = left === null ? '一直有效'
+          : (left > 0 ? '累计可用 ' + left + ' 分钟' : '');
+        var extra = d.expire_at
+          ? '<p>到 ' + hhmm(d.expire_at) + ' 自动断开，到时再答一次即可。</p>'
+          : '<p>不会再自动断开。</p>';
+        showPanel('ok', '全部答对，已放行',
+          '<div class="big">' + (d.minutes ? '+' + d.minutes + ' 分钟' : '已开网') + '</div>' +
+          '<p>' + esc(d.message || '') + '（' + leftText + '）</p>' + extra +
+          (d.today_minutes ? '<p style="margin-top:6px">今日累计获得 ' +
+            d.today_minutes + ' 分钟。</p>' : ''));
+        return;
+      }
+
+      showQuiz(false);
+      if (d.locked_for > 0) { startLock(d.locked_for); return; }
+      showPanel('no', '这一轮有错题',
+        '<p>答错 ' + (d.total - d.results.filter(Boolean).length) + ' 题，需要重新答一轮。' +
+        (d.remain > 0 ? '还剩 ' + d.remain + ' 次机会。' : '') + '</p>');
+      setMain('再来一轮', true);
+      el('main').onclick = function () { startTier(d.tier || 0); };
+    }).catch(function () {
+      showPanel('no', '提交失败', '<p>网络似乎断了，请刷新页面重试。</p>');
+      setMain('重试', true);
+      el('main').onclick = loadInfo;
+      S.busy = false;
+    });
+  }
+
+  function nextQuestion() {
+    if (!S.next) { loadInfo(); return; }
+    var payload = { question: S.next, index: S.index, total: S.total, results: S.results };
+    el('main').onclick = submit;
+    renderQuestion(payload);
+  }
+
+  el('main').onclick = submit;
+  loadInfo();
+})();
+</script>
+</body>
+</html>
