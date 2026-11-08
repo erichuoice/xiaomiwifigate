@@ -277,7 +277,7 @@ def note_wrong(ip):
 # ---- 放行 ----
 
 def grant(ip, mac, bank_id, bank_name, minutes):
-    """放行并累计时长：已有剩余时间则叠加，受每日上限约束。"""
+    """放行并重新计时：从现在起算本次档位时长，不在原有到期时间上叠加。"""
     cap = int(STORE.snapshot()["settings"].get("daily_cap_minutes", 0) or 0)
     now = time.time()
     day = today()
@@ -294,9 +294,7 @@ def grant(ip, mac, bank_id, bank_name, minutes):
         if granted == 0 and int(minutes) == 0:
             expire = 0                      # 档位设为 0 分钟 = 永久放行
         else:
-            base = int(rec.get("expire_at") or 0)
-            start = base if base > now else now
-            expire = int(start + granted * 60)
+            expire = int(now + granted * 60)   # 不叠加：按本次档位重新起算
         rec.update({
             "ip": ip, "mac": mac, "at": now, "expire_at": expire,
             "minutes": granted, "bank": bank_id, "bank_name": bank_name,
@@ -722,7 +720,7 @@ class Handler(BaseHTTPRequestHandler):
                 "remaining_minutes": rec.get("minutes_left"),
                 "today_minutes": rec.get("today_minutes", 0),
                 "message": ("已放行，一直有效" if rec["minutes"] == 0
-                            else "已放行，本次 +%s 分钟，累计可用 %s 分钟"
+                            else "已放行，本次 +%s 分钟，可用 %s 分钟"
                                  % (rec["minutes"], rec.get("minutes_left"))),
             })
             return self._json(feedback)

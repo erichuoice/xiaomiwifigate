@@ -3,7 +3,7 @@
 
 用 X-Forwarded-For 模拟设备（仅从 127.0.0.1 发起时生效），覆盖：
 多题库与设备归属 / 档位选择（答 N 题换 M 分钟）/ 逐题即时反馈 /
-一轮全对才放行 / 时长累加 / 每日上限 / 答错重来与锁定 /
+一轮全对才放行 / 时长重新计时 / 每日上限 / 答错重来与锁定 /
 后台鉴权 / 题库校验 / 导入导出 / 备份恢复。
 
 测试会临时新建「自检题库」并改设置，结束时用备份接口整份还原。
@@ -354,13 +354,12 @@ def main():
     check("答题页显示剩余时间", info.get("remaining_minutes") in (59, 60),
           "%s 分钟" % info.get("remaining_minutes"))
 
-    # ---- 再答一档 → 时长累加 ----
+    # ---- 再答一档 → 从现在重新计时（不叠加） ----
     code, d = start(0)
     check("选 1 题档", code == 200 and d.get("total") == 1 and d.get("minutes") == 30)
     last = play(d, right)
-    check("答对后时长叠加", last.get("remaining_minutes") in (89, 90),
-          "累计 %s 分钟，今日 %s 分钟"
-          % (last.get("remaining_minutes"), last.get("today_minutes")))
+    check("再答一档从现在重新计时", last.get("remaining_minutes") in (29, 30),
+          "剩余 %s 分钟（原 60 分钟不叠加）" % last.get("remaining_minutes"))
 
     # ---- 每日上限 ----
     code, res = admin("/api/admin/settings",

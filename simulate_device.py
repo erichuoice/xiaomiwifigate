@@ -134,7 +134,7 @@ def run(base, password, mode, rounds, tier):
                 if d.get("all_correct"):
                     print("  >>> 全部答对：%s（MAC %s）"
                           % (d.get("message"), d.get("mac")))
-                    print("  >>> 累计可用 %s 分钟，今日已得 %s 分钟"
+                    print("  >>> 可用 %s 分钟，今日已得 %s 分钟"
                           % (d.get("remaining_minutes"), d.get("today_minutes")))
                 else:
                     print("  >>> 这一轮有错题，需要重来；剩余机会 %s 次"

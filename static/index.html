@@ -663,7 +663,7 @@
         showQuiz(false);
         var left = d.remaining_minutes;
         var leftText = left === null ? '一直有效'
-          : (left > 0 ? '累计可用 ' + left + ' 分钟' : '');
+          : (left > 0 ? '可用 ' + left + ' 分钟' : '');
         var extra = d.expire_at
           ? '<p>到 ' + hhmm(d.expire_at) + ' 自动断开，到时再答一次即可。</p>' +
             '<div class="cd" id="cd"></div>'
