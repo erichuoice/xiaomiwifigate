@@ -87,7 +87,7 @@ docker ps -a
 | `netstat -ltnp` | 空 | 容器内看不到宿主端口，改用 `docker ps` |
 | Docker 版本 | `Server Version: 20.10.17` | 版本偏老，但 `--network host`、`--restart`、healthcheck 都支持 |
 | Docker Root Dir | `/mnt/usb-fa757357/mi_docker/lib/docker/` | **本机 USB 挂载点 = `/mnt/usb-fa757357`** |
-| 已占端口 | `simple-docker` 占 9001 | **8080 空闲**，无需改端口 |
+| 已占端口 | `simple-docker` 占 9001；**8080 被路由器宿主自身某服务占用** | 用 `WIFIGATE_PORT=8088`，见第四步 |
 | socket | `/var/run/docker.sock` 可访问 | 容器内 CLI 直连宿主 daemon，不用开 SSH |
 
 > `WARNING: No swap limit support` 之类是路由器内核没开 cgroup 资源限制，不影响本程序运行。
@@ -95,8 +95,8 @@ docker ps -a
 **还需确认的两项：**
 
 ```sh
-# 8080 是否被占用：看现有容器的端口映射
-docker ps --format '{{.Names}}\t{{.Ports}}'
+# 宿主上所有监听端口（--pid=host 才能看到宿主进程，普通 docker ps 看不到）
+docker run --rm --pid=host --network host python:3.11-alpine netstat -ltnp 2>/dev/null | head -25
 
 # 外网可达性：能不能拉镜像
 docker pull hello-world
@@ -108,8 +108,8 @@ docker pull hello-world
 |---|---|
 | `uname -m` 是 `aarch64` | 正常，用 `python:3.11-alpine`（官方多架构镜像） |
 | `uname -m` 是 `armv7l` | 换 `python:3.11-alpine` 的 arm/v7 版本，其余不变 |
-| 8080 已被占用 | 改 `config.json` 的 `server.port`（比如 8800），改完重启容器 |
-| `docker pull` 失败 | 路由器 DNS 或出网有问题，先解决再继续 |
+| 8080 已被占用（**BE7000 实测如此**） | 启动加 `-e WIFIGATE_PORT=8088`，或改 `config.json` 的 `server.port` |
+| `docker pull` 失败 | 路由器直连 Docker Hub 常超时，改用国内源，见第四步 |
 | USB 挂载点形如 `/mnt/usb-aabbccdd` | 后面所有路径都用这个，**别照抄示例** |
 
 ---
@@ -176,9 +176,22 @@ docker run --rm alpine sh -c 'wget -q --timeout=10 -O /dev/null https://github.c
 
 ## 第四步：启动容器
 
-```sh
-docker pull python:3.11-alpine
+**先拉镜像。** 直连 Docker Hub 在国内大概率超时
+（`Get "https://registry-1.docker.io/v2/": context deadline exceeded`），
+换成国内镜像站再打本地标签：
 
+```sh
+docker pull docker.m.daocloud.io/library/python:3.11-alpine
+docker tag  docker.m.daocloud.io/library/python:3.11-alpine python:3.11-alpine
+docker images | head -5      # 必须看到 python  3.11-alpine 这一行
+```
+
+备选镜像站（同样结构，换域名即可）：`docker.1panel.live`、`hub.rat.dev`。
+`dockerpull.org`、`docker.nju.edu.cn` 实测不可用。
+
+然后启动：
+
+```sh
 docker run -d \
   --name wifi-gate \
   --network host \
@@ -186,6 +199,7 @@ docker run -d \
   --stop-timeout 10 \
   -e TZ=Asia/Shanghai \
   -e PYTHONUNBUFFERED=1 \
+  -e WIFIGATE_PORT=8088 \
   -v /mnt/usb-xxxx/wifi-gate:/app \
   -w /app \
   python:3.11-alpine \
@@ -201,11 +215,34 @@ docker run -d \
 | `--network host` | 拿真实客户端 IP，见文首说明。不能省 |
 | `--restart unless-stopped` | 容器崩溃自拉起 |
 | `--stop-timeout 10` | 给程序 10 秒优雅退出，把手上的授权记录落盘 |
+| `-e WIFIGATE_PORT=8088` | 覆盖监听端口，见下方「端口冲突」 |
 | `-v .../wifi-gate:/app` | 源码 + 配置 + state 全在 U 盘，重启不丢 |
 | 不设 `PUID/PGID` | 路由器上容器是 root，不需要降权 |
 
-`--network host` 下 `-p` 端口映射会被忽略，实际监听端口由 `config.json` 的
-`server.port` 决定；首次启动时没有 config，用默认的 8080。
+### 端口冲突：为什么默认改成了 8088
+
+`--network host` 下容器与路由器共用一个网络命名空间，`-p` 映射会被忽略，
+实际监听端口由 `server.port` 决定。**实测 BE7000 官方的 8080 已被路由器自身
+某个服务占用**，用默认值启动会直接崩：
+
+```
+OSError: [Errno 98] Address in use
+```
+
+两种解法，任选其一：
+
+1. **环境变量（推荐）**：启动时加 `-e WIFIGATE_PORT=8088`，优先级高于配置文件，
+   引导模式下也生效，不必预先写 `config.json`
+2. **改配置文件**：在 `config.json` 里把 `server.port` 改成 8088
+
+`--restart unless-stopped` 会记住完整启动参数，断电重启不会丢这个环境变量；
+但若你手动 `docker rm` 后用旧命令重建，漏了 `-e WIFIGATE_PORT` 就会再次撞车。
+
+想看清 8080 到底被谁占，可以借用 host 的 PID 命名空间：
+
+```sh
+docker run --rm --pid=host --network host python:3.11-alpine netstat -ltnp 2>/dev/null | head -25
+```
 
 ---
 
@@ -214,8 +251,10 @@ docker run -d \
 容器起来后，浏览器打开：
 
 ```
-http://192.168.31.1:8080/
+http://192.168.31.1:8088/
 ```
+
+端口要和启动命令里的 `WIFIGATE_PORT` 一致。
 
 会自动跳到 `/setup`，表单两项：
 
@@ -246,15 +285,21 @@ http://192.168.31.1:8080/
 # 容器活着
 docker ps | grep wifi-gate
 
-# 服务自检（容器内部）
-curl -s http://127.0.0.1:8080/api/health
+# 启动日志（看端口对不对）
+docker logs wifi-gate
+
+# 服务自检：必须在 wifi-gate 容器内部访问 127.0.0.1
+docker exec wifi-gate wget -qO- http://127.0.0.1:8088/api/health
 ```
+
+> 别在 `simple-docker` 的终端里直接 `curl http://127.0.0.1:8088` —— 它是 bridge 网络，
+> 那个 `127.0.0.1` 指的是它自己，不是宿主，只会得到连接被拒。
 
 返回 `{"ok": true, ...}` 就通了，其中应该能看到 `"mode": "miwifi"`。
 
 然后从**手机**验证（这条最关键，容器里测不出真实 IP 问题）：
 
-1. 手机连主 Wi-Fi，浏览器打开 `http://192.168.31.1:8080/` —— 能打开答题页
+1. 手机连主 Wi-Fi，浏览器打开 `http://192.168.31.1:8088/` —— 能打开答题页
 2. 米家 App 里对这台手机点 **暂停联网**
 3. 手机**再刷新**答题页 —— 仍然能打开（说明局域网互通，方案成立）
 4. 答对题目 → 观察是否恢复上网
@@ -274,7 +319,9 @@ curl -s http://127.0.0.1:8080/api/health
 | 路由器重启后容器未自启 | 同上 | 重启后确认一次；`--restart unless-stopped` 依赖 Docker 服务本身自启 |
 | 单点故障 | 容器挂了 = 断网且无法自救 | 保留 NAS 方案作为备用，随时可切回 |
 | U 盘寿命 | 长期写入 `state/` 和日志 | 用品牌 U 盘；日志已做 5MB 轮转 |
-| 8080 端口冲突 | 容器起不来 | 探测时已确认；冲突就改 `config.json` |
+| 8080 端口冲突 | 容器起不来，报 `Address in use` | BE7000 实测 8080 已被占用，启动统一加 `-e WIFIGATE_PORT=8088` |
+| 路由器拉不到 Docker Hub 镜像 | `docker pull` 超时 | 走国内镜像站，见第四步 |
+| 路由器直连 GitHub 超时 | 无法从仓库拉源码 | 改用加速站前缀 `https://gh-proxy.com/` + 原地址，或用电脑拷进 U 盘 |
 
 ---
 

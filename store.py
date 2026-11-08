@@ -326,6 +326,15 @@ class Store:
             # 首次启动、还没配置：先用内置默认值把服务跑起来，
             # 所有页面跳转到 /setup，等用户填完路由器密码再落盘。
             self._static = copy.deepcopy(DEFAULT_CONFIG)
+        # 端口/监听地址允许用环境变量覆盖：host 网络部署时，宿主上的同名端口
+        # 常被已有服务占用（小米路由器 BE7000 的 8080 即是），此时无需改配置文件。
+        # 覆盖值随 save_config 一并写回，保证配置文件与实际监听一致。
+        env_port = (os.environ.get("WIFIGATE_PORT") or "").strip()
+        if env_port.isdigit():
+            self._static["server"]["port"] = int(env_port)
+        env_host = (os.environ.get("WIFIGATE_BIND") or "").strip()
+        if env_host:
+            self._static["server"]["host"] = env_host
         self.trust_x_forwarded_for = bool(
             self._static["server"].get("trust_x_forwarded_for", False))
 
