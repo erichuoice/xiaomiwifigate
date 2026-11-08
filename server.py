@@ -476,14 +476,42 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(dict(base, ok=False, reason="router_error",
                                    detail=str(exc)), 502)
         base["mac"] = mac
+
+        # 可选解锁对象：任何受控设备都能被「代答」放行，
+        # 这样家长可以用自己的手机替孩子的平板做题。
+        names = ADAPTER.names_by_mac()
+        grants = load_grants()
+        targets = []
+        for t in STORE.targets():
+            trec = grants.get(t["mac"]) or {}
+            targets.append({
+                "mac": t["mac"],
+                "name": names.get(t["mac"], ""),
+                "bank": {"id": t["bank_id"], "name": t["bank_name"]},
+                "tiers": t["tiers"],
+                "remaining_minutes": minutes_left(trec),
+                "today_minutes": granted_today(trec),
+                "is_self": t["mac"] == mac,
+            })
+        base["targets"] = targets
+
         if not bank:
-            return self._json(dict(
-                base, need=False, reason="not_managed",
-                message="这台设备不在受控清单里，不需要答题。"))
+            if targets:
+                # 本机不受控，但可以替清单里的设备答题（代答）。
+                # need 保持 False —— 它描述的是「本机是否需要答题」。
+                base.update({"need": False, "pick_target": True,
+                             "reason": "pick_target",
+                             "message": "这台设备不受控，可以替下面任意一台答题。"})
+            else:
+                base.update({"need": False, "reason": "not_managed",
+                             "message": "这台设备不在受控清单里，不需要答题。"})
+            return self._json(base)
+
         cap = int(cfg["settings"].get("daily_cap_minutes", 0) or 0)
         used = granted_today(rec)
         base.update({
             "need": True,
+            "pick_target": False,
             "bank": {"id": bank["id"], "name": bank["name"]},
             "tiers": bank["tiers"],
             "remaining_minutes": minutes_left(rec),
@@ -567,8 +595,18 @@ class Handler(BaseHTTPRequestHandler):
         payload = self._payload()
         if payload is None:
             return self._json({"ok": False, "reason": "bad json"}, 400)
+        target = str(payload.get("target") or "").strip().lower()
         try:
-            mac, bank, rec = device_context(ip)
+            if target:
+                # 代答：为指定的受控设备做题（家长用自己手机替孩子放行）
+                mac = target
+                bank = STORE.bank_for_mac(mac)
+                rec = load_grants().get(mac) or {}
+                if not bank:
+                    return self._json({"ok": False, "reason": "not_managed",
+                                       "detail": "这台设备不在受控清单里"}, 403)
+            else:
+                mac, bank, rec = device_context(ip)
         except Exception as exc:
             log("MAC-FAIL ip=%s err=%s" % (ip, exc))
             return self._json({"ok": False, "reason": "router_error",

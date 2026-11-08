@@ -107,8 +107,11 @@ def wrong_pick(q, right_map):
     return [0]
 
 
-def start(tier, ip=None):
-    return admin("/api/start", {"tier": tier}, ip)
+def start(tier, ip=None, target=None):
+    payload = {"tier": tier}
+    if target:
+        payload["target"] = target
+    return admin("/api/start", payload, ip)
 
 
 def answer(qid, choices, ip=None):
@@ -260,14 +263,30 @@ def main():
     if info.get("need"):
         check("已归属设备返回题库", bool(info.get("bank", {}).get("name")),
               info.get("bank", {}).get("name", ""))
+    elif info.get("pick_target"):
+        check("不受控设备可代答", bool(info.get("targets")),
+              "可选 %s 台" % len(info.get("targets") or []))
     else:
         check("未归属设备提示不受控", info.get("reason") == "not_managed")
 
     code, res = start(0)
     if info.get("need"):
         check("已归属时可开始答题", code == 200)
+    elif info.get("pick_target"):
+        check("代答必须指定目标设备", code == 403, "HTTP %s" % code)
     else:
         check("未归属设备不能开始答题", code == 403, "HTTP %s" % code)
+
+    # 代答：指定目标设备后能正常开局，且题库取自目标设备
+    if info.get("pick_target") and info.get("targets"):
+        tgt = info["targets"][0]
+        code, res = start(0, target=tgt["mac"])
+        check("代答指定设备可开局", code == 200, "HTTP %s" % code)
+        check("代答题库取自目标设备",
+              res.get("bank", {}).get("name") == tgt["bank"]["name"],
+              "%s" % res.get("bank", {}).get("name"))
+        code, res = start(0, target="02:00:00:00:00:01")
+        check("代答拒绝非受控设备", code == 403, "HTTP %s" % code)
 
     # ---- 新建题库并分配设备 ----
     code, res = admin("/api/admin/bank", dict(TEST_BANK))

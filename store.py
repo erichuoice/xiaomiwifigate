@@ -584,6 +584,22 @@ class Store:
                     return copy.deepcopy(b)
         return None
 
+    def targets(self):
+        """所有受控设备（含所属题库与档位），供「代答」时选择解锁对象。"""
+        with self._lock:
+            out = []
+            for b in self._runtime["banks"]:
+                if not b.get("enabled"):
+                    continue
+                for mac in b["devices"]:
+                    out.append({
+                        "mac": mac,
+                        "bank_id": b["id"],
+                        "bank_name": b["name"],
+                        "tiers": copy.deepcopy(b["tiers"]),
+                    })
+            return out
+
     def summary(self):
         with self._lock:
             banks = self._runtime["banks"]

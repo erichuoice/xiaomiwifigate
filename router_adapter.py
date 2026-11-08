@@ -237,6 +237,9 @@ class MockAdapter:
         h = hashlib.md5(str(ip).encode("utf-8")).hexdigest()
         return "02:%s:%s:%s:%s:%s" % (h[0:2], h[2:4], h[4:6], h[6:8], h[8:10])
 
+    def names_by_mac(self):
+        return {}
+
     def set_wan(self, mac, allow):
         action = "ALLOW" if allow else "BLOCK"
         self.log("[MOCK] %s mac=%s (未修改路由器)" % (action, mac))
@@ -252,6 +255,8 @@ class MiWifiAdapter:
         self.log = log
         self._cached_stok = None
         self._token_expired = False
+        self._names = {}
+        self._names_ts = 0.0
 
     def _base(self):
         return self.cfg["base_url"].rstrip("/")
@@ -363,6 +368,37 @@ class MiWifiAdapter:
         if not mac:
             raise RouterError("无法解析 %s 的 MAC（设备列表与 ARP 都没查到）" % ip)
         return mac
+
+    def names_by_mac(self):
+        """MAC -> 设备名（小米后台里起的名字，如 Huo-2），用于页面选择解锁对象。
+
+        失败不影响主流程：拿不到名字就回落到 MAC。缓存 60 秒，避免每次刷新
+        答题页都请求一次路由器。
+        """
+        now = time.time()
+        if self._names and now - self._names_ts < 60:
+            return self._names
+
+        def walk(node, out):
+            if isinstance(node, dict):
+                mac = str(node.get("mac", "")).lower()
+                if _MAC_RE.match(mac) and node.get("name"):
+                    out.setdefault(mac, str(node["name"]))
+                for v in node.values():
+                    walk(v, out)
+            elif isinstance(node, list):
+                for v in node:
+                    walk(v, out)
+
+        try:
+            out = {}
+            walk(json.loads(self.device_list_raw()), out)
+            if out:
+                self._names = out
+                self._names_ts = now
+        except Exception as exc:
+            self.log("取设备名失败（不影响答题）：%s" % exc)
+        return self._names
 
     def set_wan(self, mac, allow):
         if not mac:

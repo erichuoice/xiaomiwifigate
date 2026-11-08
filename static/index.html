@@ -81,6 +81,20 @@
   .tier .txt span { display: block; font-size: 12.5px; color: var(--muted); }
   .tier .go { flex: 0 0 auto; font-size: 13px; color: var(--accent); font-weight: 600; }
 
+  .tlabel {
+    font-size: 12.5px; color: var(--muted); margin: 16px 0 8px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .tlabel::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .devrow { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
+  .dev {
+    border: 1.5px solid var(--line); background: #fff; color: var(--text);
+    border-radius: 999px; padding: 8px 14px; font-size: 13.5px; cursor: pointer;
+    font-family: inherit; width: auto; font-weight: 500;
+  }
+  .dev.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .dev small { color: var(--muted); font-size: 11.5px; margin-left: 4px; }
+
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
   .chip {
     font-size: 12px; padding: 3px 9px; border-radius: 20px;
@@ -155,6 +169,10 @@
   <div class="card" id="pick-card" style="display:none">
     <div class="ptitle" id="pick-title">选一个目标开始答题</div>
     <p class="pdesc" id="pick-desc">一轮全部答对才生效，答错一道要重来。</p>
+    <div id="target-wrap" style="display:none">
+      <div class="tlabel">为哪台设备解锁</div>
+      <div class="devrow" id="targets"></div>
+    </div>
     <div id="tiers"></div>
   </div>
 
@@ -184,7 +202,7 @@
   var S = {
     info: null, question: null, index: 0, total: 0, results: [],
     picked: [], locked: false, busy: false, answered: false,
-    next: null, tier: 0, timer: null
+    next: null, tier: 0, timer: null, target: null, targetName: ''
   };
   var LETTERS = 'ABCDEFGH';
 
@@ -253,26 +271,60 @@
     }
   }
 
-  function renderTiers(info) {
+  function label(t) {
+    if (!t) return '';
+    if (t.name) return t.name;
+    return t.mac ? t.mac.slice(-8) : '';
+  }
+
+  function renderTargets(info) {
+    var list = info.targets || [];
+    var box = el('targets');
+    box.innerHTML = '';
+    el('target-wrap').style.display = list.length > 1 ? 'block' : 'none';
+    if (!list.length) return;
+
+    list.forEach(function (t) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'dev' + (t.mac === S.target ? ' on' : '');
+      b.textContent = label(t) + (t.is_self ? '（本机）' : '');
+      if (t.remaining_minutes > 0) {
+        var s = document.createElement('small');
+        s.textContent = '剩 ' + t.remaining_minutes + ' 分';
+        b.appendChild(s);
+      }
+      b.onclick = function () {
+        S.target = t.mac;
+        S.targetName = label(t);
+        renderTargets(info);
+        renderTiers(t);
+      };
+      box.appendChild(b);
+    });
+  }
+
+  function renderTiers(t) {
     var box = el('tiers');
     box.innerHTML = '';
-    el('pick-title').textContent = (info.bank ? info.bank.name + ' · ' : '') + '选一个目标开始答题';
-    el('pick-desc').textContent = info.today_left === 0
-      ? '今天的额度已经用完，明天再来。'
-      : '一轮全部答对才生效，答错一道要重来。';
-    info.tiers.forEach(function (t, i) {
+    var bankName = t.bank ? t.bank.name : '';
+    el('pick-title').textContent = bankName ? bankName + ' · 选一个目标开始答题'
+                                           : '选一个目标开始答题';
+    var who = S.target ? '答对后将放行「' + label(t) + '」。' : '';
+    el('pick-desc').textContent = who + '一轮全部答对才生效，答错一道要重来。';
+    (t.tiers || []).forEach(function (tier, i) {
       var b = document.createElement('button');
       b.type = 'button';
       b.className = 'tier';
       var num = document.createElement('div');
       num.className = 'num';
-      num.innerHTML = t.questions + '<small>道题</small>';
+      num.innerHTML = tier.questions + '<small>道题</small>';
       var txt = document.createElement('div');
       txt.className = 'txt';
       var b1 = document.createElement('b');
-      b1.textContent = t.minutes === 0 ? '一直可以上网' : t.minutes + ' 分钟';
+      b1.textContent = tier.minutes === 0 ? '一直可以上网' : tier.minutes + ' 分钟';
       var s1 = document.createElement('span');
-      s1.textContent = t.minutes === 0 ? '答对就长期有效' : '答对 ' + t.questions + ' 道全部正确';
+      s1.textContent = tier.minutes === 0 ? '答对就长期有效' : '答对 ' + tier.questions + ' 道全部正确';
       txt.appendChild(b1); txt.appendChild(s1);
       var go = document.createElement('div');
       go.className = 'go';
@@ -450,14 +502,22 @@
           return;
         }
         if (data.locked_for > 0) { startLock(data.locked_for); return; }
-        if (!data.need) {
+        var list = data.targets || [];
+        if ((!data.need && !data.pick_target) || !list.length) {
           showPanel('info', '这台设备不用答题',
             '<p>' + esc(data.message || '它不在管理员设定的受控清单里。') + '</p>');
           return;
         }
+        var self = null;
+        list.forEach(function (t) { if (t.is_self) self = t; });
+        var chosen = self || list[0];
+        S.target = chosen.mac;
+        S.targetName = label(chosen);
         renderStatus(data);
-        renderTiers(data);
-        if (data.tiers.length === 1) startTier(0);
+        if (data.pick_target) el('status').style.display = 'none';
+        renderTargets(data);
+        renderTiers(chosen);
+        if (list.length === 1 && (chosen.tiers || []).length === 1) startTier(0);
       })
       .catch(function () {
         el('loading').style.display = 'block';
@@ -476,7 +536,7 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
-      body: JSON.stringify({ tier: tier })
+      body: JSON.stringify({ tier: tier, target: S.target || '' })
     }).then(function (r) {
       return r.json().then(function (j) { return { status: r.status, data: j }; });
     }).then(function (res) {
@@ -560,7 +620,8 @@
         var extra = d.expire_at
           ? '<p>到 ' + hhmm(d.expire_at) + ' 自动断开，到时再答一次即可。</p>'
           : '<p>不会再自动断开。</p>';
-        showPanel('ok', '全部答对，已放行',
+        showPanel('ok', S.targetName ? '全部答对，「' + S.targetName + '」已放行'
+                                     : '全部答对，已放行',
           '<div class="big">' + (d.minutes ? '+' + d.minutes + ' 分钟' : '已开网') + '</div>' +
           '<p>' + esc(d.message || '') + '（' + leftText + '）</p>' + extra +
           (d.today_minutes ? '<p style="margin-top:6px">今日累计获得 ' +
