@@ -330,19 +330,72 @@ docker exec wifi-gate wget -qO- http://127.0.0.1:8088/api/health
 -e WIFIGATE_MIRROR=https://gh-proxy.com/,direct
 ```
 
-**兜底：后台进不去 / 更新器连不上外网**，还是用老办法手动覆盖两个文件：
+**兜底：后台进不去 / 更新器连不上外网**，用手动覆盖。
+
+⚠️ **不要用 `alpine` 一次性容器**（网上教程常见写法）。路由器上通常没有 alpine 镜像，
+而 Docker Hub 从国内基本连不上，`docker run ... alpine` 会直接卡在
+`Get "https://registry-1.docker.io/v2/": net/http: request canceled` 然后失败。
+正确做法是**复用 wifi-gate 自己的镜像**（里面就有 python3），把入口换成 python3 跑下载脚本：
 
 ```sh
-docker run --rm -v /mnt/usb-fa757357/wifi-gate:/app alpine sh -c '
-  wget -q -O /app/server.py https://gh-proxy.com/https://raw.githubusercontent.com/erichuoice/xiaomiwifigate/main/server.py &&
-  wget -q -O /app/static/index.html https://gh-proxy.com/https://raw.githubusercontent.com/erichuoice/xiaomiwifigate/main/static/index.html &&
-  echo OK
+IMG=$(docker inspect wifi-gate --format '{{.Config.Image}}'); echo "镜像 = $IMG"
+
+docker run --rm --entrypoint python3 -v /mnt/usb-fa757357/wifi-gate:/app "$IMG" -c '
+import urllib.request, tarfile, io, os, shutil
+urls = ["https://gh-proxy.com/https://github.com/erichuoice/xiaomiwifigate/archive/refs/heads/main.tar.gz",
+        "https://github.com/erichuoice/xiaomiwifigate/archive/refs/heads/main.tar.gz"]
+data = None
+for u in urls:
+    try:
+        print("download", u, flush=True)
+        data = urllib.request.urlopen(u, timeout=60).read(); break
+    except Exception as e:
+        print("fail", e, flush=True)
+assert data, "两个源都拉不到"
+tf = tarfile.open(fileobj=io.BytesIO(data), mode="r:gz")
+n = 0
+for m in tf.getmembers():
+    if not m.isfile(): continue
+    name = m.name.split("/", 1)[1] if "/" in m.name else m.name
+    if not name or name == "config.json" or name.startswith("state/"):
+        continue
+    dst = os.path.join("/app", name)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    with tf.extractfile(m) as src, open(dst + ".new", "wb") as f:
+        shutil.copyfileobj(src, f)
+    os.replace(dst + ".new", dst)
+    n += 1
+print("updated", n, "files, version =", open("/app/VERSION").read().strip())
 '
-docker restart wifi-gate
-docker exec wifi-gate wget -qO- http://127.0.0.1:8088/api/health
 ```
 
-`health` 里现在带 `"version"` 字段，能直接看出跑的是哪一版。
+然后再重启并验证（**先等 3–5 秒**，容器起来要读 U 盘）：
+
+```sh
+docker restart wifi-gate
+sleep 5
+docker exec wifi-gate python3 -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8088/api/health',timeout=5).read().decode())"
+```
+
+镜像基于 alpine，自带 busybox 的 `wget`（可用来查健康，但 `python3` 更稳）。
+`health` 里带 `"version"` 字段，能直接看出跑的是哪一版。
+
+容器已经跑起来的话，更省事的写法是直接在容器里下载覆盖，不需要 `docker run`：
+
+```sh
+docker exec wifi-gate sh -c '
+  wget -q -O /tmp/r.tgz https://gh-proxy.com/https://github.com/erichuoice/xiaomiwifigate/archive/refs/heads/main.tar.gz &&
+  cd /tmp && tar xzf r.tgz && cp -a xiaomiwifigate-main/. /app/ && echo OK
+'
+docker restart wifi-gate
+```
+
+要是 `$IMG` 取不到（容器已被删），也可以先把 alpine 补齐再用网上那种写法：
+
+```sh
+docker pull docker.m.daocloud.io/library/alpine:latest
+docker tag  docker.m.daocloud.io/library/alpine:latest alpine:latest
+```
 
 ---
 
