@@ -717,7 +717,12 @@ def main():
     if "--restore-all" in sys.argv:
         restore_all()
         return
-    cfg = STORE.snapshot()["server"]
+    cfg = dict(STORE.snapshot()["server"])
+    # host 网络部署时端口常与宿主已有服务冲突（如路由器自身的 8080），
+    # 允许用环境变量临时覆盖，不必改写 config.json
+    env_port = (os.environ.get("WIFIGATE_PORT") or "").strip()
+    if env_port:
+        cfg["port"] = env_port
     threading.Thread(target=reblock_worker, daemon=True).start()
     server = ThreadingHTTPServer((cfg["host"], int(cfg["port"])), Handler)
     server.daemon_threads = True
