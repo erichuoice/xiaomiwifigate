@@ -149,6 +149,14 @@
   .panel h2 { font-size: 19px; margin: 0 0 6px; }
   .panel p { margin: 0; font-size: 14px; line-height: 1.65; }
   .panel .big { font-size: 26px; font-weight: 700; margin: 6px 0; font-variant-numeric: tabular-nums; }
+  .panel .cd {
+    display: inline-block; margin-top: 10px; padding: 9px 13px;
+    border-radius: 10px; background: rgba(255, 255, 255, .72);
+    border: 1px solid rgba(0, 0, 0, .07);
+    font-size: 14px; font-variant-numeric: tabular-nums;
+  }
+  .panel .cd b { font-size: 20px; letter-spacing: .5px; }
+  .panel .cd.over { color: #7d2020; background: var(--no-bg); border-color: #e0a0a0; }
 
   .foot { color: var(--muted); font-size: 12.5px; margin-top: 20px; line-height: 1.8; }
   .foot code { background: #e6e9ed; padding: 1px 5px; border-radius: 4px; }
@@ -202,7 +210,8 @@
   var S = {
     info: null, question: null, index: 0, total: 0, results: [],
     picked: [], locked: false, busy: false, answered: false,
-    next: null, tier: 0, timer: null, target: null, targetName: ''
+    next: null, tier: 0, timer: null, target: null, targetName: '',
+    cdTimer: null, clockSkew: 0
   };
   var LETTERS = 'ABCDEFGH';
 
@@ -221,6 +230,7 @@
     p.style.display = 'block';
   }
   function hidePanel() {
+    stopCountdown();
     el('result').style.display = 'none';
     el('result').className = 'panel';
   }
@@ -246,6 +256,43 @@
     if (!ts) return '';
     var d = new Date(ts * 1000);
     return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  }
+
+  // ---------- 到期倒计时 ----------
+
+  function pad2(n) { return ('0' + n).slice(-2); }
+
+  function fmtLeft(sec) {
+    var s = Math.max(0, Math.floor(sec));
+    var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), r = s % 60;
+    return (h ? h + ':' + pad2(m) : pad2(m)) + ':' + pad2(r);
+  }
+
+  function stopCountdown() {
+    if (S.cdTimer) { clearInterval(S.cdTimer); S.cdTimer = null; }
+  }
+
+  // 以服务端时间为准做倒计时（手机时钟不准也不会算错）；到 0 后服务端最长 20s 内回收
+  function startCountdown(expireAt, serverNow) {
+    stopCountdown();
+    if (serverNow) S.clockSkew = Date.now() / 1000 - serverNow;
+    function now() { return Date.now() / 1000 - S.clockSkew; }
+    function tick() {
+      var box = el('cd');
+      if (!box) { stopCountdown(); return; }
+      var left = expireAt - now();
+      if (left > 0) {
+        box.className = 'cd';
+        box.innerHTML = '还剩 <b>' + fmtLeft(left) + '</b> 自动断网';
+        return;
+      }
+      box.className = 'cd over';
+      box.textContent = '时间到，正在断网…';
+      stopCountdown();
+      setTimeout(loadInfo, 3000);
+    }
+    tick();
+    S.cdTimer = setInterval(tick, 1000);
   }
 
   // ---------- 设备状态 ----------
@@ -618,7 +665,8 @@
         var leftText = left === null ? '一直有效'
           : (left > 0 ? '累计可用 ' + left + ' 分钟' : '');
         var extra = d.expire_at
-          ? '<p>到 ' + hhmm(d.expire_at) + ' 自动断开，到时再答一次即可。</p>'
+          ? '<p>到 ' + hhmm(d.expire_at) + ' 自动断开，到时再答一次即可。</p>' +
+            '<div class="cd" id="cd"></div>'
           : '<p>不会再自动断开。</p>';
         showPanel('ok', S.targetName ? '全部答对，「' + S.targetName + '」已放行'
                                      : '全部答对，已放行',
@@ -626,6 +674,7 @@
           '<p>' + esc(d.message || '') + '（' + leftText + '）</p>' + extra +
           (d.today_minutes ? '<p style="margin-top:6px">今日累计获得 ' +
             d.today_minutes + ' 分钟。</p>' : ''));
+        if (d.expire_at) startCountdown(d.expire_at, d.now);
         return;
       }
 

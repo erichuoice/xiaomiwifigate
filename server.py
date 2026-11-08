@@ -718,6 +718,7 @@ class Handler(BaseHTTPRequestHandler):
                 "mac": rec["mac"],
                 "minutes": rec["minutes"],
                 "expire_at": rec["expire_at"],
+                "now": int(time.time()),
                 "remaining_minutes": rec.get("minutes_left"),
                 "today_minutes": rec.get("today_minutes", 0),
                 "message": ("已放行，一直有效" if rec["minutes"] == 0
