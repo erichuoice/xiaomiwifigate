@@ -486,34 +486,66 @@ class Handler(BaseHTTPRequestHandler):
                 _mac_cache.clear()
             log("ADMIN 清除答题锁定（涉及 %s 个 IP）" % cleared)
             return self._json({"ok": True, "cleared": cleared})
-        # 手动断网/放行（gatectl 命令行入口，网页后台之外的快捷开关）
+        # 手动断网/放行（后台设备页按钮与 gatectl 的服务端入口）
         if path == "/api/admin/device/wan":
             if not STORE.check_session(admin_api.cookie_token(self.headers)):
                 return self._json({"ok": False, "detail": "请先登录后台"}, 401)
             if method == "GET":
                 grants = load_grants()
+                owner = {mac: b for b in STORE.banks()
+                         for mac in b["devices"]}
                 try:
                     names = ADAPTER.names_by_mac()
                 except Exception:
                     names = {}
-                rows = []
-                for b in STORE.banks():
-                    for mac in b["devices"]:
-                        rec = grants.get(mac) or {}
-                        left = minutes_left(rec)
-                        rows.append({
-                            "mac": mac,
-                            "name": names.get(mac) or rec.get("name") or "",
-                            "bank_id": b["id"], "bank_name": b["name"],
-                            "remaining_minutes": left,
-                            "expire_at": rec.get("expire_at"),
-                            "reblocked": bool(rec.get("reblocked")),
-                            "today_minutes": (rec.get("today_minutes", 0)
-                                              if rec.get("day") == today() else 0),
-                            "state": ("永久放行" if left is None
-                                      else "上网中" if left > 0 else "已断网"),
-                        })
-                return self._json({"ok": True, "devices": rows})
+                # 在线设备（路由器设备列表）；拉不到时退化为只列受控设备
+                try:
+                    rows = router_adapter.normalize_devices(
+                        json.loads(ADAPTER.device_list_raw()))
+                except Exception:
+                    rows = []
+                out = []
+                seen = set()
+                for r in rows:
+                    mac = r["mac"].lower()
+                    seen.add(mac)
+                    b = owner.get(mac)
+                    rec = grants.get(mac) or {}
+                    left = minutes_left(rec)
+                    out.append({
+                        "mac": mac,
+                        "name": names.get(mac) or r.get("name") or "",
+                        "bank_id": b["id"] if b else "",
+                        "bank_name": b["name"] if b else "（不受控）",
+                        "remaining_minutes": left,
+                        "expire_at": rec.get("expire_at"),
+                        "reblocked": bool(rec.get("reblocked")),
+                        "today_minutes": (rec.get("today_minutes", 0)
+                                          if rec.get("day") == today() else 0),
+                        "state": ("永久放行" if left is None
+                                  else "上网中" if left > 0
+                                  else "已断网" if r.get("wan") in (0, "0")
+                                  else "答题外放行"),
+                    })
+                # 已分配但当前不在线的设备也列出，避免「看不见的条目」
+                for mac, b in owner.items():
+                    if mac.lower() in seen:
+                        continue
+                    rec = grants.get(mac) or {}
+                    left = minutes_left(rec)
+                    out.append({
+                        "mac": mac.lower(),
+                        "name": names.get(mac) or "（当前不在线）",
+                        "bank_id": b["id"], "bank_name": b["name"],
+                        "remaining_minutes": left,
+                        "expire_at": rec.get("expire_at"),
+                        "reblocked": bool(rec.get("reblocked")),
+                        "today_minutes": (rec.get("today_minutes", 0)
+                                          if rec.get("day") == today() else 0),
+                        "state": ("永久放行" if left is None
+                                  else "上网中" if left > 0 else "已断网"),
+                    })
+                return self._json({"ok": True, "devices": out})
             if method != "POST":
                 return self._json({"ok": False, "detail": "请用 POST"}, 405)
             try:
@@ -523,9 +555,17 @@ class Handler(BaseHTTPRequestHandler):
             mac = str(data.get("mac") or "").strip().lower()
             want = data.get("wan")
             minutes = int(data.get("minutes") or 0)
-            if not STORE.bank_for_mac(mac):
+            # 手动控制不要求设备已分配题库：家长可对设备列表里
+            # 的任何一台直接断网/放行。但 MAC 必须真实存在，防手滑。
+            known = {m.lower() for b in STORE.banks() for m in b["devices"]}
+            try:
+                known |= {r["mac"].lower() for r in router_adapter.normalize_devices(
+                    json.loads(ADAPTER.device_list_raw()))}
+            except Exception:
+                pass
+            if mac not in known:
                 return self._json(
-                    {"ok": False, "detail": "该设备不在受控清单，请先在后台分配题库"},
+                    {"ok": False, "detail": "路由器设备列表里没有这台设备，请检查 MAC"},
                     404)
             try:
                 if want is True:

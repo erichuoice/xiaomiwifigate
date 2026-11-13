@@ -208,6 +208,8 @@ def main():
     code, raw = call("/admin")
     check("管理后台可访问", code == 200 and "管理后台" in raw, "HTTP %s" % code)
     check("后台含断网/放行控制", "deviceWan" in raw and "已放行" in raw)
+    check("后台每台设备都有按钮",
+          "if (d.bank_id)" not in raw)
 
     code, res = admin("/api/admin/state")
     check("未登录访问后台被拒", code == 401, "HTTP %s" % code)
@@ -301,12 +303,12 @@ def main():
     check("设备分配到题库", code == 200 and res.get("result", {}).get("bank_id"),
           res.get("result", {}).get("bank_name", ""))
 
-    # ---- 手动断网 / 放行（gatectl 的服务端接口）----
+    # ---- 手动断网 / 放行（后台设备页按钮与 gatectl 的服务端接口）----
     code, res = admin("/api/admin/device/wan")
     rows = res.get("devices") or []
     check("手动开关读取设备列表", code == 200 and
           any(d.get("mac") == mac for d in rows),
-          "%s 台受控设备" % len(rows))
+          "%s 台设备" % len(rows))
     code, res = admin("/api/admin/device/wan", {"mac": mac, "wan": False})
     check("手动断网接口", code == 200 and
           res.get("record", {}).get("reblocked") is True,
@@ -318,7 +320,7 @@ def main():
           "剩余 %s 分钟" % res.get("record", {}).get("minutes_left"))
     code, res = admin("/api/admin/device/wan", {"mac": "02:00:00:00:00:02",
                                                 "wan": True})
-    check("手动开关拒绝非受控设备", code == 404, "HTTP %s" % code)
+    check("手动开关拒绝不存在设备", code == 404, "HTTP %s" % code)
     admin("/api/admin/device/wan", {"mac": mac, "wan": False})  # 恢复断网状态
 
     code, info = admin("/api/quiz")
