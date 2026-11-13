@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 
 import admin_api
 import router_adapter
+import schedule
 import store
 import updater
 
@@ -124,6 +125,22 @@ def granted_today(rec):
     if not rec or rec.get("day") != today():
         return 0
     return int(rec.get("today_minutes", 0) or 0)
+
+
+def schedule_public(st):
+    """时段状态里给前端看的字段（不含服务端内部时间细节）。"""
+    return {
+        "limited": st["limited"], "allowed": st["allowed"],
+        "unlimited": st["unlimited"], "hint": schedule.hint(st),
+        "next_label": st["next_label"], "summary": st["summary"],
+        "today_text": st["today_text"], "ends_hhmm": st["ends_hhmm"],
+        "change_at": st["change_at"],
+    }
+
+
+def schedule_of(mac, now=None):
+    """取一台设备的时段状态；没配规则时返回「不限制」。"""
+    return schedule.window_state(STORE.schedule_for_mac(mac), now)
 
 
 # ---- 客户端与设备识别 ----
@@ -280,10 +297,15 @@ def note_wrong(ip):
 # ---- 放行 ----
 
 def grant(ip, mac, bank_id, bank_name, minutes):
-    """放行并重新计时：从现在起算本次档位时长，不在原有到期时间上叠加。"""
+    """放行并重新计时：从现在起算本次档位时长，不在原有到期时间上叠加。
+
+    设备设了答题时段时，本次放行最多到「当前时段结束」，不会跨进禁止时段；
+    若答题过程中刚好跨过时段边界，则拒绝放行（不碰路由器）。
+    """
     cap = int(STORE.snapshot()["settings"].get("daily_cap_minutes", 0) or 0)
     now = time.time()
     day = today()
+    st = schedule_of(mac, now)
     with _grants_lock:
         grants = load_grants()
         rec = dict(grants.get(mac) or {})
@@ -293,22 +315,36 @@ def grant(ip, mac, bank_id, bank_name, minutes):
             granted = max(0, min(granted, cap - today_before))
             if granted == 0:
                 raise DailyCap("今天的 %s 分钟额度已用完，明天再来" % cap)
-        ADAPTER.set_wan(mac, True)
         if granted == 0 and int(minutes) == 0:
             expire = 0                      # 档位设为 0 分钟 = 永久放行
         else:
             expire = int(now + granted * 60)   # 不叠加：按本次档位重新起算
+        ends_hhmm = None
+        if st["limited"]:
+            if not st["allowed"]:
+                raise schedule.OutsideSchedule(schedule.hint(st))
+            if expire == 0 or expire > st["ends_at"]:
+                # 只放行到本时段结束；至少留 1 秒，避免被当成「永久放行」
+                expire = max(int(st["ends_at"]), int(now) + 1)
+                ends_hhmm = st["ends_hhmm"]
+                granted = max(0, int(math.ceil((expire - now) / 60.0)))
+        ADAPTER.set_wan(mac, True)
         rec.update({
             "ip": ip, "mac": mac, "at": now, "expire_at": expire,
             "minutes": granted, "bank": bank_id, "bank_name": bank_name,
             "day": day, "today_minutes": today_before + granted,
             "reblocked": False,
+            # 答题放行不是家长手动破例，要受时段规则自动回收
+            "manual": False,
         })
         grants[mac] = rec
         save_grants(grants)
-    log("ALLOW ip=%s mac=%s bank=%s +%smin expire=%s"
-        % (ip, mac, bank_name, granted, expire or "永久"))
+    log("ALLOW ip=%s mac=%s bank=%s +%smin expire=%s%s"
+        % (ip, mac, bank_name, granted, expire or "永久",
+           "（时段至 %s）" % ends_hhmm if ends_hhmm else ""))
     rec["minutes_left"] = minutes_left(rec)
+    if ends_hhmm:
+        rec["ends_hhmm"] = ends_hhmm
     return rec
 
 
@@ -358,8 +394,11 @@ def manual_unblock(mac, minutes):
     return rec
 
 
+_sched_blocked = {}   # mac → 是否已因「禁止时段」断过网，避免每轮重复调路由器
+
+
 def reblock_worker():
-    """到点回收：把超过配额时长的设备重新断网。"""
+    """到点回收 + 时段兜底：配额用完、或进入禁止答题时段，把设备断网。"""
     while True:
         time.sleep(REBLOCK_INTERVAL)
         try:
@@ -367,6 +406,41 @@ def reblock_worker():
                 grants = load_grants()
                 now = time.time()
                 changed = False
+
+                # ---- 答题时段：进入禁止时段时，设备保持断网 ----
+                for mac, sched in STORE.schedules().items():
+                    st = schedule.window_state(sched, now)
+                    if not st["limited"]:
+                        _sched_blocked.pop(mac, None)
+                        continue
+                    if st["allowed"]:
+                        _sched_blocked[mac] = False
+                        continue
+                    rec = grants.get(mac)
+                    # 只回收「本系统通过答题发放、且仍在生效」的放行；
+                    # 家长手动放行是临时破例，优先保留；没有放行记录的设备
+                    # 本来就没被本系统开过网，不去动路由器，避免误伤。
+                    exp = (rec or {}).get("expire_at")
+                    active = bool(rec) and not rec.get("reblocked") and \
+                        (exp == 0 or (exp and exp > now))
+                    if not active or (rec.get("manual") and not rec.get("reblocked")):
+                        continue
+                    if _sched_blocked.get(mac):
+                        continue
+                    try:
+                        ADAPTER.set_wan(mac, False)
+                        _sched_blocked[mac] = True
+                        rec["reblocked"] = True
+                        rec["reblocked_at"] = now
+                        rec["reblocked_reason"] = "schedule"
+                        rec["expire_at"] = int(now)
+                        changed = True
+                        log("SCHEDULE-BLOCK mac=%s（%s；下次 %s）"
+                            % (mac, st["today_text"], st["next_label"] or "—"))
+                    except Exception as exc:
+                        log("SCHEDULE-BLOCK-FAIL mac=%s err=%s" % (mac, exc))
+
+                # ---- 原有：配额到期回收 ----
                 for mac, rec in grants.items():
                     if rec.get("reblocked"):
                         continue
@@ -681,6 +755,7 @@ class Handler(BaseHTTPRequestHandler):
         base = {
             "ok": True, "ip": ip, "note": cfg["settings"]["note"],
             "mode": cfg["router"]["mode"], "locked_for": locked_seconds(ip),
+            "server_now": time.time(),
         }
         try:
             mac, bank, rec = device_context(ip)
@@ -694,6 +769,8 @@ class Handler(BaseHTTPRequestHandler):
         # 这样家长可以用自己的手机替孩子的平板做题。
         names = ADAPTER.names_by_mac()
         grants = load_grants()
+        now = time.time()
+        scheds = STORE.schedules()
         targets = []
         for t in STORE.targets():
             trec = grants.get(t["mac"]) or {}
@@ -705,8 +782,11 @@ class Handler(BaseHTTPRequestHandler):
                 "remaining_minutes": minutes_left(trec),
                 "today_minutes": granted_today(trec),
                 "is_self": t["mac"] == mac,
+                "schedule": schedule_public(
+                    schedule.window_state(scheds.get(t["mac"]), now)),
             })
         base["targets"] = targets
+        base["schedule"] = None
 
         if not bank:
             if targets:
@@ -731,6 +811,8 @@ class Handler(BaseHTTPRequestHandler):
             "today_minutes": used,
             "daily_cap_minutes": cap,
             "today_left": (max(0, cap - used) if cap else None),
+            "schedule": schedule_public(
+                schedule.window_state(scheds.get(mac), now)),
         })
         return self._json(base)
 
@@ -827,6 +909,14 @@ class Handler(BaseHTTPRequestHandler):
         if not bank:
             return self._json({"ok": False, "reason": "not_managed",
                                "detail": "这台设备不在受控清单里"}, 403)
+        # 时段外的设备不能开始答题（代答同样受这台设备的规则约束）
+        st = schedule_of(mac)
+        if st["limited"] and not st["allowed"]:
+            return self._json({
+                "ok": False, "reason": "outside_schedule",
+                "detail": schedule.hint(st),
+                "schedule": schedule_public(st),
+            }, 403)
         try:
             tier_index = int(payload.get("tier", 0))
         except (TypeError, ValueError):
@@ -919,6 +1009,14 @@ class Handler(BaseHTTPRequestHandler):
                 log("NOT-MANAGED ip=%s %s" % (ip, exc))
                 return self._json({"ok": False, "reason": "not_managed",
                                    "detail": str(exc)}, 403)
+            except schedule.OutsideSchedule as exc:
+                # 答题过程中跨过了允许时段的边界：不放行，保持断网
+                log("OUTSIDE-SCHEDULE ip=%s mac=%s %s"
+                    % (ip, sess["mac"], exc))
+                with _mutex:
+                    _sessions.pop(ip, None)
+                return self._json({"ok": False, "reason": "outside_schedule",
+                                   "detail": str(exc)}, 403)
             except Exception as exc:
                 log("ALLOW-FAIL ip=%s err=%s" % (ip, exc))
                 return self._json({"ok": False, "reason": "router_error",
@@ -934,9 +1032,14 @@ class Handler(BaseHTTPRequestHandler):
                 "now": int(time.time()),
                 "remaining_minutes": rec.get("minutes_left"),
                 "today_minutes": rec.get("today_minutes", 0),
-                "message": ("已放行，一直有效" if rec["minutes"] == 0
-                            else "已放行，本次 +%s 分钟，可用 %s 分钟"
-                                 % (rec["minutes"], rec.get("minutes_left"))),
+                "ends_hhmm": rec.get("ends_hhmm"),
+                "message": (
+                    "已放行到 %s（本时段结束），可用 %s 分钟"
+                    % (rec["ends_hhmm"], rec.get("minutes_left"))
+                    if rec.get("ends_hhmm") else
+                    ("已放行，一直有效" if rec["minutes"] == 0
+                     else "已放行，本次 +%s 分钟，可用 %s 分钟"
+                          % (rec["minutes"], rec.get("minutes_left")))),
             })
             return self._json(feedback)
 

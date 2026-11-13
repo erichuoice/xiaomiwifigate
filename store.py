@@ -5,10 +5,11 @@
   题库（bank）  一组题目 + 一组奖励档位 + 一组受控设备 MAC
   档位（tier）  答对 N 道题 → 换 M 分钟上网时间（M = 0 表示一直放行）
   设备归属      每台受控设备只属于一个题库，不同题库管不同设备
+  答题时段      每台设备按周一~周日设定「可以答题放行」的时间窗口
 
 两层配置：
   静态 config.json          端口、路由器凭证、后台密码、限流（容器里只读）
-  可变 state/runtime.json   题库 / 档位 / 设备归属 / 提示语（可写、持久化）
+  可变 state/runtime.json   题库 / 档位 / 设备归属 / 答题时段 / 提示语（可写、持久化）
 
 题目字段：
   id / stage(小学|初中) / grade(年级) / subject(科目) / type(single|multi|judge)
@@ -26,6 +27,8 @@ import re
 import secrets
 import threading
 import time
+
+import schedule
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.environ.get("WIFIGATE_CONFIG") or os.path.join(BASE, "config.json")
@@ -491,6 +494,8 @@ class Store:
                 "update_auto_check": bool(s.get("update_auto_check", True)),
                 "update_auto_apply": bool(s.get("update_auto_apply", False)),
             },
+            # 每台设备的答题时段：mac → {enabled, days}，见 schedule.py
+            "schedules": {},
         }
 
     def _dedupe_devices(self, banks):
@@ -536,7 +541,9 @@ class Store:
             }]
         self._dedupe_devices(banks)
         settings = validate_settings(data.get("settings") or {}, base["settings"])
-        return {"version": 3, "banks": banks, "settings": settings}
+        schedules = schedule.normalize_all(data.get("schedules"))
+        return {"version": 3, "banks": banks, "settings": settings,
+                "schedules": schedules}
 
     def _load_runtime(self):
         if os.path.exists(RUNTIME_PATH):
@@ -566,6 +573,7 @@ class Store:
             runtime = copy.deepcopy(self._runtime)
         cfg["banks"] = runtime["banks"]
         cfg["settings"] = runtime["settings"]
+        cfg["schedules"] = runtime.get("schedules") or {}
         cfg["server"]["note"] = runtime["settings"]["note"]
         cfg["server"]["daily_cap_minutes"] = runtime["settings"]["daily_cap_minutes"]
         cfg.pop("quiz", None)
@@ -621,6 +629,9 @@ class Store:
                 "banks": len(banks),
                 "questions": sum(len(b["questions"]) for b in banks),
                 "managed_devices": len(macs),
+                "scheduled_devices": sum(
+                    1 for r in (self._runtime.get("schedules") or {}).values()
+                    if schedule.limited(r)),
                 "by_bank": [{"id": b["id"], "name": b["name"],
                              "questions": len(b["questions"]),
                              "devices": len(b["devices"]),
@@ -694,6 +705,40 @@ class Store:
             self._write(self._runtime)
         return clean
 
+    # ---- 设备答题时段 ----
+
+    def schedules(self):
+        """全部规则（mac → 规则），供后台设备页与守护线程使用。"""
+        with self._lock:
+            return copy.deepcopy(self._runtime.get("schedules") or {})
+
+    def schedule_for_mac(self, mac):
+        mac = str(mac or "").strip().lower().replace("-", ":")
+        with self._lock:
+            return copy.deepcopy(
+                (self._runtime.get("schedules") or {}).get(mac))
+
+    def save_schedule(self, mac, data):
+        """保存单台设备的时段规则；data=None 表示删除。"""
+        mac = validate_macs([mac])[0]
+        if data is None:
+            return self.delete_schedule(mac)
+        try:
+            clean = schedule.normalize(data)
+        except schedule.ScheduleError as exc:
+            raise StoreError(str(exc))
+        with self._lock:
+            self._runtime.setdefault("schedules", {})[mac] = clean
+            self._write(self._runtime)
+        return clean
+
+    def delete_schedule(self, mac):
+        mac = validate_macs([mac])[0]
+        with self._lock:
+            self._runtime.setdefault("schedules", {}).pop(mac, None)
+            self._write(self._runtime)
+        return None
+
     # ---- 导入 / 导出 ----
 
     def apply_questions(self, bank_id, questions, mode="append"):
@@ -764,6 +809,9 @@ class Store:
                 normalized["banks"] = current["banks"]
             if not data.get("settings") and not data.get("server"):
                 normalized["settings"] = current["settings"]
+            # 旧版备份没有时段规则，导入时保留现有设置，别把规则清空
+            if not data.get("schedules"):
+                normalized["schedules"] = current.get("schedules") or {}
             self._runtime = normalized
             self._write(self._runtime)
         return {"banks": len(normalized["banks"]),

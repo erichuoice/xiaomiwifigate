@@ -80,6 +80,22 @@
     font-variant-numeric:tabular-nums; white-space:nowrap; }
   .cd:empty { display:none; }
   .cd.expiring { background:var(--nosoft); color:var(--no); }
+  .sch-line { display:block; margin-top:3px; font-size:11.5px; color:var(--muted); line-height:1.5; }
+  .sch-tag { display:inline-block; padding:1px 6px; border-radius:8px; margin-right:6px;
+    background:#f2f4f6; color:var(--muted); white-space:nowrap; }
+  .sch-tag.ok { background:var(--oksoft); color:#085041; }
+  .sch-tag.no { background:var(--nosoft); color:var(--no); }
+  .sch-sum { display:block; max-width:240px; overflow:hidden; text-overflow:ellipsis;
+    white-space:nowrap; color:var(--muted); }
+  button.link { background:none; color:var(--accent); padding:0; font-size:11.5px;
+    font-weight:500; text-decoration:underline; }
+  .mask { position:fixed; inset:0; background:rgba(15,20,28,.45); z-index:20;
+    align-items:center; justify-content:center; padding:16px; }
+  .sheet { background:#fff; border-radius:14px; padding:18px; width:100%; max-width:540px;
+    max-height:90vh; overflow:auto; box-shadow:0 12px 40px rgba(0,0,0,.2); }
+  .day-row { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+  .day-row label { flex:0 0 44px; font-size:13px; color:var(--muted); }
+  .day-row input { flex:1; width:auto; }
   .imp-out { margin-top:12px; font-size:13px; }
   .imp-err { background:var(--nosoft); border-radius:8px; padding:9px 11px; color:#8a2626; max-height:180px; overflow:auto; }
   .imp-ok { background:var(--oksoft); border-radius:8px; padding:9px 11px; color:#0a5b43; }
@@ -216,6 +232,9 @@
         断网立即生效；放行填分钟数（0 或留空 = 永久），到期自动断。
         <b>暂时放行的设备，名称旁会显示实时倒计时</b>（答题解锁同样显示），
         到点自动刷新；永久放行不显示倒计时。</p>
+      <p class="hint">设备名下方的「时段设置」可按周一～周日设定<b>允许答题放行的时间段</b>：
+        时段外不能答题、设备保持断网，放行时长也会自动截到本时段结束。
+        家长手动点「放行」属于临时破例，不受时段限制。</p>
       <p id="dev-hint" class="hint warn" style="display:none"></p>
       <div class="row"><button class="ghost" id="refresh-dev">刷新设备列表</button></div>
       <div id="devlist" style="margin-top:12px"></div>
@@ -259,11 +278,40 @@
   <div id="toast"></div>
 </div>
 
+<div id="sch-mask" class="mask" style="display:none">
+  <div class="sheet">
+    <h2>答题时段 · <span id="sch-name"></span></h2>
+    <p class="hint">只有设定的时段内才能通过<b>答题</b>放行上网；时段外不能答题，设备会保持断网。
+      某天留空 = 当天不开放；整周留空 = 不限制。
+      格式 <code>18:00-20:00</code>，多个用逗号隔开，支持跨夜 <code>22:00-06:00</code>
+      与全天 <code>00:00-24:00</code>。</p>
+    <label class="chk"><input type="checkbox" id="sch-enabled"> 启用这台设备的时段限制</label>
+    <div class="row" style="align-items:center">
+      <input type="text" id="sch-batch" value="18:00-20:00" style="flex:1 1 150px;width:auto"
+             aria-label="批量填入的时间段">
+      <button class="mini" data-preset="all">每天</button>
+      <button class="mini" data-preset="workday">工作日</button>
+      <button class="mini" data-preset="weekend">周末</button>
+      <button class="mini" data-preset="clear">清空</button>
+    </div>
+    <div id="sch-days" style="margin-top:12px"></div>
+    <p class="hint warn" style="margin-top:12px">家长在设备页手动点「放行」属于临时破例，不受时段限制。</p>
+    <div class="row">
+      <button id="sch-save">保存</button>
+      <button id="sch-del" class="danger">删除规则</button>
+      <button id="sch-cancel" class="ghost">取消</button>
+    </div>
+    <p id="sch-err" class="imp-err" style="display:none"></p>
+  </div>
+</div>
+
 <script>
 (function () {
   var el = function (id) { return document.getElementById(id); };
   var state = null, banks = [], cur = 0, Q = [], tiers = [], devices = [];
   var wanInfo = {}, wanSkew = 0, cdRefreshPending = false;
+  var schedInfo = {}, schMac = '', schChangePending = false;
+  var WEEK = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
   var page = 0, PAGE = 8, openSet = {}, toastTimer = null, curId = '';
 
   function toast(msg) {
@@ -678,6 +726,109 @@
     };
   }
 
+  // ---------- 设备答题时段 ----------
+
+  function schedText(rule) {
+    if (!rule || !rule.days) return [];
+    return rule.days.map(function (wins) {
+      return (wins || []).map(function (w) { return w[0] + '-' + w[1]; }).join(', ');
+    });
+  }
+
+  function renderScheduleLine(td, d) {
+    var line = document.createElement('span');
+    line.className = 'sch-line';
+    var st = (schedInfo[d.mac] || {}).status || {};
+    var tag = document.createElement('span');
+    tag.className = 'sch-tag' + (st.limited ? (st.allowed ? ' ok' : ' no') : '');
+    tag.textContent = st.limited ? (st.allowed ? '可答题' : '禁止答题') : '未设时段';
+    line.appendChild(tag);
+    var btn = document.createElement('button');
+    btn.className = 'link';
+    btn.textContent = '时段设置';
+    btn.onclick = function () { openSchedule(d); };
+    line.appendChild(btn);
+    var sum = document.createElement('span');
+    sum.className = 'sch-sum';
+    sum.textContent = st.limited
+      ? (st.summary || '') + (!st.allowed && st.next_label ? ' · 下次 ' + st.next_label : '')
+      : '随时可答题';
+    sum.title = st.limited ? (st.summary || '') : '未设置时段限制';
+    line.appendChild(sum);
+    td.appendChild(line);
+  }
+
+  function showSchErr(msg) {
+    var box = el('sch-err'); box.textContent = msg; box.style.display = 'block';
+  }
+
+  function openSchedule(d) {
+    schMac = d.mac || '';
+    if (!schMac) { toast('这台设备缺少 MAC，请刷新后重试'); return; }
+    var rule = (schedInfo[schMac] || {}).rule;
+    el('sch-name').textContent = d.name || schMac;
+    el('sch-enabled').checked = !!(rule && rule.enabled);
+    var texts = schedText(rule);
+    var box = el('sch-days'); box.innerHTML = '';
+    WEEK.forEach(function (name, i) {
+      var row = document.createElement('div'); row.className = 'day-row';
+      var lb = document.createElement('label'); lb.textContent = name;
+      var inp = document.createElement('input');
+      inp.type = 'text'; inp.id = 'sch-day-' + i;
+      inp.placeholder = '留空 = 当天不开放';
+      inp.value = texts[i] || '';
+      row.appendChild(lb); row.appendChild(inp); box.appendChild(row);
+    });
+    el('sch-err').style.display = 'none';
+    el('sch-mask').style.display = 'flex';
+  }
+
+  function closeSchedule() { el('sch-mask').style.display = 'none'; }
+
+  function collectSchedule() {
+    var days = [];
+    for (var i = 0; i < 7; i++) {
+      var v = el('sch-day-' + i).value.trim();
+      days.push(v ? v.split(/[,，;；]+/).map(function (x) {
+        return x.trim();
+      }).filter(Boolean) : []);
+    }
+    return { enabled: el('sch-enabled').checked, days: days };
+  }
+
+  function applyPreset(kind) {
+    var val = el('sch-batch').value.trim();
+    var workday = [0, 1, 2, 3, 4], weekend = [5, 6];
+    for (var i = 0; i < 7; i++) {
+      if (kind === 'clear') el('sch-day-' + i).value = '';
+      else if (kind === 'all' ||
+               (kind === 'workday' && workday.indexOf(i) >= 0) ||
+               (kind === 'weekend' && weekend.indexOf(i) >= 0)) {
+        el('sch-day-' + i).value = val;
+      }
+    }
+    if (kind !== 'clear') el('sch-enabled').checked = true;
+  }
+
+  function saveSchedule() {
+    api('/api/admin/schedule', { mac: schMac, schedule: collectSchedule() })
+      .then(function (res) {
+        if (!requireAuth(res)) return;
+        if (!res.data.ok) { showSchErr(res.data.detail || '保存失败'); return; }
+        closeSchedule(); toast('答题时段已保存'); refreshDevices();
+      }).catch(function () { showSchErr('保存失败，请检查网络'); });
+  }
+
+  function deleteSchedule() {
+    if (!confirm('删除这台设备的答题时段？删除后随时可以答题放行。')) return;
+    api('/api/admin/schedule', { mac: schMac, schedule: null })
+      .then(function (res) {
+        if (!requireAuth(res)) return;
+        if (!res.data.ok) { showSchErr(res.data.detail || '删除失败'); return; }
+        closeSchedule(); toast('已删除时段规则'); refreshDevices();
+      }).catch(function () { showSchErr('删除失败，请检查网络'); });
+  }
+
   // ---------- 设备 ----------
 
   function renderDevices() {
@@ -694,6 +845,7 @@
       cd.className = 'cd';
       cd.setAttribute('data-mac', d.mac || '');
       td0.appendChild(cd);
+      renderScheduleLine(td0, d);
       tr.appendChild(td0);
       [((d.ip || []).join(', ') || '—'), d.mac].forEach(function (v) {
         var td = document.createElement('td'); td.textContent = v;
@@ -772,10 +924,17 @@
   }
 
   function refreshDevices() {
-    Promise.all([api('/api/admin/devices'), api('/api/admin/device/wan')])
+    Promise.all([
+      api('/api/admin/devices'),
+      api('/api/admin/device/wan'),
+      // 旧版服务端没有这个接口，降级成「未设时段」，设备页仍可用
+      api('/api/admin/schedules').catch(function () {
+        return { status: 200, data: {} };
+      })
+    ])
       .then(function (rs) {
-        if (!requireAuth(rs[0]) || !requireAuth(rs[1])) return;
-        var a = rs[0].data || {}, b = rs[1].data || {};
+        if (!requireAuth(rs[0]) || !requireAuth(rs[1]) || !requireAuth(rs[2])) return;
+        var a = rs[0].data || {}, b = rs[1].data || {}, c = rs[2].data || {};
         devices = a.devices || [];
         var h = el('dev-hint');
         if (a.hint) { h.textContent = a.hint; h.style.display = 'block'; }
@@ -789,9 +948,16 @@
             active: exp > 0 && (Number(x.remaining_minutes) || 0) > 0
           };
         });
+        // 合并答题时段规则与服务端算好的当前状态
+        schedInfo = {};
+        var rules = c.schedules || {}, states = c.status || {};
+        Object.keys(rules).forEach(function (mac) {
+          schedInfo[mac] = { rule: rules[mac], status: states[mac] || {} };
+        });
         var localNow = Date.now() / 1000;
         wanSkew = (Number(b.server_now) || localNow) - localNow;
         cdRefreshPending = false;
+        schChangePending = false;
         renderDevices();
         tickCountdowns();
       }).catch(function () { toast('设备列表加载失败'); });
@@ -826,6 +992,16 @@
       }
       node.textContent = '剩 ' + fmtCd(left);
       node.className = 'cd' + (left <= 60 ? ' expiring' : '');
+    }
+    // 允许/禁止时段翻转时自动刷新（翻转时刻由服务端算好，避免两端各算星期）
+    var flipped = false;
+    Object.keys(schedInfo).forEach(function (mac) {
+      var at = (schedInfo[mac].status || {}).change_at;
+      if (at && now >= at) flipped = true;
+    });
+    if (flipped && !schChangePending) {
+      schChangePending = true;
+      setTimeout(refreshDevices, 1200);
     }
   }
   setInterval(tickCountdowns, 1000);
@@ -986,6 +1162,16 @@
   };
 
   el('refresh-dev').onclick = refreshDevices;
+  el('sch-save').onclick = saveSchedule;
+  el('sch-del').onclick = deleteSchedule;
+  el('sch-cancel').onclick = closeSchedule;
+  el('sch-mask').onclick = function (e) {
+    if (e.target === el('sch-mask')) closeSchedule();
+  };
+  Array.prototype.forEach.call(document.querySelectorAll('[data-preset]'),
+    function (btn) {
+      btn.onclick = function () { applyPreset(btn.getAttribute('data-preset')); };
+    });
   el('unlock').onclick = function () {
     api('/api/admin/unlock', {}).then(function (res) {
       if (!requireAuth(res)) return;

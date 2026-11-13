@@ -7,10 +7,12 @@
 
 import json
 import re
+import time
 from urllib.parse import parse_qs, urlparse
 
 import importer
 import router_adapter
+import schedule
 import store
 import updater
 
@@ -176,6 +178,36 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
             "ok": True, "devices": rows, "hint": hint,
             "banks": [{"id": b["id"], "name": b["name"], "enabled": b["enabled"]}
                       for b in banks],
+        }, None
+
+    # ---- 设备答题时段（周一~周日各自可配多个时间段）----
+
+    if path == "/api/admin/schedules" and method == "GET":
+        now = time.time()
+        rules = st.schedules()
+        status = {mac: schedule.window_state(rule, now)
+                  for mac, rule in rules.items()}
+        return 200, {
+            "ok": True, "schedules": rules, "status": status,
+            "server_now": now, "week_names": list(schedule.WEEK_NAMES),
+        }, None
+
+    if path == "/api/admin/schedule" and method == "POST":
+        data = _body(raw)
+        mac = str(data.get("mac") or "").strip().lower()
+        if not mac:
+            return 400, {"ok": False, "detail": "缺少设备 MAC"}, None
+        if "schedule" not in data:
+            return 400, {"ok": False, "detail": "缺少时段规则内容"}, None
+        try:
+            clean = st.save_schedule(mac, data.get("schedule"))
+        except store.StoreError as exc:
+            return 400, {"ok": False, "detail": str(exc)}, None
+        return 200, {
+            "ok": True, "mac": mac, "schedule": clean,
+            "status": (schedule.window_state(clean, time.time())
+                       if clean else None),
+            "summary": st.summary(),
         }, None
 
     # ---- 题库导入 ----

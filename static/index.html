@@ -211,7 +211,7 @@
     info: null, question: null, index: 0, total: 0, results: [],
     picked: [], locked: false, busy: false, answered: false,
     next: null, tier: 0, timer: null, target: null, targetName: '',
-    cdTimer: null, clockSkew: 0
+    cdTimer: null, clockSkew: 0, schTimer: null
   };
   var LETTERS = 'ABCDEFGH';
 
@@ -341,11 +341,24 @@
         s.textContent = '剩 ' + t.remaining_minutes + ' 分';
         b.appendChild(s);
       }
+      var sch = t.schedule || {};
+      if (sch.limited && !sch.allowed) {
+        var no = document.createElement('small');
+        no.textContent = '当前不可答题';
+        b.appendChild(no);
+      }
       b.onclick = function () {
         S.target = t.mac;
         S.targetName = label(t);
         renderTargets(info);
         renderTiers(t);
+        if (sch.limited && !sch.allowed) {
+          el('pick-card').style.display = 'none';
+          showPanel('info', '这台设备现在不是答题时间',
+            '<p>' + esc(sch.hint || '') + '</p>');
+        } else {
+          el('result').style.display = 'none';
+        }
       };
       box.appendChild(b);
     });
@@ -527,7 +540,18 @@
 
   // ---------- 流程 ----------
 
+  // 时段翻转时自动重查：孩子开着页面等到开放时间，不用手动刷新
+  function scheduleAutoRefresh(sch) {
+    if (S.schTimer) { clearTimeout(S.schTimer); S.schTimer = null; }
+    if (!sch || !sch.change_at) return;
+    var delay = (sch.change_at - (Date.now() / 1000 - S.clockSkew)) * 1000 + 1500;
+    if (delay < 1000) delay = 1000;
+    if (delay > 2147483647) return;
+    S.schTimer = setTimeout(loadInfo, delay);
+  }
+
   function loadInfo() {
+    if (S.schTimer) { clearTimeout(S.schTimer); S.schTimer = null; }
     hidePanel();
     showQuiz(false);
     el('pick-card').style.display = 'none';
@@ -537,6 +561,8 @@
       .then(function (r) { return r.json(); })
       .then(function (data) {
         S.info = data;
+        if (data.server_now) S.clockSkew = Date.now() / 1000 - data.server_now;
+        scheduleAutoRefresh(data.schedule);
         el('devinfo').textContent = '本机地址：' + (data.ip || '');
         el('note').textContent = data.note || '';
         el('loading').style.display = 'none';
@@ -549,6 +575,14 @@
           return;
         }
         if (data.locked_for > 0) { startLock(data.locked_for); return; }
+        // 设备设了答题时段：时段外不展示题目，直接说明下次开放时间
+        if (data.schedule && data.schedule.limited && !data.schedule.allowed) {
+          showPanel('info', '现在不是答题时间',
+            '<p>' + esc(data.schedule.hint || '当前时段不能通过答题放行。') + '</p>' +
+            '<p style="font-size:12.5px;color:#6b7280">' +
+            esc(data.schedule.summary || '') + '</p>');
+          return;
+        }
         var list = data.targets || [];
         if ((!data.need && !data.pick_target) || !list.length) {
           showPanel('info', '这台设备不用答题',
@@ -564,7 +598,15 @@
         if (data.pick_target) el('status').style.display = 'none';
         renderTargets(data);
         renderTiers(chosen);
-        if (list.length === 1 && (chosen.tiers || []).length === 1) startTier(0);
+        var blocked = chosen.schedule && chosen.schedule.limited &&
+                      !chosen.schedule.allowed;
+        if (list.length === 1 && (chosen.tiers || []).length === 1 && !blocked) startTier(0);
+        if (blocked) {
+          showQuiz(false);
+          el('pick-card').style.display = 'none';
+          showPanel('info', '这台设备现在不是答题时间',
+            '<p>' + esc(chosen.schedule.hint || '') + '</p>');
+        }
       })
       .catch(function () {
         el('loading').style.display = 'block';
@@ -592,6 +634,11 @@
       if (res.status === 429 || d.reason === 'locked') { startLock(d.seconds || 60); return; }
       if (d.reason === 'daily_cap') {
         showPanel('info', '今天的额度用完了', '<p>' + esc(d.detail || '') + '</p>');
+        return;
+      }
+      if (d.reason === 'outside_schedule') {
+        showQuiz(false);
+        showPanel('info', '现在不是答题时间', '<p>' + esc(d.detail || '') + '</p>');
         return;
       }
       if (d.reason === 'not_managed') {
@@ -632,6 +679,12 @@
       if (d.reason === 'daily_cap') {
         showQuiz(false);
         showPanel('info', '今天的额度用完了', '<p>' + esc(d.detail || '') + '</p>');
+        return;
+      }
+      if (d.reason === 'outside_schedule') {
+        showQuiz(false);
+        showPanel('info', '答案对了，但已过答题时间',
+          '<p>' + esc(d.detail || '现在不能放行，请在允许的时段内重新答题。') + '</p>');
         return;
       }
       if (d.reason === 'not_managed') {

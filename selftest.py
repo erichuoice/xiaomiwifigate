@@ -22,6 +22,7 @@ import urllib.request
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 import router_adapter  # noqa: E402
+import schedule  # noqa: E402
 
 HOST = os.environ.get("WIFIGATE_HOST", "http://127.0.0.1:8080")
 SEED = random.randint(1, 250)
@@ -201,6 +202,84 @@ def main():
     check("已过期返回 0", srv.minutes_left({"expire_at": now - 60}) == 0)
     check("今日累计按日期归零",
           srv.granted_today({"day": "2000-01-01", "today_minutes": 99}) == 0)
+
+    # ---- 答题时段规则单测（纯函数、固定时间戳，不碰真实路由器）----
+    # 2026-11-09 是周一，at(0)=周一、at(5)=周六、at(6)=周日
+    def at(day, hour, minute=0):
+        return time.mktime((2026, 11, 9 + day, hour, minute, 0, 0, 0, -1))
+
+    week = schedule.normalize({
+        "enabled": True,
+        "days": ["18:00-20:00"] * 5 + ["09:00-22:00"] * 2,
+    })
+    check("时段规则规范化为周一到周日 7 天",
+          len(week["days"]) == 7 and week["days"][0] == [["18:00", "20:00"]])
+    check("工作日/周末相同的规则合并显示",
+          "周一至周五" in schedule.summary(week) and "周六、周日" in schedule.summary(week))
+    st = schedule.window_state(week, at(0, 19))
+    check("周一 19:00 允许答题，20:00 结束",
+          st["allowed"] and st["ends_hhmm"] == "20:00")
+    st = schedule.window_state(week, at(0, 21))
+    check("周一 21:00 禁止答题并给出下次时间",
+          not st["allowed"] and st["next_label"] == "周二 18:00")
+    st = schedule.window_state(week, at(5, 10))
+    check("周六按周末规则 09:00-22:00 允许",
+          st["allowed"] and st["ends_hhmm"] == "22:00")
+    check("时段说明包含下次开放时间",
+          "下次可答题" in schedule.hint(schedule.window_state(week, at(0, 21))))
+
+    night = schedule.normalize({"enabled": True, "days": ["22:00-06:00"] * 7})
+    st = schedule.window_state(night, at(0, 23))
+    check("跨夜时段 23:00 允许且次日 06:00 结束",
+          st["allowed"] and st["ends_hhmm"] == "06:00")
+    check("跨夜时段次日凌晨 03:00 仍允许",
+          schedule.window_state(night, at(1, 3))["allowed"])
+    check("跨夜时段次日中午 12:00 禁止",
+          not schedule.window_state(night, at(1, 12))["allowed"])
+
+    full = schedule.normalize({"enabled": True, "days": ["00:00-24:00"] * 7})
+    check("00:00-24:00 全天允许",
+          schedule.window_state(full, at(2, 3))["allowed"])
+    check("未配规则的设备不受限制",
+          schedule.window_state(None, at(2, 3))["unlimited"])
+    check("启用但整周留空 = 不限制",
+          schedule.window_state(
+              schedule.normalize({"enabled": True, "days": []}),
+              at(2, 3))["unlimited"])
+    check("停用规则 = 不限制",
+          schedule.window_state(
+              schedule.normalize({"enabled": False,
+                                  "days": ["18:00-20:00"] * 7}),
+              at(2, 3))["unlimited"])
+
+    t = at(0, 19, 30)
+    e, hh = schedule.clamp_expire(int(t + 600), week, t)
+    check("时段内未超时的放行不截断", e == int(t + 600) and hh is None)
+    e, hh = schedule.clamp_expire(int(t + 3600), week, t)
+    check("超出本时段的放行被截到时段结束",
+          e == int(at(0, 20)) and hh == "20:00")
+    e, hh = schedule.clamp_expire(0, week, t)
+    check("永久档位被截到本时段结束", e == int(at(0, 20)) and hh == "20:00")
+    try:
+        schedule.clamp_expire(int(t + 3600), week, at(0, 21))
+        check("时段外拒绝放行", False, "没有抛异常")
+    except schedule.OutsideSchedule:
+        check("时段外拒绝放行", True)
+    check("无规则时保留永久放行",
+          schedule.clamp_expire(0, None, t) == (0, None))
+
+    for bad in ("25:00-26:00", "18:00", "18:00-18:00", "abc"):
+        try:
+            schedule.parse_window(bad)
+            good = False
+        except schedule.ScheduleError:
+            good = True
+        check("拒绝非法时间段 %s" % bad, good)
+    check("坏规则条目在整份加载时被忽略",
+          len(schedule.normalize_all({
+              "02:00:00:00:00:81": {"days": ["bad"]},
+              "02:00:00:00:00:82": {"days": ["18:00-20:00"] * 7},
+          })) == 1)
 
     # ---- 页面与鉴权 ----
     code, raw = call("/")
@@ -517,6 +596,57 @@ def main():
         pass
 
     admin("/api/admin/unlock", {})
+
+    # ---- 设备答题时段：后台保存/读取/删除 + 答题入口拦截 ----
+    # 用不存在的 MAC 且不给它任何放行记录，守护线程不会去动真实路由器
+    sch_mac = "02:00:00:00:00:88"
+    wday = time.localtime().tm_wday
+    blocked_days = ["00:00-24:00"] * 7
+    blocked_days[wday] = []                       # 今天整天不可答题
+    first_bank_id = ((st.get("banks") or [{}])[0]).get("id", "")
+    code, res = admin("/api/admin/bank/assign",
+                      {"mac": sch_mac, "bank_id": first_bank_id})
+    check("时段测试设备临时归属题库", code == 200, res.get("detail", ""))
+
+    code, res = admin("/api/admin/schedule", {
+        "mac": sch_mac,
+        "schedule": {"enabled": True, "days": blocked_days},
+    })
+    check("保存按周时段规则", code == 200 and res.get("ok") is True,
+          res.get("detail", ""))
+    code, res = admin("/api/admin/schedules")
+    sst = (res.get("status") or {}).get(sch_mac) or {}
+    check("读取时段规则与当前状态",
+          code == 200 and sch_mac in (res.get("schedules") or {}) and
+          sst.get("limited") and not sst.get("allowed"),
+          sst.get("next_label", ""))
+    check("时段状态返回翻转时间供前端自动刷新", bool(sst.get("change_at")))
+    code, res = start(0, target=sch_mac)
+    check("时段外不能开始答题", code == 403 and
+          res.get("reason") == "outside_schedule", res.get("detail", "")[:60])
+
+    code, res = admin("/api/admin/schedule", {
+        "mac": sch_mac,
+        "schedule": {"enabled": True, "days": ["00:00-24:00"] * 7},
+    })
+    check("改为全天允许并保存", code == 200 and
+          (res.get("status") or {}).get("allowed") is True)
+    code, res = start(0, target=sch_mac)
+    check("时段内可以开始答题", code == 200, "HTTP %s" % code)
+
+    code, res = admin("/api/admin/schedule", {
+        "mac": sch_mac, "schedule": {"enabled": True, "days": ["bad"]},
+    })
+    check("非法时间段被后台拒绝", code == 400, res.get("detail", "")[:40])
+    code, res = admin("/api/admin/schedule",
+                      {"mac": sch_mac, "schedule": None})
+    check("删除时段规则", code == 200 and res.get("schedule") is None)
+    code, res = admin("/api/admin/schedules")
+    check("删除后规则不再存在", sch_mac not in (res.get("schedules") or {}))
+    code, res = admin("/api/admin/schedule", {"mac": sch_mac})
+    check("缺少规则内容时明确报错", code == 400)
+    admin("/api/admin/bank/assign", {"mac": sch_mac, "bank_id": ""})
+
     code, res = admin("/api/admin/logout", {})
     code2, res2 = admin("/api/admin/state")
     check("退出登录后会话失效", code == 200 and code2 == 401)
@@ -533,6 +663,18 @@ def main():
     check("后台倒计时每秒刷新且到期自动更新",
           "setInterval(tickCountdowns, 1000)" in admin_html and
           "setTimeout(refreshDevices, 1500)" in admin_html)
+    check("后台有按周时段设置弹窗与接口",
+          "openSchedule" in admin_html and "/api/admin/schedule" in admin_html
+          and "data-preset" in admin_html)
+    check("后台设备页显示可答题/禁止答题状态",
+          "sch-tag" in admin_html and "禁止答题" in admin_html and
+          "schChangePending" in admin_html)
+    with open(os.path.join(BASE, "static", "index.html"), encoding="utf-8") as f:
+        index_html = f.read()
+    check("答题页处理时段外提示并到点自动刷新",
+          "outside_schedule" in index_html and
+          "scheduleAutoRefresh" in index_html and
+          "现在不是答题时间" in index_html)
 
     # ---- device_list_raw 登录态失效自动重登（离线单元测试，不碰真实路由器）----
     real_get, real_post = router_adapter._get, router_adapter._post
