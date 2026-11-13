@@ -312,6 +312,52 @@ def grant(ip, mac, bank_id, bank_name, minutes):
     return rec
 
 
+def manual_block(mac, reason="手动断网"):
+    """家长手动断网：调路由器断开，并把放行记录标记为已回收。
+
+    到期时间写成现在，答题页会立刻显示「已断网」，答一轮题即可恢复。
+    """
+    ADAPTER.set_wan(mac, False)
+    with _grants_lock:
+        grants = load_grants()
+        rec = dict(grants.get(mac) or {})
+        now = time.time()
+        rec.update({"mac": mac, "expire_at": int(now), "reblocked": True,
+                    "reblocked_at": now, "manual": True})
+        grants[mac] = rec
+        save_grants(grants)
+    log("MANUAL-BLOCK mac=%s（%s）" % (mac, reason))
+    return rec
+
+
+def manual_unblock(mac, minutes):
+    """家长手动放行：minutes=0 表示永久放行（不会被自动断网回收）。
+
+    手动放行是家长意志，不走每日上限；也不计入 today_minutes。
+    """
+    minutes = max(0, int(minutes))
+    ADAPTER.set_wan(mac, True)
+    with _grants_lock:
+        grants = load_grants()
+        rec = dict(grants.get(mac) or {})
+        now = time.time()
+        bank = STORE.bank_for_mac(mac) or {}
+        if rec.get("day") != today():
+            rec["today_minutes"] = 0
+        expire = 0 if minutes == 0 else int(now + minutes * 60)
+        rec.update({
+            "mac": mac, "at": now, "expire_at": expire, "minutes": minutes,
+            "bank": bank.get("id", ""), "bank_name": bank.get("name", ""),
+            "day": today(), "reblocked": False, "manual": True,
+        })
+        grants[mac] = rec
+        save_grants(grants)
+    log("MANUAL-ALLOW mac=%s（手动放行 %s）"
+        % (mac, "永久" if minutes == 0 else "+%smin" % minutes))
+    rec["minutes_left"] = minutes_left(rec)
+    return rec
+
+
 def reblock_worker():
     """到点回收：把超过配额时长的设备重新断网。"""
     while True:
@@ -440,6 +486,60 @@ class Handler(BaseHTTPRequestHandler):
                 _mac_cache.clear()
             log("ADMIN 清除答题锁定（涉及 %s 个 IP）" % cleared)
             return self._json({"ok": True, "cleared": cleared})
+        # 手动断网/放行（gatectl 命令行入口，网页后台之外的快捷开关）
+        if path == "/api/admin/device/wan":
+            if not STORE.check_session(admin_api.cookie_token(self.headers)):
+                return self._json({"ok": False, "detail": "请先登录后台"}, 401)
+            if method == "GET":
+                grants = load_grants()
+                try:
+                    names = ADAPTER.names_by_mac()
+                except Exception:
+                    names = {}
+                rows = []
+                for b in STORE.banks():
+                    for mac in b["devices"]:
+                        rec = grants.get(mac) or {}
+                        left = minutes_left(rec)
+                        rows.append({
+                            "mac": mac,
+                            "name": names.get(mac) or rec.get("name") or "",
+                            "bank_id": b["id"], "bank_name": b["name"],
+                            "remaining_minutes": left,
+                            "expire_at": rec.get("expire_at"),
+                            "reblocked": bool(rec.get("reblocked")),
+                            "today_minutes": (rec.get("today_minutes", 0)
+                                              if rec.get("day") == today() else 0),
+                            "state": ("永久放行" if left is None
+                                      else "上网中" if left > 0 else "已断网"),
+                        })
+                return self._json({"ok": True, "devices": rows})
+            if method != "POST":
+                return self._json({"ok": False, "detail": "请用 POST"}, 405)
+            try:
+                data = json.loads(raw or b"{}")
+            except ValueError:
+                data = {}
+            mac = str(data.get("mac") or "").strip().lower()
+            want = data.get("wan")
+            minutes = int(data.get("minutes") or 0)
+            if not STORE.bank_for_mac(mac):
+                return self._json(
+                    {"ok": False, "detail": "该设备不在受控清单，请先在后台分配题库"},
+                    404)
+            try:
+                if want is True:
+                    rec = manual_unblock(mac, minutes)
+                elif want is False:
+                    rec = manual_block(mac)
+                else:
+                    return self._json(
+                        {"ok": False, "detail": "wan 需为 true（放行）或 false（断网）"},
+                        400)
+            except Exception as exc:
+                return self._json(
+                    {"ok": False, "detail": "路由器接口失败：%s" % exc}, 502)
+            return self._json({"ok": True, "record": rec})
         status, obj, cookie = admin_api.dispatch(
             STORE, ADAPTER, method, self.path, self.headers, raw, client_ip(self))
         if isinstance(obj, admin_api.Raw):

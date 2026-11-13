@@ -274,6 +274,30 @@ POST /api/start  → {tier: 0, target: "<目标设备 MAC>"}
 
 **程序没有任何「主动拉黑」的路径**：初始断网由管理员在小米 WiFi App 里手动点
 「暂停联网」，程序只负责放行与到期回收，避免误伤摄像头、音箱、网关这些 IoT 设备。
+（`3.2.0` 起例外：`gatectl.py` 可以对**受控清单里的设备**手动断网/放行，
+非受控设备一律拒绝，不影响 IoT。）
+
+### 5.2 命令行手动开关（gatectl.py）
+
+不开网页后台，命令行直接看状态、断网、放行：
+
+```sh
+python3 gatectl.py list          # 所有受控设备的状态、剩余、今日累计
+python3 gatectl.py off huo-2     # 立即断网（它答一轮题即可恢复）
+python3 gatectl.py on  huo-2 30  # 放行 30 分钟，到点自动断
+python3 gatectl.py on  huo-2     # 放行，不给分钟数 = 永久
+```
+
+`<设备>` 支持：设备名（可只打一部分，不分大小写）/ MAC（可只打前几位）。
+手动放行走家长意志，**不受每日上限约束**，也不计入「今日累计」；
+临时放行到期后由回收线程正常断网。
+
+路由器上配合 SSH 通道（见 DEPLOY-ROUTER.md）：
+
+```sh
+ssh router "docker exec wifi-gate python3 gatectl.py list"
+ssh router "docker exec wifi-gate python3 gatectl.py off huo-2"
+```
 
 ---
 
@@ -307,6 +331,7 @@ POST /api/start  → {tier: 0, target: "<目标设备 MAC>"}
 | `admin_api.py` | 后台接口（题库增删、设备分配、导入预览、导出、备份恢复） |
 | `router_adapter.py` | 小米接口适配、IP→MAC 解析、演练模式 |
 | `updater.py` | 从 GitHub 拉新代码、原地替换、备份旧文件；后台一键更新与定时自动检查 |
+| `gatectl.py` | 命令行管理工具：看设备状态、手动断网/放行（走后台 API，无需开网页） |
 | `VERSION` | 当前版本号（如 `3.1.0`），更新时按它比对远端 |
 | `question_bank.json` | 内置 134 道题库 |
 | `static/index.html` | 答题页（选档位 + 逐题 + 即时反馈 + 剩余时间） |

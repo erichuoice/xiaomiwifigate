@@ -299,6 +299,26 @@ def main():
     check("设备分配到题库", code == 200 and res.get("result", {}).get("bank_id"),
           res.get("result", {}).get("bank_name", ""))
 
+    # ---- 手动断网 / 放行（gatectl 的服务端接口）----
+    code, res = admin("/api/admin/device/wan")
+    rows = res.get("devices") or []
+    check("手动开关读取设备列表", code == 200 and
+          any(d.get("mac") == mac for d in rows),
+          "%s 台受控设备" % len(rows))
+    code, res = admin("/api/admin/device/wan", {"mac": mac, "wan": False})
+    check("手动断网接口", code == 200 and
+          res.get("record", {}).get("reblocked") is True,
+          "HTTP %s" % code)
+    code, res = admin("/api/admin/device/wan",
+                      {"mac": mac, "wan": True, "minutes": 5})
+    check("手动放行接口（5 分钟）", code == 200 and
+          res.get("record", {}).get("minutes_left") == 5,
+          "剩余 %s 分钟" % res.get("record", {}).get("minutes_left"))
+    code, res = admin("/api/admin/device/wan", {"mac": "02:00:00:00:00:02",
+                                                "wan": True})
+    check("手动开关拒绝非受控设备", code == 404, "HTTP %s" % code)
+    admin("/api/admin/device/wan", {"mac": mac, "wan": False})  # 恢复断网状态
+
     code, info = admin("/api/quiz")
     tiers = info.get("tiers") or []
     check("答题页拿到本题库档位", code == 200 and len(tiers) == 2,

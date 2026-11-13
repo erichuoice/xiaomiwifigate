@@ -452,6 +452,9 @@ Host router
 ```sh
 ssh router                                     # 进真终端
 ssh router docker ps                           # 单条命令
+ssh router "docker exec wifi-gate python3 gatectl.py list"     # 受控设备状态
+ssh router "docker exec wifi-gate python3 gatectl.py off huo-2"   # 手动断网
+ssh router "docker exec wifi-gate python3 gatectl.py on huo-2 30" # 放行30分钟
 ssh router "docker exec wifi-gate python3 -c \"import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8088/api/health',timeout=5).read().decode())\""
 ```
 
