@@ -327,22 +327,33 @@ class MiWifiAdapter:
                 "路由器返回 code=%s msg=%s" % (data.get("code"), data.get("msg", "")))
 
     def device_list_raw(self):
-        stok = self.get_stok()
-        paths = [self.cfg["device_list_path"]]
-        fallback = self.cfg.get("device_list_fallback_path", "")
-        if fallback:
-            paths.append(fallback)
         last = ""
-        for path in paths:
-            url = self._base() + path.format(stok=stok)
-            try:
-                raw = _get(url)
-            except Exception as exc:
-                last = "%s: %s" % (type(exc).__name__, exc)
-                self.log("设备列表 %s 失败：%s" % (path.split("/api/")[-1], last))
-                continue
-            self._check_token(raw)
-            return raw
+        for attempt in (1, 2):
+            stok = self.get_stok()
+            paths = [self.cfg["device_list_path"]]
+            fallback = self.cfg.get("device_list_fallback_path", "")
+            if fallback:
+                paths.append(fallback)
+            for path in paths:
+                url = self._base() + path.format(stok=stok)
+                try:
+                    raw = _get(url)
+                except Exception as exc:
+                    last = "%s: %s" % (type(exc).__name__, exc)
+                    self.log("设备列表 %s 失败：%s"
+                             % (path.split("/api/")[-1], last))
+                    continue
+                try:
+                    self._check_token(raw)
+                except TokenExpired:
+                    # 登录态失效：自动重登一次再试（与 resolve_mac 同策略），
+                    # 避免上层拿到「没有这台设备」的误导性错误。
+                    self.log("设备列表登录态失效，自动重登（第 %s 次）" % attempt)
+                    if attempt == 1 and self._relogin_available():
+                        self.get_stok(force_refresh=True)
+                        break  # 跳出 path 循环，用新 stok 再试一轮
+                    raise
+                return raw
         raise RouterError("设备列表接口全部失败：%s" % last)
 
     def resolve_mac(self, ip):

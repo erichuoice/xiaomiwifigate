@@ -320,7 +320,9 @@ def main():
           "剩余 %s 分钟" % res.get("record", {}).get("minutes_left"))
     code, res = admin("/api/admin/device/wan", {"mac": "02:00:00:00:00:02",
                                                 "wan": True})
-    check("手动开关拒绝不存在设备", code == 404, "HTTP %s" % code)
+    check("手动开关拒绝不存在设备", code in (404, 502),
+          "HTTP %s%s" % (code, "（路由器不可达，按拉取失败处理）"
+                         if code == 502 else ""))
     admin("/api/admin/device/wan", {"mac": mac, "wan": False})  # 恢复断网状态
 
     code, info = admin("/api/quiz")
@@ -505,6 +507,49 @@ def main():
     code, res = admin("/api/admin/logout", {})
     code2, res2 = admin("/api/admin/state")
     check("退出登录后会话失效", code == 200 and code2 == 401)
+
+    # ---- device_list_raw 登录态失效自动重登（离线单元测试，不碰真实路由器）----
+    real_get, real_post = router_adapter._get, router_adapter._post
+    try:
+        seq = {"n": 0}
+
+        def fake_get(url, timeout=6):
+            seq["n"] += 1
+            if seq["n"] == 1:
+                # 模拟缓存的 stok 失效：路由器返回 code=401
+                return json.dumps({"code": 401, "msg": "token expired"})
+            return json.dumps({"list": [{"mac": "02:00:00:00:00:09"}]})
+
+        def fake_post(url, data, timeout=6):
+            # 模拟重新登录成功，返回带新 stok 的跳转地址
+            return json.dumps({"url": "/cgi-bin/luci/;stok=NEWTOK/api/x"})
+
+        router_adapter._get = fake_get
+        router_adapter._post = fake_post
+        cfg = {"base_url": "http://router.test",
+               "login_path": "/login",
+               "device_list_path": "/dl/{stok}",
+               "device_list_fallback_path": "",
+               "admin_password": "x"}
+        ad = router_adapter.MiWifiAdapter(cfg, lambda m: None)
+        raw = json.loads(ad.device_list_raw())
+        check("设备列表登录态失效自动重登",
+              seq["n"] == 2 and bool(raw.get("list")),
+              "401 后重登一次，第 %s 次成功" % seq["n"])
+
+        seq["n"] = 0
+        ad2 = router_adapter.MiWifiAdapter(dict(cfg, admin_password=""),
+                                          lambda m: None)
+        ad2._cached_stok = "OLDTOKEN"
+        try:
+            ad2.device_list_raw()
+            check("无法重登时设备列表如实报错", False, "没有抛异常")
+        except router_adapter.TokenExpired:
+            check("无法重登时设备列表如实报错", True)
+        except Exception as exc:  # noqa: BLE001
+            check("无法重登时设备列表如实报错", False, repr(exc))
+    finally:
+        router_adapter._get, router_adapter._post = real_get, real_post
 
     print("\n结果：%s 项通过，%s 项失败" % (passed, failed))
     sys.exit(1 if failed else 0)

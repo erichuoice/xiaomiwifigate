@@ -502,7 +502,8 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     rows = router_adapter.normalize_devices(
                         json.loads(ADAPTER.device_list_raw()))
-                except Exception:
+                except Exception as exc:
+                    log("设备页拉取路由器设备列表失败：%s" % exc)
                     rows = []
                 out = []
                 seen = set()
@@ -558,12 +559,22 @@ class Handler(BaseHTTPRequestHandler):
             # 手动控制不要求设备已分配题库：家长可对设备列表里
             # 的任何一台直接断网/放行。但 MAC 必须真实存在，防手滑。
             known = {m.lower() for b in STORE.banks() for m in b["devices"]}
+            router_ok = True
             try:
                 known |= {r["mac"].lower() for r in router_adapter.normalize_devices(
                     json.loads(ADAPTER.device_list_raw()))}
-            except Exception:
-                pass
+            except Exception as exc:
+                router_ok = False
+                log("手动控制时拉取路由器设备列表失败：%s" % exc)
             if mac not in known:
+                if not router_ok:
+                    # 区分「路由器没连上」和「真没这台设备」，
+                    # 避免家长被误导去查 MAC。
+                    return self._json({
+                        "ok": False,
+                        "detail": "路由器设备列表暂时拉取失败（已自动重登），"
+                                  "请刷新页面再试一次",
+                    }, 502)
                 return self._json(
                     {"ok": False, "detail": "路由器设备列表里没有这台设备，请检查 MAC"},
                     404)
