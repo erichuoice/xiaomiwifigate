@@ -161,6 +161,17 @@
   .foot { color: var(--muted); font-size: 12.5px; margin-top: 20px; line-height: 1.8; }
   .foot code { background: #e6e9ed; padding: 1px 5px; border-radius: 4px; }
   .loading { color: var(--muted); font-size: 14px; padding: 8px 0; }
+
+  /* 家长控制 */
+  .ctrl-row { border: 1px solid #e2e6ec; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+  .ctrl-row .r1 { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .ctrl-row .r1 b { font-size: 14.5px; }
+  .ctrl-row .st { font-size: 12px; color: var(--muted); margin: 2px 0 8px; }
+  .ctrl-row .ops { display: flex; gap: 8px; flex-wrap: wrap; }
+  .ctrl-row .ops button { font-size: 13px; padding: 7px 14px; }
+  #ctrl-pw { flex: 1; min-width: 140px; font-size: 15px; padding: 10px 12px;
+    border: 1px solid #d5dae2; border-radius: 10px; box-sizing: border-box; }
+  a.flink { color: var(--accent); font-weight: 600; text-decoration: none; }
 </style>
 </head>
 <body>
@@ -197,10 +208,28 @@
 
   <button id="main" disabled style="display:none">确认答案</button>
 
+  <!-- 家长控制（答题页直接断网/放行，无需进后台） -->
+  <div class="card" id="ctrl-card" style="display:none">
+    <div class="ptitle">家长控制</div>
+    <div id="ctrl-login">
+      <p class="pdesc">在此直接给设备断网或放行，需要管理密码（与后台相同）。</p>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <input id="ctrl-pw" type="password" placeholder="管理密码" autocomplete="current-password">
+        <button id="ctrl-login-btn">登录</button>
+      </div>
+      <p class="pdesc" id="ctrl-msg" style="margin:6px 0 0;color:#c0392b"></p>
+    </div>
+    <div id="ctrl-body" style="display:none">
+      <div id="ctrl-devs"><div class="loading">正在读取设备…</div></div>
+      <p style="margin:10px 0 0"><button class="ghost" id="ctrl-logout">退出家长登录</button></p>
+    </div>
+  </div>
+
   <div class="foot">
     <div id="devinfo"></div>
     <div id="note"></div>
     <div style="margin-top:8px">打开的是本机固定地址，断网也能用；建议「添加到主屏幕」。</div>
+    <div style="margin-top:4px"><a href="#" class="flink" id="ctrl-open">家长控制</a></div>
   </div>
 </div>
 
@@ -701,6 +730,125 @@
   }
 
   el('main').onclick = submit;
+  // ---- 家长控制（直接在答题页断网/放行，接口复用后台） ----
+  function ctrlApi(path, opts) {
+    return fetch(path, Object.assign({ credentials: 'same-origin' }, opts))
+      .then(function (r) { return r.json().then(function (d) { return { code: r.status, data: d }; }); });
+  }
+
+  function ctrlMsg(text, ok) {
+    var m = el('ctrl-msg');
+    m.textContent = text || '';
+    m.style.color = ok ? '#1e8e4e' : '#c0392b';
+  }
+
+  function ctrlRender(devs) {
+    var box = el('ctrl-devs');
+    box.innerHTML = '';
+    if (!devs.length) {
+      box.innerHTML = '<div class="loading">还没有受控设备（后台分配题库后出现）</div>';
+      return;
+    }
+    devs.forEach(function (d) {
+      var left = d.remaining_minutes;
+      var leftTxt = left == null ? '永久放行' : (left > 0 ? '剩 ' + left + ' 分钟' : '已断网');
+      var row = document.createElement('div');
+      row.className = 'ctrl-row';
+      row.innerHTML =
+        '<div class="r1"><b>' + esc(d.name || '（未取名）') + '</b>' +
+        '<span style="font-size:12px;color:var(--muted)">' + esc(d.bank_name || '') + '</span></div>' +
+        '<div class="st">' + esc(d.state) + ' · ' + leftTxt +
+        ' · 今日 ' + (d.today_minutes || 0) + ' 分钟 · MAC ' + esc(d.mac) + '</div>';
+      var ops = document.createElement('div');
+      ops.className = 'ops';
+
+      var bOff = document.createElement('button');
+      bOff.className = 'ghost';
+      bOff.textContent = '断网';
+      bOff.disabled = d.state === '已断网';
+      bOff.onclick = function () { ctrlWan(d, false); };
+      ops.appendChild(bOff);
+
+      var bOn = document.createElement('button');
+      bOn.textContent = '放行…';
+      bOn.onclick = function () {
+        var input = prompt('放行「' + (d.name || d.mac) + '」几分钟？\n留空或填 0 = 永久放行', '30');
+        if (input === null) return;
+        var m = parseInt(input, 10);
+        ctrlWan(d, true, isNaN(m) ? 0 : Math.max(0, m));
+      };
+      ops.appendChild(bOn);
+
+      row.appendChild(ops);
+      box.appendChild(row);
+    });
+  }
+
+  function ctrlWan(d, wan, minutes) {
+    ctrlMsg('操作中…', true);
+    ctrlApi('/api/admin/device/wan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mac: d.mac, wan: wan, minutes: minutes || 0 })
+    }).then(function (r) {
+      if (r.data && r.data.ok) {
+        ctrlMsg(d.name + (wan ? ' 已放行' : ' 已断网'), true);
+        ctrlLoad();
+        loadInfo();
+      } else {
+        ctrlMsg('失败：' + ((r.data && r.data.detail) || ('HTTP ' + r.code)), false);
+      }
+    }).catch(function (e) { ctrlMsg('网络错误：' + e, false); });
+  }
+
+  function ctrlLoad() {
+    ctrlApi('/api/admin/device/wan').then(function (r) {
+      if (r.data && r.data.ok) ctrlRender(r.data.devices || []);
+      else el('ctrl-devs').innerHTML = '<div class="loading">读取失败：' + esc((r.data && r.data.detail) || r.code) + '</div>';
+    });
+  }
+
+  function ctrlShowBody(authed) {
+    el('ctrl-login').style.display = authed ? 'none' : '';
+    el('ctrl-body').style.display = authed ? '' : 'none';
+    if (authed) ctrlLoad();
+  }
+
+  el('ctrl-open').onclick = function (ev) {
+    ev.preventDefault();
+    var card = el('ctrl-card');
+    var open = card.style.display !== 'none';
+    card.style.display = open ? 'none' : '';
+    if (open) return;
+    ctrlMsg('', true);
+    ctrlApi('/api/admin/session').then(function (r) {
+      ctrlShowBody(!!(r.data && r.data.authed));
+    }).catch(function () { ctrlShowBody(false); });
+  };
+
+  el('ctrl-login-btn').onclick = function () {
+    var pw = el('ctrl-pw').value || '';
+    if (!pw) { ctrlMsg('请输入管理密码', false); return; }
+    ctrlApi('/api/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw })
+    }).then(function (r) {
+      if (r.data && r.data.ok) { el('ctrl-pw').value = ''; ctrlMsg('', true); ctrlShowBody(true); }
+      else ctrlMsg('密码不对：' + ((r.data && r.data.detail) || '再试一次'), false);
+    }).catch(function (e) { ctrlMsg('网络错误：' + e, false); });
+  };
+  el('ctrl-pw').addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter') el('ctrl-login-btn').click();
+  });
+
+  el('ctrl-logout').onclick = function () {
+    ctrlApi('/api/admin/logout', { method: 'POST' }).then(function () {
+      ctrlShowBody(false);
+      ctrlMsg('已退出', true);
+    });
+  };
+
   loadInfo();
 })();
 </script>

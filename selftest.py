@@ -204,6 +204,7 @@ def main():
     # ---- 页面与鉴权 ----
     code, raw = call("/")
     check("答题页可访问", code == 200 and "上网先答题" in raw, "HTTP %s" % code)
+    check("答题页含家长控制面板", "家长控制" in raw and "ctrl-card" in raw)
     code, raw = call("/admin")
     check("管理后台可访问", code == 200 and "管理后台" in raw, "HTTP %s" % code)
 
