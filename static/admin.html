@@ -205,9 +205,10 @@
 
     <!-- 设备 -->
     <div id="tab-devices" class="card" style="display:none">
-      <h2>设备归属</h2>
+      <h2>设备归属与控制</h2>
       <p class="hint">给每台设备选一套题库；选「不受控」的设备，程序一律不碰。
-        初始断网仍由管理员在小米 WiFi App 里手动操作。</p>
+        分配了题库的设备，可直接点「断网 / 放行」：断网立即生效、答一轮题可恢复；
+        放行填分钟数（0 或留空 = 永久），到期自动断。</p>
       <p id="dev-hint" class="hint warn" style="display:none"></p>
       <div class="row"><button class="ghost" id="refresh-dev">刷新设备列表</button></div>
       <div id="devlist" style="margin-top:12px"></div>
@@ -675,7 +676,7 @@
     var box = el('devlist'); box.innerHTML = '';
     if (!devices.length) { box.innerHTML = '<p class="hint">还没有设备记录。</p>'; return; }
     var tb = document.createElement('table');
-    tb.innerHTML = '<thead><tr><th>名称</th><th>IP</th><th>MAC</th><th>外网</th><th>答题题库</th></tr></thead>';
+    tb.innerHTML = '<thead><tr><th>名称</th><th>IP</th><th>MAC</th><th>外网</th><th>答题题库</th><th>控制</th></tr></thead>';
     var body = document.createElement('tbody');
     devices.forEach(function (d) {
       var tr = document.createElement('tr');
@@ -705,9 +706,45 @@
       sel.value = d.bank_id || '';
       sel.onchange = function () { assign(d, sel); };
       td5.appendChild(sel); tr.appendChild(td5);
+
+      var td6 = document.createElement('td');
+      td6.style.whiteSpace = 'nowrap';
+      if (d.bank_id) {
+        var bOff = document.createElement('button');
+        bOff.className = 'ghost';
+        bOff.style.cssText = 'padding:5px 10px;font-size:12.5px;margin-right:6px';
+        bOff.textContent = '断网';
+        bOff.onclick = function () { deviceWan(d, false); };
+        var bOn = document.createElement('button');
+        bOn.style.cssText = 'padding:5px 10px;font-size:12.5px';
+        bOn.textContent = '放行';
+        bOn.onclick = function () {
+          var v = prompt('放行「' + (d.name || d.mac) + '」几分钟？\n留空或填 0 = 永久放行（不会被自动断网）', '30');
+          if (v === null) return;
+          var m = parseInt(v, 10);
+          deviceWan(d, true, isNaN(m) ? 0 : Math.max(0, m));
+        };
+        td6.appendChild(bOff); td6.appendChild(bOn);
+      } else {
+        td6.textContent = '—';
+      }
+      tr.appendChild(td6);
       body.appendChild(tr);
     });
     tb.appendChild(body); box.appendChild(tb);
+  }
+
+  function deviceWan(device, wan, minutes) {
+    api('/api/admin/device/wan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mac: device.mac, wan: wan, minutes: minutes || 0 })
+    }).then(function (res) {
+      if (!requireAuth(res)) return;
+      if (!res.data.ok) { toast(res.data.detail || '操作失败'); return; }
+      toast(device.name + (wan ? ' 已放行' : ' 已断网'));
+      refreshDevices();
+    }).catch(function () { toast('操作失败'); });
   }
 
   function assign(device, sel) {

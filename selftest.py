@@ -204,9 +204,10 @@ def main():
     # ---- 页面与鉴权 ----
     code, raw = call("/")
     check("答题页可访问", code == 200 and "上网先答题" in raw, "HTTP %s" % code)
-    check("答题页含家长控制面板", "家长控制" in raw and "ctrl-card" in raw)
+    check("答题页无家长控制残留", "ctrl-card" not in raw)
     code, raw = call("/admin")
     check("管理后台可访问", code == 200 and "管理后台" in raw, "HTTP %s" % code)
+    check("后台含断网/放行控制", "deviceWan" in raw and "已放行" in raw)
 
     code, res = admin("/api/admin/state")
     check("未登录访问后台被拒", code == 401, "HTTP %s" % code)
