@@ -399,6 +399,67 @@ docker tag  docker.m.daocloud.io/library/alpine:latest alpine:latest
 
 ---
 
+## 附：SSH 管理通道（wg-ssh 容器）
+
+SimpleDocker 的网页终端跑在自己容器里，连 `docker` 命令都没有，不适合日常管理。
+方案：再跑一个常驻 SSH 容器（端口 2222，挂 docker.sock），电脑上 `ssh router` 直达。
+
+**一次性搭建**（在 SimpleDocker 网页终端里执行）：
+
+1. 公钥写到 U 盘（把电脑 `~/.ssh/id_ed25519.pub` 的内容替换进去）：
+
+```sh
+docker run --rm -v /mnt/usb-fa757357:/u python:3.11-alpine sh -c \
+  'mkdir -p /u/ssh && echo "<这里粘贴你的公钥>" > /u/ssh/authorized_keys'
+```
+
+2. 做镜像（Alpine 默认源基本不通，脚本按 阿里云→清华→交大→官方 依次试）：
+
+```sh
+docker rm -f wg-ssh-tmp 2>/dev/null
+docker run --name wg-ssh-tmp python:3.11-alpine sh -c '
+v=$(grep -o "v3\.[0-9]*" /etc/apk/repositories | head -1)
+ok=""
+for m in mirrors.aliyun.com mirrors.tuna.tsinghua.edu.cn mirror.sjtu.edu.cn dl-cdn.alpinelinux.org; do
+  printf "https://%s/alpine/%s/main\nhttps://%s/alpine/%s/community\n" "$m" "$v" "$m" "$v" > /etc/apk/repositories
+  apk add --no-cache openssh docker-cli && ok=$m && break
+done
+echo "== 安装结果: ${ok:-全部失败}"'
+docker commit wg-ssh-tmp wg-ssh:1.0 && docker rm wg-ssh-tmp
+```
+
+3. 常驻启动：
+
+```sh
+docker rm -f wg-ssh 2>/dev/null
+docker run -d --name wg-ssh --restart unless-stopped --network host \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /mnt/usb-fa757357/ssh:/ssh \
+  wg-ssh:1.0 sh -c 'mkdir -p /root/.ssh && cp /ssh/authorized_keys /root/.ssh/ && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys && ssh-keygen -A && printf "PermitRootLogin prohibit-password\nPubkeyAuthentication yes\n" > /etc/ssh/sshd_config && exec /usr/sbin/sshd -D -p 2222 -e'
+```
+
+4. 电脑端 `~/.ssh/config` 加别名，之后 `ssh router` 一步直达：
+
+```
+Host router
+  HostName 192.168.31.1
+  Port 2222
+  User root
+```
+
+**日常用法**（都在电脑上）：
+
+```sh
+ssh router                                     # 进真终端
+ssh router docker ps                           # 单条命令
+ssh router "docker exec wifi-gate python3 -c \"import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8088/api/health',timeout=5).read().decode())\""
+```
+
+注意：只有密钥能登录（禁止密码），公钥在 U 盘 `/mnt/usb-fa757357/ssh/authorized_keys`，
+**别删这个目录**，wg-ssh 每次启动从那里读。
+
+---
+
 ## 已知限制与风险
 
 | 风险 | 影响 | 应对 |
