@@ -13,6 +13,7 @@ import http.cookiejar
 import json
 import os
 import random
+import re
 import sys
 import time
 import urllib.error
@@ -507,6 +508,14 @@ def main():
     code, res = admin("/api/admin/logout", {})
     code2, res2 = admin("/api/admin/state")
     check("退出登录后会话失效", code == 200 and code2 == 401)
+
+    # ---- 前端调用约定检查（防止再次把 options 当 data 传给 api()）----
+    with open(os.path.join(BASE, "static", "admin.html"), encoding="utf-8") as f:
+        admin_html = f.read()
+    bad = re.search(r"api\(\s*['\"][^'\"]+['\"]\s*,\s*\{[^{}]*\b(?:method|body)\s*:",
+                    admin_html, re.S)
+    check("后台前端 api() 调用约定正确", bad is None,
+          (bad.group(0)[:50].replace("\n", " ") if bad else ""))
 
     # ---- device_list_raw 登录态失效自动重登（离线单元测试，不碰真实路由器）----
     real_get, real_post = router_adapter._get, router_adapter._post

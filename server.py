@@ -555,7 +555,17 @@ class Handler(BaseHTTPRequestHandler):
                 data = {}
             mac = str(data.get("mac") or "").strip().lower()
             want = data.get("wan")
-            minutes = int(data.get("minutes") or 0)
+            try:
+                minutes = int(data.get("minutes") or 0)
+            except (TypeError, ValueError):
+                minutes = 0
+            if not mac:
+                # 明确的入参错误：不要落到「设备不存在」的 404 上误导排查。
+                return self._json({
+                    "ok": False,
+                    "detail": "请求里没有 MAC：后台页面可能是旧版本，"
+                              "请强制刷新页面（Ctrl/Cmd+Shift+R）后重试",
+                }, 400)
             # 手动控制不要求设备已分配题库：家长可对设备列表里
             # 的任何一台直接断网/放行。但 MAC 必须真实存在，防手滑。
             known = {m.lower() for b in STORE.banks() for m in b["devices"]}

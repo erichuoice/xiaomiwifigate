@@ -731,11 +731,13 @@
   }
 
   function deviceWan(device, wan, minutes) {
-    api('/api/admin/device/wan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mac: device.mac, wan: wan, minutes: minutes || 0 })
-    }).then(function (res) {
+    if (!device || !device.mac) {
+      toast('这台设备缺少 MAC，请刷新页面后重试');
+      return;
+    }
+    api('/api/admin/device/wan',
+        { mac: device.mac, wan: wan, minutes: minutes || 0 })
+      .then(function (res) {
       if (!requireAuth(res)) return;
       if (!res.data.ok) { toast(res.data.detail || '操作失败'); return; }
       toast(device.name + (wan ? ' 已放行' : ' 已断网'));
