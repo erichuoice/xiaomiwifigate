@@ -75,6 +75,11 @@
   td select { width:auto; min-width:120px; padding:5px 8px; font-size:12.5px; }
   .tag { font-size:11.5px; padding:2px 7px; border-radius:10px; background:var(--oksoft); color:#085041; }
   .tag.off { background:#f2f4f6; color:var(--muted); }
+  .cd { display:inline-block; margin-left:7px; padding:1px 7px; border-radius:9px;
+    background:var(--warn-bg); color:#8a5a00; font-size:11.5px; font-weight:600;
+    font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .cd:empty { display:none; }
+  .cd.expiring { background:var(--nosoft); color:var(--no); }
   .imp-out { margin-top:12px; font-size:13px; }
   .imp-err { background:var(--nosoft); border-radius:8px; padding:9px 11px; color:#8a2626; max-height:180px; overflow:auto; }
   .imp-ok { background:var(--oksoft); border-radius:8px; padding:9px 11px; color:#0a5b43; }
@@ -208,7 +213,9 @@
       <h2>设备归属与控制</h2>
       <p class="hint">给每台设备选一套题库（选「不受控」的设备不会自动断网）。
         每台设备右侧都有「断网 / 放行」按钮，随时手动控制：
-        断网立即生效；放行填分钟数（0 或留空 = 永久），到期自动断。</p>
+        断网立即生效；放行填分钟数（0 或留空 = 永久），到期自动断。
+        <b>暂时放行的设备，名称旁会显示实时倒计时</b>（答题解锁同样显示），
+        到点自动刷新；永久放行不显示倒计时。</p>
       <p id="dev-hint" class="hint warn" style="display:none"></p>
       <div class="row"><button class="ghost" id="refresh-dev">刷新设备列表</button></div>
       <div id="devlist" style="margin-top:12px"></div>
@@ -256,6 +263,7 @@
 (function () {
   var el = function (id) { return document.getElementById(id); };
   var state = null, banks = [], cur = 0, Q = [], tiers = [], devices = [];
+  var wanInfo = {}, wanSkew = 0, cdRefreshPending = false;
   var page = 0, PAGE = 8, openSet = {}, toastTimer = null, curId = '';
 
   function toast(msg) {
@@ -681,6 +689,11 @@
     devices.forEach(function (d) {
       var tr = document.createElement('tr');
       var td0 = document.createElement('td'); td0.textContent = d.name || '—';
+      // 暂时放行时在设备名旁显示实时倒计时（永久放行/已断网则留空）
+      var cd = document.createElement('span');
+      cd.className = 'cd';
+      cd.setAttribute('data-mac', d.mac || '');
+      td0.appendChild(cd);
       tr.appendChild(td0);
       [((d.ip || []).join(', ') || '—'), d.mac].forEach(function (v) {
         var td = document.createElement('td'); td.textContent = v;
@@ -759,15 +772,63 @@
   }
 
   function refreshDevices() {
-    api('/api/admin/devices').then(function (res) {
-      if (!requireAuth(res)) return;
-      devices = res.data.devices || [];
-      var h = el('dev-hint');
-      if (res.data.hint) { h.textContent = res.data.hint; h.style.display = 'block'; }
-      else h.style.display = 'none';
-      renderDevices();
-    });
+    Promise.all([api('/api/admin/devices'), api('/api/admin/device/wan')])
+      .then(function (rs) {
+        if (!requireAuth(rs[0]) || !requireAuth(rs[1])) return;
+        var a = rs[0].data || {}, b = rs[1].data || {};
+        devices = a.devices || [];
+        var h = el('dev-hint');
+        if (a.hint) { h.textContent = a.hint; h.style.display = 'block'; }
+        else h.style.display = 'none';
+        // 合并暂时放行信息：expire_at>0 且有剩余分钟才显示倒计时
+        wanInfo = {};
+        (b.devices || []).forEach(function (x) {
+          var exp = Number(x.expire_at) || 0;
+          wanInfo[x.mac] = {
+            expire_at: exp,
+            active: exp > 0 && (Number(x.remaining_minutes) || 0) > 0
+          };
+        });
+        var localNow = Date.now() / 1000;
+        wanSkew = (Number(b.server_now) || localNow) - localNow;
+        cdRefreshPending = false;
+        renderDevices();
+        tickCountdowns();
+      }).catch(function () { toast('设备列表加载失败'); });
   }
+
+  // 倒计时：仅暂时放行显示，服务端时间校准，最后一分钟变红，到点自动刷新
+  function fmtCd(sec) {
+    var s = Math.max(0, Math.ceil(sec));
+    var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), r = s % 60;
+    return (h ? h + ':' + pad2(m) : pad2(m)) + ':' + pad2(r);
+  }
+
+  function tickCountdowns() {
+    var nodes = document.querySelectorAll('.cd[data-mac]');
+    var now = Date.now() / 1000 + wanSkew;
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      var info = wanInfo[node.getAttribute('data-mac')] || {};
+      if (!info.active || !info.expire_at) {
+        if (node.textContent) { node.textContent = ''; node.className = 'cd'; }
+        continue;
+      }
+      var left = info.expire_at - now;
+      if (left <= 0) {
+        node.textContent = '已到期';
+        node.className = 'cd expiring';
+        if (!cdRefreshPending) {
+          cdRefreshPending = true;
+          setTimeout(refreshDevices, 1500);
+        }
+        continue;
+      }
+      node.textContent = '剩 ' + fmtCd(left);
+      node.className = 'cd' + (left <= 60 ? ' expiring' : '');
+    }
+  }
+  setInterval(tickCountdowns, 1000);
 
   // ---------- 交互 ----------
 

@@ -546,7 +546,11 @@ class Handler(BaseHTTPRequestHandler):
                         "state": ("永久放行" if left is None
                                   else "上网中" if left > 0 else "已断网"),
                     })
-                return self._json({"ok": True, "devices": out})
+                return self._json({
+                    "ok": True, "devices": out,
+                    # 前端按「服务端时间 + 本地流逝」算倒计时，避免两端时钟差
+                    "server_now": time.time(),
+                })
             if method != "POST":
                 return self._json({"ok": False, "detail": "请用 POST"}, 405)
             try:

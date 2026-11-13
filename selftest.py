@@ -310,6 +310,10 @@ def main():
     check("手动开关读取设备列表", code == 200 and
           any(d.get("mac") == mac for d in rows),
           "%s 台设备" % len(rows))
+    check("设备列表返回服务器时间（倒计时校准）",
+          isinstance(res.get("server_now"), (int, float)) and
+          res["server_now"] > 0,
+          str(res.get("server_now")))
     code, res = admin("/api/admin/device/wan", {"mac": mac, "wan": False})
     check("手动断网接口", code == 200 and
           res.get("record", {}).get("reblocked") is True,
@@ -319,6 +323,14 @@ def main():
     check("手动放行接口（5 分钟）", code == 200 and
           res.get("record", {}).get("minutes_left") == 5,
           "剩余 %s 分钟" % res.get("record", {}).get("minutes_left"))
+    # 暂时放行时，设备列表里要有可供前端倒计时的到期时间
+    code, res = admin("/api/admin/device/wan")
+    row = next((d for d in (res.get("devices") or []) if d["mac"] == mac), {})
+    check("暂时放行带到期时间", bool(row) and
+          row.get("expire_at", 0) > res.get("server_now", 0) and
+          row.get("remaining_minutes") == 5,
+          "expire=%s 剩余=%s 分" % (row.get("expire_at"),
+                                    row.get("remaining_minutes")))
     code, res = admin("/api/admin/device/wan", {"mac": "02:00:00:00:00:02",
                                                 "wan": True})
     check("手动开关拒绝不存在设备", code in (404, 502),
@@ -516,6 +528,11 @@ def main():
                     admin_html, re.S)
     check("后台前端 api() 调用约定正确", bad is None,
           (bad.group(0)[:50].replace("\n", " ") if bad else ""))
+    check("后台设备名旁有倒计时占位", "className = 'cd'" in admin_html and
+          "data-mac" in admin_html)
+    check("后台倒计时每秒刷新且到期自动更新",
+          "setInterval(tickCountdowns, 1000)" in admin_html and
+          "setTimeout(refreshDevices, 1500)" in admin_html)
 
     # ---- device_list_raw 登录态失效自动重登（离线单元测试，不碰真实路由器）----
     real_get, real_post = router_adapter._get, router_adapter._post
