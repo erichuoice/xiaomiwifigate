@@ -2174,6 +2174,16 @@ def main():
         return -1
 
     _quiz_end = _card_end(admin_html, '<div id="tab-quiz"')
+    _obj_at = admin_html.index('id="obj-sel"')
+    _obj_win = admin_html[_obj_at:_obj_at + 700]
+    check("顶栏有「管理对象」下拉，与页签同步（3.21.0）",
+          "管理对象" in admin_html and
+          "el('obj-sel').onchange" in admin_html and
+          "el('obj-sel').value = name" in admin_html and
+          all(('value="%s"' % v) in _obj_win
+              for v in ("quiz", "ai", "auto", "learning", "devices")),
+          _obj_win[:60].replace("\n", " "))
+
     check("导入并入题库页（且在题库卡片内部）、系统设置收到右上角",
           'id="open-settings"' in admin_html and
           "switchTab('settings')" in admin_html and

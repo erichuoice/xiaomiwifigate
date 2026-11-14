@@ -25,6 +25,8 @@
   .badge { font-size:12.5px; padding:4px 10px; border-radius:20px; background:var(--soft); color:var(--accent); }
   .badge.mock { background:var(--warn-bg); color:#8a5a00; }
   .tabgroup { font-size:12px; color:var(--muted); margin:2px 0 5px; letter-spacing:.08em; }
+  .objswitch { display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--muted); }
+  .objswitch select { width:auto; padding:6px 10px; font-size:13px; }
   .tabs { display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap; }
   .tabs button { flex:1 1 92px; padding:10px 4px; }
   .tabs button.off { background:#e9edf2; color:var(--text); }
@@ -161,6 +163,16 @@
   <div id="main" style="display:none">
     <div class="bar">
       <span id="mode" class="badge"></span>
+      <span class="objswitch">
+        <label for="obj-sel">管理对象</label>
+        <select id="obj-sel">
+          <option value="quiz">题库</option>
+          <option value="ai">AI 出题</option>
+          <option value="auto">自动出题</option>
+          <option value="learning">学习情况</option>
+          <option value="devices">管理设备</option>
+        </select>
+      </span>
       <span style="display:flex;gap:8px">
         <button class="mini ghost" id="open-settings">系统设置</button>
         <button class="mini" id="logout">退出登录</button>
@@ -2134,6 +2146,11 @@
     if (name === 'auto') loadAutoBank();
     if (name === 'learning') loadLearning(el('learn-sel').value || '');
     el('open-settings').className = name === 'settings' ? 'mini' : 'mini ghost';
+    // 顶栏的「管理对象」下拉跟页签保持同步（设置页不属于管理对象，下拉保持上一次选择）
+    if (el('obj-sel') && ['quiz', 'ai', 'auto', 'learning', 'devices']
+        .indexOf(name) >= 0) {
+      el('obj-sel').value = name;
+    }
   }
 
   el('login-btn').onclick = function () {
@@ -2145,6 +2162,7 @@
   el('pwd').onkeydown = function (e) { if (e.key === 'Enter') el('login-btn').click(); };
   el('logout').onclick = function () { api('/api/admin/logout', {}).then(showLogin); };
   el('open-settings').onclick = function () { switchTab('settings'); };
+  el('obj-sel').onchange = function () { switchTab(el('obj-sel').value); };
   ['quiz', 'ai', 'auto', 'learning', 'devices'].forEach(function (n) {
     el('tabbtn-' + n).onclick = function () { switchTab(n); };
   });
