@@ -579,7 +579,7 @@
       </div>
       <p class="hint" id="auto-note" style="margin-top:10px"></p>
 
-      <h3>③ 最近运行记录（所有题库合并）</h3>
+      <h3>③ 最近运行记录（当前管理对象）</h3>
       <div id="auto-runs"><p class="hint">还没有运行记录。</p></div>
       <div class="row">
         <button class="mini ghost" id="auto-refresh">刷新状态</button>
@@ -760,6 +760,10 @@
     pickBank(idx, true);          // 题库页内容（隐藏时也无副作用，纯本地渲染）
     if (typeof autoData !== 'undefined' && autoData) {
       renderAutoRuleForm(b.id);
+      if (autoData.status) {
+        renderAutoStatus(autoData.status);
+        renderAutoRuns(autoData.status.runs);
+      }
     }
     loadBankProgress(b.id);
     if (el('tab-learning').style.display !== 'none') loadLearning(b.id);
@@ -2047,8 +2051,12 @@
 
   function renderAutoStatus(s) {
     if (!s) return;
-    var banks = s.banks || [];
-    var html = '<table><thead><tr><th>题库</th><th>自动出题</th>' +
+    // 3.26.0：只显示顶栏选中的管理对象，不再把所有题库堆在一起
+    var _curBank = currentAutoBank();
+    var banks = (s.banks || []).filter(function (b) {
+      return b.bank_id === _curBank;
+    });
+    var html = '<table><thead><tr><th>管理对象</th><th>自动出题</th>' +
       '<th>未做过 / 阈值</th><th>下次触发</th><th>上次执行</th>' +
       '<th>出题科目</th></tr></thead><tbody>';
     banks.forEach(function (b) {
@@ -2073,13 +2081,16 @@
     html += '</tbody></table>';
     var head = (s.running ? '　·　<span style="color:#b45309">正在生成题目…</span>' : '') +
       '<b>AI Key：</b>' + (s.has_key ? '已配置' : '未配置（将用离线模板出题）') +
-      '　·　<b>各题库独立计时、互不影响。</b>';
+      '　·　<b>只统计当前管理对象；每个对象独立计时。</b>';
     el('auto-status').innerHTML = head + html;
   }
 
   function renderAutoRuns(runs) {
     var box = el('auto-runs');
-    if (!runs || !runs.length) {
+    // 3.26.0：运行记录也只显示当前管理对象的
+    var _curBank = currentAutoBank();
+    runs = (runs || []).filter(function (r) { return r.bank_id === _curBank; });
+    if (!runs.length) {
       box.innerHTML = '<p class="hint">还没有运行记录。启用并保存后，哪个题库新题不足' +
         '就会自动记一条；也可以选中题库点「立即试跑一次」验证。</p>';
       return;

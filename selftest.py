@@ -2034,10 +2034,14 @@ def main():
           "renderAutoRuleForm" in admin_html and
           "el('auto-bank').onchange" in admin_html and
           "bank_id: currentAutoBank()" in admin_html)
-    check("状态卡按题库分行汇总（每库一行）",
-          "<th>题库</th><th>自动出题</th>" in admin_html and
-          "b.configured" in admin_html and
-          "该题库" in admin_html)
+    check("状态卡只显示当前管理对象（3.26.0）",
+          "<th>管理对象</th><th>自动出题</th>" in admin_html and
+          "currentAutoBank()" in admin_html and
+          "b.bank_id === _curBank" in admin_html and
+          "b.configured" in admin_html)
+    check("运行记录只显示当前管理对象",
+          "③ 最近运行记录（当前管理对象）" in admin_html and
+          "r.bank_id === _curBank" in admin_html)
 
     # ---- 3.9.0 出题科目多选 ----
     check("科目改成多选控件（不再是单选下拉）",
