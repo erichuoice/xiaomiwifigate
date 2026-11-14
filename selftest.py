@@ -920,10 +920,22 @@ def main():
     check("离线生成单选/多选/判断混合题",
           code == 200 and len(qs) == 6 and qtypes == {"single", "multi", "judge"},
           str(sorted(qtypes)))
-    check("生成题带知识点且含广州本地情境",
-          all(q.get("topic") and q.get("source") for q in qs) and
+    check("生成题带知识点与来源",
+          all(q.get("topic") and q.get("source") for q in qs))
+    # 广州本地情境改成「固定随机种子」的纯函数用例，避免偶尔抽不到地名导致偶发失败
+    _rnd = random.getstate()
+    try:
+        random.seed(20261114)
+        _off = ai_bank.offline_generate(
+            {"stage": "小学", "grade": "四年级",
+             "subjects": ["语文", "数学"], "count": 20, "mode": "offline"})
+    finally:
+        random.setstate(_rnd)
+    check("离线题含广州本地情境（20 道里必有）",
+          len(_off) >= 10 and
           any(any(w in q.get("text", "") for w in
-                  ("广州", "珠江", "早茶", "陈家祠", "白云山")) for q in qs))
+                  ("广州", "珠江", "早茶", "陈家祠", "白云山")) for q in _off),
+          "生成 %s 道" % len(_off))
     check("生成结果携带当前教学进度",
           bool((res.get("progress") or {}).get("scope")))
     code, res = admin("/api/admin/ai/apply",
@@ -2175,14 +2187,26 @@ def main():
 
     _quiz_end = _card_end(admin_html, '<div id="tab-quiz"')
     _obj_at = admin_html.index('id="obj-sel"')
-    _obj_win = admin_html[_obj_at:_obj_at + 700]
-    check("顶栏有「管理对象」下拉，与页签同步（3.21.0）",
+    _obj_win = admin_html[_obj_at:_obj_at + 300]
+    check("顶栏「管理对象」下拉是人（题库），不是功能页签（3.22.0）",
           "管理对象" in admin_html and
-          "el('obj-sel').onchange" in admin_html and
-          "el('obj-sel').value = name" in admin_html and
-          all(('value="%s"' % v) in _obj_win
-              for v in ("quiz", "ai", "auto", "learning", "devices")),
+          "el('obj-sel').onchange = function () { setCurrentBank(" in admin_html and
+          "function renderObjSel(" in admin_html and
+          "function setCurrentBank(" in admin_html and
+          "function syncPersonSelects(" in admin_html and
+          "function initialBankId(" in admin_html and
+          'value="quiz"' not in _obj_win and
+          'value="ai"' not in _obj_win,
           _obj_win[:60].replace("\n", " "))
+    check("切换管理对象后页面内容跟着换，页内重复选题库都收起来（3.22.0）",
+          "setCurrentBank(el('obj-sel').value)" in admin_html and
+          "pickBank(idx, true)" in admin_html and
+          "loadLearning(b.id)" in admin_html and
+          "renderAutoRuleForm(b.id)" in admin_html and
+          ".hidebank { display:none; }" in admin_html and
+          admin_html.count("hidebank") >= 5 and
+          "管理对象</div>" not in admin_html,
+          "hidebank 出现 %s 次" % admin_html.count("hidebank"))
 
     check("导入并入题库页（且在题库卡片内部）、系统设置收到右上角",
           'id="open-settings"' in admin_html and

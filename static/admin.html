@@ -26,6 +26,8 @@
   .badge.mock { background:var(--warn-bg); color:#8a5a00; }
   .tabgroup { font-size:12px; color:var(--muted); margin:2px 0 5px; letter-spacing:.08em; }
   .objswitch { display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--muted); }
+  /* 3.22.0：管理对象统一在顶栏选，页内原来的「选题库」下拉都收起来 */
+  .hidebank { display:none; }
   .objswitch select { width:auto; padding:6px 10px; font-size:13px; }
   .tabs { display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap; }
   .tabs button { flex:1 1 92px; padding:10px 4px; }
@@ -150,7 +152,7 @@
 <body>
 <div class="wrap">
   <h1>上网答题 · 管理后台</h1>
-  <p class="sub">管理员视图：题库 / AI 出题 / 自动出题 / 学习情况 / 管理设备，系统设置见右上角</p>
+  <p class="sub">先在上方选择管理对象（孩子），再切换功能页；页面里的内容都跟着管理对象走，不用重复选题库</p>
 
   <div id="login" class="card">
     <h2>管理员登录</h2>
@@ -165,20 +167,13 @@
       <span id="mode" class="badge"></span>
       <span class="objswitch">
         <label for="obj-sel">管理对象</label>
-        <select id="obj-sel">
-          <option value="quiz">题库</option>
-          <option value="ai">AI 出题</option>
-          <option value="auto">自动出题</option>
-          <option value="learning">学习情况</option>
-          <option value="devices">管理设备</option>
-        </select>
+        <select id="obj-sel"></select>
       </span>
       <span style="display:flex;gap:8px">
         <button class="mini ghost" id="open-settings">系统设置</button>
         <button class="mini" id="logout">退出登录</button>
       </span>
     </div>
-    <div class="tabgroup">管理对象</div>
     <div class="tabs">
       <button id="tabbtn-quiz" data-tab="quiz">题库</button>
       <button id="tabbtn-ai" data-tab="ai" class="off">AI 出题</button>
@@ -191,7 +186,7 @@
     <div id="tab-quiz" class="card">
       <h2>题库</h2>
       <div class="bankbar">
-        <select id="bank-sel"></select>
+        <select id="bank-sel" class="hidebank"></select>
         <button class="mini ghost" id="bank-new">+ 新建题库</button>
         <button class="mini danger" id="bank-del">删除</button>
       </div>
@@ -272,8 +267,10 @@
       <p class="hint">支持 CSV / TSV / JSON。Excel 里编辑后「另存为 CSV」即可；表头用中文即可识别：
         题型、学段、年级、科目、题干、选项A~D、答案、解析、难度。答案可以写 <code>B</code>、<code>A,C</code>、
         <code>对</code>/<code>错</code>、<code>1</code>。</p>
-      <label class="fld" for="imp-bank">导入到哪个题库</label>
-      <select id="imp-bank"></select>
+      <div class="hidebank">
+        <label class="fld" for="imp-bank">导入到哪个题库</label>
+        <select id="imp-bank"></select>
+      </div>
       <div class="row">
         <input id="imp-file" type="file" accept=".csv,.txt,.json,text/csv,application/json" style="font-size:13px">
         <a id="dl-tpl" href="/api/admin/template.csv"><button type="button" class="mini">下载模板 CSV</button></a>
@@ -464,7 +461,7 @@
           <label class="fld" for="ai-count">题量（1~30）</label>
           <input id="ai-count" type="number" min="1" max="30" value="10">
         </div>
-        <div>
+        <div class="hidebank">
           <label class="fld" for="ai-bank">入到哪个题库</label>
           <select id="ai-bank"></select>
         </div>
@@ -509,10 +506,13 @@
         互不影响。生成时会避开该题库已有的题干；没配 Key 或接口失败时自动改用离线模板。</p>
       <div id="auto-status" class="ai-note">正在读取状态…</div>
 
-      <h3>① 选择题库并设置它的执行条件</h3>
-      <label class="fld" for="auto-bank">题库（选中哪个题库，下面的设置就是给它的）</label>
-      <select id="auto-bank"></select>
-      <p class="hint">没设置过的题库选中后会显示默认值，点「保存自动出题设置」即可启用。</p>
+      <h3>① 设置当前管理对象的执行条件</h3>
+      <div class="hidebank">
+        <label class="fld" for="auto-bank">题库（选中哪个题库，下面的设置就是给它的）</label>
+        <select id="auto-bank"></select>
+      </div>
+      <p class="hint">下面的设置只对<b>顶栏选中的管理对象</b>生效，没设置过的会显示默认值，
+        点「保存自动出题设置」即可启用。</p>
       <label class="chk"><input type="checkbox" id="auto-enabled"> 启用这个题库的自动出题（保存后立即生效）</label>
       <div class="grid2">
         <div>
@@ -598,8 +598,10 @@
       <div id="learn-cards"></div>
 
       <h3>明细</h3>
-      <label class="fld" for="learn-sel">选择题库（人）</label>
-      <select id="learn-sel"></select>
+      <div class="hidebank">
+        <label class="fld" for="learn-sel">选择题库（人）</label>
+        <select id="learn-sel"></select>
+      </div>
       <div id="learn-detail" style="margin-top:12px"></div>
       <div class="row">
         <button class="mini ghost" id="learn-refresh">刷新</button>
@@ -653,6 +655,7 @@
 (function () {
   var el = function (id) { return document.getElementById(id); };
   var state = null, banks = [], cur = 0, Q = [], tiers = [], devices = [];
+  var currentBankId = '';        // 3.22.0：顶栏「管理对象」（= 人 / 题库）当前选中项
   var wanInfo = {}, wanSkew = 0, cdRefreshPending = false;
   var schedInfo = {}, schMac = '', schChangePending = false;
   var WEEK = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
@@ -704,6 +707,63 @@
     fillFilters();
     renderList();
     syncImportBank();
+    syncPersonSelects(b.id);      // 新建/切换题库时，顶栏「管理对象」跟着变
+  }
+
+  // ---------- 管理对象（= 人 / 题库）：顶栏统一切换 ----------
+
+  function renderObjSel() {
+    var sel = el('obj-sel');
+    if (!sel) return;
+    sel.innerHTML = '';
+    banks.forEach(function (b) {
+      var o = document.createElement('option');
+      o.value = b.id;
+      o.textContent = b.name;
+      sel.appendChild(o);
+    });
+    if (currentBankId && banks.some(function (b) { return b.id === currentBankId; })) {
+      sel.value = currentBankId;
+    } else if (banks.length) {
+      sel.value = banks[0].id;
+    }
+  }
+
+  function syncPersonSelects(bid) {
+    currentBankId = bid || '';
+    try { localStorage.setItem('wifigate.current_bank', currentBankId); } catch (e) {}
+    ['obj-sel', 'bank-sel', 'ai-bank', 'auto-bank', 'learn-sel', 'imp-bank',
+     'dev-add-bank'].forEach(function (id) {
+      var sel = el(id);
+      if (!sel || !currentBankId) return;
+      if (Array.prototype.some.call(sel.options || [], function (o) {
+        return o.value === currentBankId;
+      })) {
+        sel.value = currentBankId;
+      }
+    });
+  }
+
+  // 切换管理对象：同步所有下拉 + 重渲染当前可见页面里和题库有关的内容
+  function setCurrentBank(bid) {
+    if (!banks.length) return;
+    var b = banks.filter(function (x) { return x.id === bid; })[0] || banks[0];
+    var idx = banks.indexOf(b);
+    cur = idx;
+    pickBank(idx, true);          // 题库页内容（隐藏时也无副作用，纯本地渲染）
+    if (el('tab-auto').style.display !== 'none' && typeof autoData !== 'undefined' &&
+        autoData) {
+      renderAutoRuleForm(b.id);
+    }
+    if (el('tab-learning').style.display !== 'none') loadLearning(b.id);
+    if (el('tab-devices').style.display !== 'none') renderAddDevicePicker();
+  }
+
+  function initialBankId() {
+    var saved = '';
+    try { saved = localStorage.getItem('wifigate.current_bank') || ''; } catch (e) {}
+    if (saved && banks.some(function (b) { return b.id === saved; })) return saved;
+    return banks.length ? banks[0].id : '';
   }
 
   function renderBankSel() {
@@ -971,8 +1031,11 @@
     el('upd-auto-apply').checked = !!state.settings.update_auto_apply;
     loadUpdate();
     renderBankSel();
-    var idx = banks.map(function (b) { return b.id; }).indexOf(curId);
-    pickBank(idx < 0 ? 0 : idx, true);
+    renderObjSel();
+    var _want = initialBankId() || curId;
+    var _idx = banks.map(function (b) { return b.id; }).indexOf(_want);
+    pickBank(_idx < 0 ? 0 : _idx, true);
+    setCurrentBank(banks[_idx < 0 ? 0 : _idx] ? banks[_idx < 0 ? 0 : _idx].id : _want);
   }
 
   function loadState() {
@@ -1399,6 +1462,12 @@
     fillSel('dev-add-bank', (banks || []).map(function (b) {
       return { id: b.id, name: b.name + (b.enabled ? '' : '（已停用）') };
     }), 'id', 'name');
+    // 默认加给「顶栏当前选中的管理对象」
+    if (currentBankId && el('dev-add-bank')) {
+      var has = Array.prototype.some.call(el('dev-add-bank').options || [],
+        function (o) { return o.value === currentBankId; });
+      if (has) el('dev-add-bank').value = currentBankId;
+    }
   }
 
   function addControlledDevice() {
@@ -2144,13 +2213,10 @@
     if (name === 'quiz') syncImportBank();
     if (name === 'ai') loadAiConfig();
     if (name === 'auto') loadAutoBank();
-    if (name === 'learning') loadLearning(el('learn-sel').value || '');
-    el('open-settings').className = name === 'settings' ? 'mini' : 'mini ghost';
-    // 顶栏的「管理对象」下拉跟页签保持同步（设置页不属于管理对象，下拉保持上一次选择）
-    if (el('obj-sel') && ['quiz', 'ai', 'auto', 'learning', 'devices']
-        .indexOf(name) >= 0) {
-      el('obj-sel').value = name;
+    if (name === 'learning') {
+      loadLearning(currentBankId || el('learn-sel').value || '');
     }
+    el('open-settings').className = name === 'settings' ? 'mini' : 'mini ghost';
   }
 
   el('login-btn').onclick = function () {
@@ -2162,7 +2228,7 @@
   el('pwd').onkeydown = function (e) { if (e.key === 'Enter') el('login-btn').click(); };
   el('logout').onclick = function () { api('/api/admin/logout', {}).then(showLogin); };
   el('open-settings').onclick = function () { switchTab('settings'); };
-  el('obj-sel').onchange = function () { switchTab(el('obj-sel').value); };
+  el('obj-sel').onchange = function () { setCurrentBank(el('obj-sel').value); };
   ['quiz', 'ai', 'auto', 'learning', 'devices'].forEach(function (n) {
     el('tabbtn-' + n).onclick = function () { switchTab(n); };
   });
