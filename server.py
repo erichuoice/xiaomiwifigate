@@ -24,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 import admin_api
+import auto_bank
 import learning
 import router_adapter
 import schedule
@@ -43,6 +44,8 @@ MAC_CACHE_TTL = 120
 REBLOCK_INTERVAL = 20
 UPDATE_CHECK_INTERVAL = 6 * 3600   # 自动检查更新：每 6 小时
 UPDATE_FIRST_DELAY = 120           # 启动后先让业务跑稳，再去看有没有新版本
+AUTO_BANK_INTERVAL = 30            # 定时自动出题：每 30 秒看一眼是否到点
+AUTO_BANK_FIRST_DELAY = 20         # 启动后先让业务跑稳
 
 _log_lock = threading.Lock()
 _grants_lock = threading.Lock()
@@ -504,6 +507,30 @@ def update_worker():
         except Exception as exc:  # 守护线程不能死
             log("UPDATE-WORKER err=%s" % exc)
         time.sleep(UPDATE_CHECK_INTERVAL)
+
+
+def auto_bank_worker():
+    """无人值守出题：到点就生成一批新题并入库，全程不需要人工操作。
+
+    配置在 state/auto_bank.json；停机期间不补跑，失败也推进下次时间，
+    单次执行与后台「立即试跑」共用锁，不会并发写题库。
+    """
+    time.sleep(AUTO_BANK_FIRST_DELAY)
+    while True:
+        try:
+            if auto_bank.due(auto_bank.load()):
+                rec = auto_bank.run_once(STORE, "schedule")
+                if rec.get("ok"):
+                    log("AUTO-BANK %s 生成 %s 道，入库 %s 道（重复 %s），淘汰旧题 %s 道，"
+                        "题库 %s 现有 %s 道，用时 %ss"
+                        % (rec["bank_name"], rec["generated"], rec["added"],
+                           rec["skipped"], rec["pruned"], rec["source"],
+                           rec["total"], rec["latency"]))
+                else:
+                    log("AUTO-BANK-FAIL %s" % rec.get("detail"))
+        except Exception as exc:  # 守护线程不能死
+            log("AUTO-BANK-WORKER err=%s" % exc)
+        time.sleep(AUTO_BANK_INTERVAL)
 
 
 # ---- HTTP ----
@@ -1100,6 +1127,7 @@ def main():
     cfg = STORE.snapshot()["server"]
     threading.Thread(target=reblock_worker, daemon=True).start()
     threading.Thread(target=update_worker, daemon=True).start()
+    threading.Thread(target=auto_bank_worker, daemon=True).start()
     server = ThreadingHTTPServer((cfg["host"], int(cfg["port"])), Handler)
     server.daemon_threads = True
 

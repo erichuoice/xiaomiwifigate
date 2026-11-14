@@ -24,6 +24,7 @@ import urllib.request
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 import ai_bank  # noqa: E402
+import auto_bank  # noqa: E402
 import learning  # noqa: E402
 import progress  # noqa: E402
 import router_adapter  # noqa: E402
@@ -339,7 +340,7 @@ def main():
 
     # 3.6.0：自检会触碰 AI 配置与学情文件，跑完按原始字节还原
     extra_paths = {}
-    for _name in ("ai.json", "learning.json"):
+    for _name in ("ai.json", "learning.json", "auto_bank.json"):
         _p = os.path.join(BASE, "state", _name)
         extra_paths[_p] = (open(_p, "rb").read()
                            if os.path.exists(_p) else None)
@@ -666,6 +667,73 @@ def main():
     code, res = admin("/api/admin/learning/clear", {})
     check("清空学情缺少 MAC 被拒绝", code == 400)
 
+    # ---- 3.7.0 定时自动出题接口（全程离线，不联网、不消耗 Key）----
+    code, res = admin("/api/admin/auto-bank")
+    ab_status = res.get("status") or {}
+    check("自动出题接口返回配置/状态/题库/选项",
+          code == 200 and res.get("ok") is True and
+          all(k in res for k in ("config", "status", "banks", "options")) and
+          bool((res.get("options") or {}).get("stages")))
+    check("状态卡含下次执行与自动题统计",
+          all(k in ab_status for k in
+              ("next_run_text", "last_run_text", "auto_questions", "has_key")))
+    code, res = admin("/api/admin/auto-bank", {"time": "99:99"})
+    check("非法执行时间被后台拒绝",
+          code == 400 and "时间" in (res.get("detail") or ""))
+
+    code, before = admin("/api/admin/state")
+    bank_before = next((b for b in before.get("banks", [])
+                        if b["id"] == ai_bank_id), {})
+    manual_before = len([q for q in bank_before.get("questions", [])
+                         if not str(q.get("source") or "").startswith("auto-")])
+
+    code, res = admin("/api/admin/auto-bank", {
+        "enabled": False, "frequency": "daily", "time": "03:00",
+        "count": 3, "mode": "offline", "max_auto": 5,
+        "bank_id": ai_bank_id, "stage": "小学", "grade": "四年级",
+        "subject": "数学", "topics": "",
+        "mix": {"single": 1, "multi": 1, "judge": 1},
+    })
+    check("保存自动出题设置（保持关闭，避免自检期间被定时触发）",
+          code == 200 and (res.get("config") or {}).get("count") == 3 and
+          (res.get("config") or {}).get("max_auto") == 5 and
+          (res.get("config") or {}).get("enabled") is False)
+
+    added_total, run_ok = 0, True
+    for _i in range(3):
+        code, res = admin("/api/admin/auto-bank/run", {})
+        run = res.get("run") or {}
+        run_ok = run_ok and code == 200 and bool(run.get("ok"))
+        added_total += int(run.get("added") or 0)
+    check("立即试跑自动生成并直接入库，无需人工勾选题",
+          run_ok and added_total >= 3, "累计入库 %s 道" % added_total)
+
+    code, after = admin("/api/admin/state")
+    bank_after = next((b for b in after.get("banks", [])
+                       if b["id"] == ai_bank_id), {})
+    qs_after = bank_after.get("questions", [])
+    autos = [q for q in qs_after
+             if str(q.get("source") or "").startswith("auto-")]
+    manual_after = len(qs_after) - len(autos)
+    check("自动题带来源标记且不超过上限",
+          0 < len(autos) <= 5, "%s 道自动题" % len(autos))
+    check("淘汰自动题不会动内置题 / 手动入库的题",
+          manual_after == manual_before,
+          "人工题 %s → %s" % (manual_before, manual_after))
+
+    code, res = admin("/api/admin/auto-bank")
+    ab_runs = (res.get("config") or {}).get("runs") or []
+    check("每次执行都留下可追溯的运行记录",
+          len(ab_runs) >= 3 and
+          all(r.get("reason") == "manual" and r.get("at_text") and
+              "added" in r for r in ab_runs[:3]), "%s 条" % len(ab_runs))
+    check("运行记录最多保留 20 条", len(ab_runs) <= 20)
+    code, res = admin("/api/admin/auto-bank/clear", {})
+    check("可清空运行记录", code == 200 and
+          (res.get("config") or {}).get("runs") == [])
+    # 自检结束前明确关闭，避免残留一个开启的定时任务
+    admin("/api/admin/auto-bank", {"enabled": False})
+
     # ---- 还原 ----
     code, res = admin("/api/admin/backup/import", {"data": orig_backup})
     check("备份整份还原", code == 200 and res.get("ok") is True,
@@ -809,9 +877,11 @@ def main():
     # ---- AI 出题 / 学情离线单元测试（用临时目录，不碰真实 state、不联网）----
     tmp = tempfile.mkdtemp(prefix="wg-ai-selftest-")
     old_l, old_a = (learning.STATE, learning.PATH), (ai_bank.STATE, ai_bank.CONFIG_PATH)
+    old_ab = (auto_bank.STATE, auto_bank.PATH)
     try:
         learning.STATE, learning.PATH = tmp, os.path.join(tmp, "learning.json")
         ai_bank.STATE, ai_bank.CONFIG_PATH = tmp, os.path.join(tmp, "ai.json")
+        auto_bank.STATE, auto_bank.PATH = tmp, os.path.join(tmp, "auto_bank.json")
 
         def ts(y, m, d, h=10):
             return time.mktime((y, m, d, h, 0, 0, 0, 0, -1))
@@ -928,9 +998,49 @@ def main():
             {"count": 6, "mode": "offline", "subject": "数学"},
             {"weak": [{"topic": "分数"}], "wrong": []})
         check("按设备弱项生成专项题", len(dev_gen["questions"]) == 6)
+
+        # ---- 3.7.0 定时自动出题：时间与配置纯函数（广州 UTC+8）----
+        from datetime import datetime
+        ab_now = datetime(2026, 11, 14, 11, 0,
+                          tzinfo=auto_bank.TZ).timestamp()
+        check("定时按广州时间显示", auto_bank.fmt_ts(ab_now) == "2026-11-14 11:00")
+        ab_daily = auto_bank.normalize({"enabled": True, "time": "03:00"})
+        ab_next = auto_bank.next_run_at(ab_daily, ab_now)
+        ab_dt = datetime.fromtimestamp(ab_next, auto_bank.TZ)
+        check("每天 03:00 的下次执行是次日凌晨",
+              (ab_dt.year, ab_dt.month, ab_dt.day, ab_dt.hour, ab_dt.minute)
+              == (2026, 11, 15, 3, 0), auto_bank.fmt_ts(ab_next))
+        check("到点后再排下一次顺延一天",
+              auto_bank.next_run_at(ab_daily, ab_next) - ab_next == 86400)
+        ab_iv = auto_bank.normalize(
+            {"enabled": True, "frequency": "interval", "interval_hours": 6})
+        check("每隔 N 小时的下次执行",
+              auto_bank.next_run_at(ab_iv, ab_now) - ab_now == 6 * 3600)
+        check("未启用时没有下次执行时间",
+              auto_bank.next_run_at(auto_bank.normalize({"enabled": False}),
+                                   ab_now) == 0)
+        try:
+            auto_bank.normalize({"time": "99:99"})
+            check("非法执行时间被拒绝", False)
+        except auto_bank.AutoBankError:
+            check("非法执行时间被拒绝", True)
+        auto_bank.save({"enabled": True, "frequency": "daily", "time": "03:00"},
+                       ab_now)
+        n1 = auto_bank.load()["next_run"]
+        auto_bank.save({"count": 20}, ab_now)
+        check("只改题量不重置计时", auto_bank.load()["next_run"] == n1)
+        auto_bank.save({"time": "04:30"}, ab_now)
+        check("改执行时间才重排计时", auto_bank.load()["next_run"] != n1)
+        auto_bank.save({"enabled": False}, ab_now)
+        check("关闭后清除下次执行时间", auto_bank.load()["next_run"] == 0)
+        check("到点判定只在到期后触发",
+              auto_bank.due({"enabled": True, "next_run": ab_now - 1}, ab_now)
+              and not auto_bank.due({"enabled": True,
+                                     "next_run": ab_now + 1}, ab_now))
     finally:
         learning.STATE, learning.PATH = old_l
         ai_bank.STATE, ai_bank.CONFIG_PATH = old_a
+        auto_bank.STATE, auto_bank.PATH = old_ab
         shutil.rmtree(tmp, ignore_errors=True)
 
     # ---- 3.6.0 前端静态检查 ----
@@ -958,6 +1068,31 @@ def main():
           ".qcard.open > .qbody" in admin_html)
     check("AI 预览题目正文强制可见",
           bool(re.search(r"\.qprev\s+\.qbody\s*\{[^}]*display\s*:\s*block", admin_html)))
+
+    # ---- 3.7.0 定时自动出题 ----
+    with open(os.path.join(BASE, "server.py"), encoding="utf-8") as f:
+        server_html = f.read()
+    with open(os.path.join(BASE, "Dockerfile"), encoding="utf-8") as f:
+        dockerfile = f.read()
+    check("服务端启动定时自动出题守护线程",
+          "def auto_bank_worker" in server_html and
+          "target=auto_bank_worker" in server_html and
+          "auto_bank.due(" in server_html)
+    check("新模块已纳入镜像", "auto_bank.py" in dockerfile)
+    check("后台有「自动出题」页签与完整设置项",
+          all(w in admin_html for w in
+              ("tabbtn-auto", "tab-auto", "auto-enabled", "auto-frequency",
+               "auto-time", "auto-interval", "auto-count", "auto-bank",
+               "auto-mode", "auto-max", "auto-run", "auto-runs")))
+    check("后台调用自动出题配置/试跑/清空接口",
+          all(w in admin_html for w in
+              ("/api/admin/auto-bank/run", "/api/admin/auto-bank/clear",
+               "saveAutoBank", "runAutoBank", "refreshAutoStatus")))
+    ab_refresh = re.search(r"function refreshAutoStatus\(\)[\s\S]*?\n  }",
+                           admin_html)
+    check("自动出题定时刷状态不覆盖正在编辑的表单",
+          bool(ab_refresh) and "renderAutoBank" not in ab_refresh.group(0) and
+          "renderAutoStatus" in ab_refresh.group(0))
 
     for _p, _raw in extra_paths.items():
         try:

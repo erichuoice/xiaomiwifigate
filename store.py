@@ -745,6 +745,15 @@ class Store:
 
     # ---- 导入 / 导出 ----
 
+    @staticmethod
+    def _fit_tiers(tiers, total):
+        """题库变大/变小后，收掉已答不到的档位，至少保留一档。"""
+        out = [t for t in tiers if t["questions"] <= total]
+        if not out:
+            out = [{"questions": min(3, max(1, total)),
+                    "minutes": (tiers[0]["minutes"] if tiers else 60)}]
+        return out
+
     def apply_questions(self, bank_id, questions, mode="append"):
         """把一批题目并入指定题库：append 按题干去重追加 / replace 覆盖。"""
         clean = validate_questions(questions)
@@ -770,15 +779,44 @@ class Store:
                     merged.append(q)
                     added += 1
             # 题库变小后，超出范围的档位要收掉，否则永远答不到那个题数
-            tiers = [t for t in target["tiers"] if t["questions"] <= len(merged)]
-            if not tiers:
-                tiers = [{"questions": min(3, len(merged)),
-                          "minutes": target["tiers"][0]["minutes"]}]
+            tiers = self._fit_tiers(target["tiers"], len(merged))
             target["questions"] = merged
             target["tiers"] = tiers
             self._write(self._runtime)
         return {"added": added, "total": len(merged),
                 "skipped": len(clean) - added, "tiers": tiers}
+
+    def prune_auto_questions(self, bank_id, keep):
+        """只淘汰「定时自动出题」加进来的题（source 以 auto- 开头）中最旧的，
+        内置题、手动预览入库的题一律不动；返回实际删掉的道数。
+
+        定时任务长期运行时题库会无限膨胀，用它把自动题维持在上限以内。
+        """
+        try:
+            keep = int(keep)
+        except (TypeError, ValueError):
+            return 0
+        if keep < 0:
+            return 0
+        with self._lock:
+            target = next((b for b in self._runtime["banks"]
+                           if b["id"] == bank_id), None)
+            if not target:
+                return 0
+            auto_idx = [i for i, q in enumerate(target["questions"])
+                        if str(q.get("source") or "").startswith("auto-")]
+            drop = len(auto_idx) - keep
+            if drop <= 0:
+                return 0
+            gone = set(auto_idx[:drop])
+            merged = [q for i, q in enumerate(target["questions"])
+                      if i not in gone]
+            if not merged:                 # 绝不把题库删空，答不了题
+                return 0
+            target["questions"] = merged
+            target["tiers"] = self._fit_tiers(target["tiers"], len(merged))
+            self._write(self._runtime)
+            return drop
 
     def restore_builtin(self, bank_id, mode="replace"):
         """把内置题库灌进指定题库；题库名含「小学/初中」时只灌该学段。"""

@@ -11,6 +11,7 @@ import time
 from urllib.parse import parse_qs, urlparse
 
 import ai_bank
+import auto_bank
 import importer
 import learning
 import progress
@@ -362,5 +363,40 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
             return 400, {"ok": False, "detail": "请指定设备 MAC"}, None
         learning.clear(mac)
         return 200, {"ok": True}, None
+
+    # ---- 定时自动出题（3.7.0）----
+    if path.startswith("/api/admin/auto-bank"):
+        def payload():
+            return {"ok": True, "config": auto_bank.load(),
+                    "status": auto_bank.status(st),
+                    "options": {"stages": ai_bank.STAGES,
+                                "grades": ai_bank.GRADES,
+                                "subjects": ai_bank.SUBJECTS},
+                    "banks": [{"id": b["id"], "name": b["name"],
+                               "questions": len(b["questions"])}
+                              for b in st.banks()]}
+
+        if path == "/api/admin/auto-bank" and method == "GET":
+            return 200, payload(), None
+
+        if path == "/api/admin/auto-bank" and method == "POST":
+            try:
+                auto_bank.save(_body(raw))
+            except auto_bank.AutoBankError as exc:
+                return 400, {"ok": False, "detail": str(exc)}, None
+            return 200, payload(), None
+
+        if path == "/api/admin/auto-bank/run" and method == "POST":
+            try:
+                rec = auto_bank.run_once(st, "manual")
+            except auto_bank.AutoBankError as exc:
+                return 409, {"ok": False, "detail": str(exc)}, None
+            return 200, {"ok": rec.get("ok", False), "run": rec,
+                         "status": auto_bank.status(st),
+                         "detail": rec.get("detail")}, None
+
+        if path == "/api/admin/auto-bank/clear" and method == "POST":
+            auto_bank.clear_runs()
+            return 200, payload(), None
 
     return 404, {"ok": False, "detail": "接口不存在"}, None

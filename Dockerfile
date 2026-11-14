@@ -8,7 +8,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-COPY server.py router_adapter.py probe_miwifi.py selftest.py store.py admin_api.py importer.py docker-entrypoint.py simulate_device.py updater.py gatectl.py schedule.py ai_bank.py learning.py progress.py ./
+COPY server.py router_adapter.py probe_miwifi.py selftest.py store.py admin_api.py importer.py docker-entrypoint.py simulate_device.py updater.py gatectl.py schedule.py ai_bank.py learning.py progress.py auto_bank.py ./
 COPY question_bank.json VERSION ./
 COPY static/ ./static/
 # 只把「示例配置」打进镜像；真实 config.json（含管理密码）由 docker-compose 挂载，
