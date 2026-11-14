@@ -472,7 +472,8 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
                 "total": a["total"], "accuracy": a["accuracy"],
                 "difficulty": a["difficulty"], "target_star": a["target_star"],
                 "recent_accuracy": a["recent_accuracy"],
-                "rounds": a["rounds"], "last": a["last"],
+                "rounds": a["rounds"], "perfect": a["perfect"],
+                "last": a["last"],
                 "wrong_count": a["wrong_count"], "due_count": a["due_count"],
                 "weak": [w["topic"] for w in a["weak"][:3]],
             })
@@ -486,7 +487,8 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
                 "total": a["total"], "accuracy": a["accuracy"],
                 "difficulty": a["difficulty"], "target_star": a["target_star"],
                 "recent_accuracy": a["recent_accuracy"],
-                "rounds": a["rounds"], "last": a["last"],
+                "rounds": a["rounds"], "perfect": a["perfect"],
+                "last": a["last"],
                 "wrong_count": a["wrong_count"], "due_count": a["due_count"],
                 "weak": [w["topic"] for w in a["weak"][:3]],
             })

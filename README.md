@@ -76,7 +76,7 @@ python3 simulate_device.py --url http://<内网IP>:8080 \
         --password 管理密码 --mode wrong --rounds 3
 ```
 
-自检 350 项：
+自检 351 项：
 
 ```bash
 python3 selftest.py
@@ -101,7 +101,7 @@ host 模式下不写 `ports:`，端口由 `config.json` 决定。
 | `./gate.sh up` / `down` / `restart` | 启停 |
 | `./gate.sh status` / `logs` | 状态、健康检查、跟随日志 |
 | `./gate.sh check` | 配置与权限检查 |
-| `./gate.sh selftest` | 容器内 350 项全链路自检 |
+| `./gate.sh selftest` | 容器内 351 项全链路自检 |
 | `./gate.sh sim --mode correct --password xxx --tier 1` | 容器内模拟手机答题 |
 | `./gate.sh probe` | 只读探测路由器（不改规则） |
 | `./gate.sh dryrun` / `live` | 切换演练 / 真实放行 |
@@ -468,6 +468,10 @@ AI 出题（手动生成）和自动补题都直接沿用这些参数，不用�
 误伤，只剩勾选框看不到题。折叠样式现限定在题库卡片内，预览正文强制可见，
 并加了前端静态自检防止回归；升级后刷新 `/admin` 即可，题库与配置不受影响。）
 
+（`3.29.0`：**学习情况页去掉重复统计**。上方卡片是总览（正确率 / 近期正确率 / 出题难度 / 已答题 /
+轮次·全对 / 错题 / 待复习 / 弱项），下面「错题本与弱项」只放薄弱知识点明细和错题本，不再把同一组数字
+重复一遍；接口的汇总行补了 `perfect`（全对轮次）。自检 351 项。）
+
 （`3.28.0`：**修复「顶栏选沈旻敬、自动补题却显示沈裕童」**。原因是隐藏的自动出题题库下拉里残留旧值，
 `currentAutoBank()` 优先读了下拉而不是顶栏管理对象，导致状态卡、运行记录、表单都落到另一个孩子；
 现在统一以顶栏「管理对象」为准（下拉只作兜底），切换对象即时刷新。顺带把「手动出题 / 自动补题」
@@ -698,7 +702,7 @@ POST /api/xqnetwork/set_band    → 总带宽（misystem/set_band 是假接口�
 | `static/admin.html` | 管理后台（题库 / AI 出题 / 学情 / 导入 / 设备 / 设置） |
 | `simulate_device.py` | 模拟手机走完整流程 |
 | `probe_miwifi.py` | 只读探测路由器（不改任何规则） |
-| `selftest.py` | 350 项全链路自检（含时段、进度、学情、出题纯函数单测与前后端约定检查） |
+| `selftest.py` | 351 项全链路自检（含时段、进度、学情、出题纯函数单测与前后端约定检查） |
 | `docker-entrypoint.py` `Dockerfile` `docker-compose.yml` `gate.sh` | 常驻部署与运维 |
 
 运行时文件（`state/`，会随容器持久化）：

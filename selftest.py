@@ -979,7 +979,8 @@ def main():
     code, res = admin("/api/admin/learning")
     check("学情接口按题库汇总（3.18.0 起按人，不按设备）",
           code == 200 and isinstance(res.get("banks"), list) and
-          all(b.get("bank_id") for b in res["banks"]))
+          all(b.get("bank_id") for b in res["banks"]) and
+          all(("rounds" in b and "perfect" in b) for b in res["banks"]))
     _lb = (res.get("banks") or [{}])[0].get("bank_id") or ""
     code, res = admin("/api/admin/learning?bank=" + _lb)
     detail = res.get("detail") or {}
@@ -2326,6 +2327,11 @@ def main():
           "function setLearnDownload(" in admin_html)
 
     # ---- 3.18.0 学情按题库（人）：界面与服务端 ----
+    check("学情页不再重复统计：卡片是总览，明细只放弱项与错题（3.29.0）",
+          "r.rounds || 0" in admin_html and "r.perfect || 0" in admin_html and
+          "<h3 style=\"margin-top:0\">薄弱知识点</h3>" in admin_html and
+          "<h3>错题本与弱项</h3>" in admin_html and
+          "这里不再重复一遍统计数字" in admin_html)
     check("学情页只显示当前管理对象（3.27.0）",
           "r.bank_id === currentBankId" in admin_html and
           "当前管理对象还没有答题记录" in admin_html and

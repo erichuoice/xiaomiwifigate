@@ -601,7 +601,7 @@
         轮到时会插入原题或同知识点的类似题；掌握度偏低的知识点会被多抽到（但一轮最多占一半）。</p>
       <div id="learn-cards"></div>
 
-      <h3>明细</h3>
+      <h3>错题本与弱项</h3>
       <div class="hidebank">
         <label class="fld" for="learn-sel">选择题库（人）</label>
         <select id="learn-sel"></select>
@@ -1935,6 +1935,8 @@
           : Math.round(r.recent_accuracy * 100) + '%') + '</b></span>' +
         '<span class="stat">出题难度<b>' + (r.target_star || 2) + '★</b></span>' +
         '<span class="stat">已答题<b>' + r.total + '</b></span>' +
+        '<span class="stat">轮次 / 全对<b>' + (r.rounds || 0) + ' / ' +
+        (r.perfect || 0) + '</b></span>' +
         '<span class="stat">错题<b>' + r.wrong_count + '</b></span>' +
         '<span class="stat">待复习<b>' + r.due_count + '</b></span></div>' +
         '<div>弱项：' + ((r.weak || []).length
@@ -1952,18 +1954,10 @@
   function renderLearnDetail(a) {
     var box = el('learn-detail');
     if (!a || !a.total) {
-      box.innerHTML = '<p class="hint">这个题库还没有答题记录。</p>'; return;
+      box.innerHTML = '<p class="hint">当前管理对象还没有答题记录。</p>'; return;
     }
-    var html = '<div class="stat">正确率<b>' +
-      (a.accuracy === null ? '—' : Math.round(a.accuracy * 100) + '%') + '</b></div>' +
-      '<div class="stat">近期正确率<b>' +
-      (a.recent_accuracy == null ? '—' : Math.round(a.recent_accuracy * 100) + '%') +
-      '</b></div>' +
-      '<div class="stat">出题难度<b>' + (a.target_star || 2) + '★</b></div>' +
-      '<div class="stat">答题数<b>' + a.total + '</b></div>' +
-      '<div class="stat">轮次 / 全对<b>' + a.rounds + ' / ' + a.perfect + '</b></div>' +
-      '<div class="stat">错题 / 待复习<b>' + a.wrong_count + ' / ' + a.due_count + '</b></div>' +
-      '<div style="clear:both"></div><h3 style="margin-top:6px">薄弱知识点</h3>';
+    // 3.29.0：上面的卡片已经是总览，这里不再重复一遍统计数字，只放弱项与错题本
+    var html = '<h3 style="margin-top:0">薄弱知识点</h3>';
     html += (a.weak || []).length ? a.weak.map(function (w) {
       return '<div class="wrong-line">' + escHtml(w.topic) + ' · 正确率 ' +
         Math.round(w.accuracy * 100) + '%（' + w.right + '/' + w.samples + '）· 掌握度 ' +
