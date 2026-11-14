@@ -76,7 +76,7 @@ python3 simulate_device.py --url http://<内网IP>:8080 \
         --password 管理密码 --mode wrong --rounds 3
 ```
 
-自检 288 项：
+自检 289 项：
 
 ```bash
 python3 selftest.py
@@ -101,7 +101,7 @@ host 模式下不写 `ports:`，端口由 `config.json` 决定。
 | `./gate.sh up` / `down` / `restart` | 启停 |
 | `./gate.sh status` / `logs` | 状态、健康检查、跟随日志 |
 | `./gate.sh check` | 配置与权限检查 |
-| `./gate.sh selftest` | 容器内 288 项全链路自检 |
+| `./gate.sh selftest` | 容器内 289 项全链路自检 |
 | `./gate.sh sim --mode correct --password xxx --tier 1` | 容器内模拟手机答题 |
 | `./gate.sh probe` | 只读探测路由器（不改规则） |
 | `./gate.sh dryrun` / `live` | 切换演练 / 真实放行 |
@@ -403,6 +403,8 @@ python3 gatectl.py on  huo-2     # 放行，不给分钟数 = 永久
 误伤，只剩勾选框看不到题。折叠样式现限定在题库卡片内，预览正文强制可见，
 并加了前端静态自检防止回归；升级后刷新 `/admin` 即可，题库与配置不受影响。）
 
+（`3.14.2` 修复：后台设备页点「限速」原来**直接套题库默认值就限速**，家长没机会选速度（默认 50 KB/s 不足 1 Mbps，被路由器按最小 1 Mbps 生效，体感就是「一下限死了」）；现改为先弹窗让你填限速值——默认带出当前实际限速值（没有则带题库默认），弹窗里写清 KB/s↔Mbps 换算（125 ≈ 1 Mbps，250 ≈ 2 Mbps）和「路由器最小 1 Mbps」的说明，留空或填 0 = 解除限速，取消则不动；限完提示实际生效速度（不足 125 KB/s 会注明「按路由器最小 1 Mbps 生效」）。自检 288→289 项。）
+
 （`3.14.1` 修复：限速功能实测三处缺陷——① 路由器 `qos_limits` 接口的单位是 **Mbps** 而不是 KB/s，原实现填 250 会被当成 250 Mbps，限速形同虚设；现改为在适配层 KB/s↔Mbps 自动换算（250 KB/s → 2 Mbps，实际生效 1.6 Mbps），路由器只收整数 Mbps、实际生效再打 8 折，最小 1 Mbps（约 100 KB/s）。② QoS 关闭时 `qos_limits` 返回 code:0 但**静默无效**，而 `ensure_qos` 写了没人调用；现改为 `set_limit` 前自动执行 ensure_qos（开 QoS + mode=3 + band 为 0 时补设总带宽，走真接口 `xqnetwork/set_band`，`misystem/set_band` 实测是假接口）。③ 手动解除限速原来按题库模式走，block 题库设备的限速会漏清；现改为直接清零 + 放行记录置永久，断网模式的放行也顺手清残留限速。后台「限制方式」的提示文字同步更新，自检 279→288 项。）
 
 （`3.14.0`：新增题库级「限制方式」——答完到点、禁止时段或配额用完时，可以不断网，改为把该设备**限速**到设定值（默认 50 KB/s），孩子还能上网但很慢，答对题自动恢复全速；后台设备页按钮随模式切换（断网/放行 ↔ 限速/解除限速），新增手动限速接口。题库级配置：`limit_mode`（block/throttle）+ `throttle_kbps`，老题库升级自动继承默认「直接断网」，行为不变。）
@@ -557,7 +559,7 @@ POST /api/xqnetwork/set_band    → 总带宽（misystem/set_band 是假接口�
 | `static/admin.html` | 管理后台（题库 / AI 出题 / 学情 / 导入 / 设备 / 设置） |
 | `simulate_device.py` | 模拟手机走完整流程 |
 | `probe_miwifi.py` | 只读探测路由器（不改任何规则） |
-| `selftest.py` | 288 项全链路自检（含时段、进度、学情、出题纯函数单测与前后端约定检查） |
+| `selftest.py` | 289 项全链路自检（含时段、进度、学情、出题纯函数单测与前后端约定检查） |
 | `docker-entrypoint.py` `Dockerfile` `docker-compose.yml` `gate.sh` | 常驻部署与运维 |
 
 运行时文件（`state/`，会随容器持久化）：

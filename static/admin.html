@@ -310,7 +310,8 @@
       <h2>设备归属与控制</h2>
       <p class="hint">给每台设备选一套题库（选「不受控」的设备不会自动断网）。
         每台设备右侧都有控制按钮：限制方式为「直接断网」的题库显示「断网 / 放行」，
-        为「限速」的题库显示「限速 / 解除限速」——限速只降低速度、不切断外网。
+        为「限速」的题库显示「限速 / 解除限速」——限速只降低速度、不切断外网，
+        <b>点「限速」会先弹出输入框让你填限速值</b>（默认带出当前值）。
         放行/解除限速可填分钟数（0 或留空 = 永久），到期自动恢复限制。
         <b>暂时放行的设备，名称旁会显示实时倒计时</b>（答题解锁同样显示），
         到点自动刷新；永久放行不显示倒计时。</p>
@@ -1188,7 +1189,7 @@
       bOff.style.cssText = 'padding:5px 10px;font-size:12.5px;margin-right:6px';
       bOff.textContent = lm ? '限速' : '断网';
       bOff.onclick = function () {
-        if (lm) { deviceLimit(d, Number(d.throttle_kbps) || 50); }
+        if (lm) { deviceLimitPrompt(d); }
         else { deviceWan(d, false); }
       };
       var bOn = document.createElement('button');
@@ -1226,6 +1227,29 @@
     }).catch(function () { toast('操作失败'); });
   }
 
+  // 手动限速前先弹窗让家长选速度（3.14.2）：
+  // 直接套题库默认值太粗暴——默认带出「当前实际限速值」（没有则用题库默认），
+  // 弹窗里写清 KB/s↔Mbps 换算和「路由器最小 1 Mbps」这个坑。
+  function deviceLimitPrompt(device) {
+    if (!device || !device.mac) {
+      toast('这台设备缺少 MAC，请刷新页面后重试');
+      return;
+    }
+    var cur = Number((device.limit || {}).down) || 0;
+    var def = cur || Number(device.throttle_kbps) || 50;
+    var tip = '把「' + (device.name || device.mac) + '」限速到多少 KB/s？\n\n'
+      + '125 ≈ 1 Mbps（路由器最小值，实际约 100 KB/s）\n'
+      + '250 ≈ 2 Mbps，500 ≈ 4 Mbps\n'
+      + '留空或填 0 = 解除限速';
+    var v = prompt(tip, String(def));
+    if (v === null) return;  // 点了取消：什么都不做
+    v = String(v).trim();
+    if (!v) { deviceLimit(device, 0); return; }
+    var kbps = parseInt(v, 10);
+    if (isNaN(kbps) || kbps < 0) { toast('请填 0 或正整数（单位 KB/s）'); return; }
+    deviceLimit(device, kbps);
+  }
+
   // 手动限速（0 = 解除限速）：走路由器 QoS，不切断外网
   function deviceLimit(device, kbps) {
     if (!device || !device.mac) {
@@ -1236,7 +1260,8 @@
       .then(function (res) {
       if (!requireAuth(res)) return;
       if (!res.data.ok) { toast(res.data.detail || '操作失败'); return; }
-      toast(kbps ? (device.name + ' 已限速到 ' + kbps + ' KB/s')
+      toast(kbps ? (device.name + ' 已限速到 ' + kbps + ' KB/s'
+                    + (kbps < 125 ? '（按路由器最小 1 Mbps 生效）' : ''))
                  : (device.name + ' 已解除限速'));
       refreshDevices();
     }).catch(function () { toast('操作失败'); });

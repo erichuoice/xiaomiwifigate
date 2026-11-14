@@ -1765,6 +1765,12 @@ def main():
           "/api/admin/device/limit" in admin_html and
           "bOff.textContent = lm ? '限速' : '断网'" in admin_html and
           "limit_mode === 'throttle'" in admin_html)
+    check("手动限速先弹窗让家长选速度（3.14.2）",
+          "function deviceLimitPrompt(" in admin_html and
+          "deviceLimitPrompt(d)" in admin_html and
+          "路由器最小值" in admin_html and
+          "按路由器最小 1 Mbps 生效" in admin_html,
+          "不能再直接套题库默认值就限速")
     check("答题页提示限速模式",
           "function limitText(t)" in index_html and
           "限速模式" in index_html and "解除限速" in index_html)
