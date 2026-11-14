@@ -6,10 +6,12 @@
 管理后台：     http://<NAS内网IP>:8080/admin
 
 答题流程（参考「题了个题」的逐题模式）：
-  GET  /api/quiz    返回本机所属题库、可选档位（答 N 题换 M 分钟）、剩余时间
+  GET  /api/quiz    返回本机所属题库、可选档位（答 N 题换 M 分钟）、剩余时间、放行规则
   POST /api/start   选一档开始作答，返回本轮第一题
   POST /api/answer  逐题判卷 → 返回对错、正确答案、解析，再给下一题
-  一轮全部答对才放行；有错则整轮重来（同一档位），并计入一次错误
+  判卷规则（3.11.0 起在后台可配）：
+    rate（默认）：答错当场在本轮追加题目，一轮结束正确率 ≥ 阈值（默认 80%）即放行
+    strict：一轮全部答对才放行；有错则整轮重来，并计入一次错误
 """
 
 import json
@@ -283,6 +285,16 @@ def is_correct(q, choices):
     except (TypeError, ValueError):
         return False
     return got == sorted(expected)
+
+
+def pass_rule():
+    """当前放行规则（3.11.0：后台可配的判卷方式），给前端展示用。"""
+    s = STORE.snapshot()["settings"]
+    return {
+        "mode": s.get("pass_mode") or "rate",
+        "rate": int(s.get("pass_rate_percent") or 80),
+        "add": int(s.get("wrong_add_questions") or 0),
+    }
 
 
 def locked_seconds(ip):
@@ -800,6 +812,7 @@ class Handler(BaseHTTPRequestHandler):
         base = {
             "ok": True, "ip": ip, "note": cfg["settings"]["note"],
             "mode": cfg["router"]["mode"], "locked_for": locked_seconds(ip),
+            "pass_rule": pass_rule(),
             "server_now": time.time(),
         }
         try:
@@ -1021,14 +1034,55 @@ class Handler(BaseHTTPRequestHandler):
             idx = sess["idx"]
             total = len(sess["questions"])
             results = list(sess["results"])
-            all_ok = all(results)
+
+        # ---- 3.11.0 正确率模式：答错当场在本轮末尾追加题目 ----
+        settings = STORE.snapshot()["settings"]
+        rule_mode = settings.get("pass_mode") or "rate"
+        rate_mode = rule_mode != "strict"
+        added = 0
+        if not ok and rate_mode:
+            add_n = int(settings.get("wrong_add_questions") or 0)
+            if add_n > 0:
+                try:
+                    used = {x["id"] for x in sess["questions"]}
+                    bank = STORE.bank(sess["bank_id"]) or {}
+                    pool = [x for x in (bank.get("questions") or [])
+                            if x["id"] not in used]
+                    if pool:
+                        want = min(add_n, len(pool))
+                        try:
+                            extra = learning.pick_questions(
+                                pool, sess["mac"], want)
+                        except Exception:
+                            extra = []
+                        if not extra:
+                            extra = random.sample(pool, want)
+                        with _mutex:
+                            sess["questions"].extend(extra)
+                            sess["ts"] = time.time()
+                            total = len(sess["questions"])
+                        added = len(extra)
+                except Exception as exc:  # 加题失败不影响判卷
+                    log("WRONG-ADD-FAIL ip=%s err=%s" % (ip, exc))
+
+        # 一轮结束的判卷：strict = 全对；rate = 正确率达标
+        correct_n = results.count(True)
+        accuracy = int(round(correct_n * 100.0 / total)) if total else 0
+        if idx >= total:
+            if rate_mode:
+                rate = int(settings.get("pass_rate_percent") or 80)
+                passed = correct_n * 100 >= rate * total
+            else:
+                passed = all(results)
+        else:
+            passed = False
 
         # 学情：逐题记入错题本 / 知识点掌握度，一轮结束记轮次。
         # 记录失败绝不能影响判卷与放行。
         try:
             learning.record_answer(sess["mac"], q, ok)
             if idx >= total:
-                learning.record_round(sess["mac"], all_ok)
+                learning.record_round(sess["mac"], passed)
         except Exception as exc:
             log("LEARNING-FAIL mac=%s err=%s" % (sess["mac"], exc))
 
@@ -1042,6 +1096,8 @@ class Handler(BaseHTTPRequestHandler):
             "results": results,
             "tier": sess["tier"],
             "bank": {"id": sess["bank_id"], "name": sess["bank_name"]},
+            "added_questions": added,
+            "pass_mode": rule_mode,
         }
 
         if idx < total:
@@ -1051,7 +1107,11 @@ class Handler(BaseHTTPRequestHandler):
 
         # 一轮结束
         feedback["done"] = True
-        if all_ok:
+        if rate_mode:
+            feedback["pass_rate_percent"] = int(
+                settings.get("pass_rate_percent") or 80)
+            feedback["accuracy_percent"] = accuracy
+        if passed:
             try:
                 rec = grant(ip, sess["mac"], sess["bank_id"],
                             sess["bank_name"], sess["minutes"])

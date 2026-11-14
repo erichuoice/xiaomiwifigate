@@ -237,7 +237,28 @@ def validate_settings(settings, current):
         raise StoreError("每日累计上限必须是数字")
     if not 0 <= cap <= MAX_MINUTES:
         raise StoreError("每日累计上限需在 0-%s 分钟之间（0 = 不限）" % MAX_MINUTES)
+    # ---- 3.11.0 放行规则：严格（全对）/ 正确率达标 ----
+    mode = str(settings.get("pass_mode",
+                             current.get("pass_mode", "rate"))).strip().lower()
+    if mode not in ("strict", "rate"):
+        raise StoreError("放行规则只能是 strict（全部答对）或 rate（正确率达标）")
+    try:
+        rate = int(settings.get("pass_rate_percent",
+                                 current.get("pass_rate_percent", 80)))
+    except (TypeError, ValueError):
+        raise StoreError("放行正确率阈值必须是数字")
+    if not 50 <= rate <= 100:
+        raise StoreError("放行正确率阈值需在 50-100 之间")
+    try:
+        add = int(settings.get("wrong_add_questions",
+                                current.get("wrong_add_questions", 2)))
+    except (TypeError, ValueError):
+        raise StoreError("答错加题数必须是数字")
+    if not 0 <= add <= 10:
+        raise StoreError("答错加题数需在 0-10 之间（0 = 不加题）")
     return {"note": note, "daily_cap_minutes": cap,
+            "pass_mode": mode, "pass_rate_percent": rate,
+            "wrong_add_questions": add,
             "update_auto_check": _flag(settings.get(
                 "update_auto_check", current.get("update_auto_check", True))),
             "update_auto_apply": _flag(settings.get(
@@ -495,6 +516,9 @@ class Store:
             "settings": {
                 "note": str(s.get("note", "")),
                 "daily_cap_minutes": int(s.get("daily_cap_minutes", 0) or 0),
+                "pass_mode": "rate",
+                "pass_rate_percent": 80,
+                "wrong_add_questions": 2,
                 "update_auto_check": bool(s.get("update_auto_check", True)),
                 "update_auto_apply": bool(s.get("update_auto_apply", False)),
             },

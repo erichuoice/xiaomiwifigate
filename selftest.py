@@ -3,7 +3,8 @@
 
 用 X-Forwarded-For 模拟设备（仅从 127.0.0.1 发起时生效），覆盖：
 多题库与设备归属 / 档位选择（答 N 题换 M 分钟）/ 逐题即时反馈 /
-一轮全对才放行 / 时长重新计时 / 每日上限 / 答错重来与锁定 /
+判卷规则（严格全对 + 正确率达标两种模式，3.11.0）/ 答错当场加题 /
+时长重新计时 / 每日上限 / 答错重来与锁定 /
 后台鉴权 / 题库校验 / 导入导出 / 备份恢复。
 
 测试会临时新建「自检题库」并改设置，结束时用备份接口整份还原。
@@ -54,6 +55,25 @@ TEST_BANK = {
          "star": 1},
         {"type": "single", "text": "自检题：6 × 7 = ?", "options": ["42", "36", "48"],
          "answer": 0, "explain": "6 × 7 = 42。", "stage": "小学", "subject": "数学",
+         "star": 1},
+        # 3.11.0：答错加题需要题库有富余题，扩到 8 道
+        {"type": "single", "text": "自检题：3 + 4 = ?", "options": ["7", "8", "9"],
+         "answer": 0, "explain": "3 + 4 = 7。", "stage": "小学", "subject": "数学",
+         "star": 1},
+        {"type": "single", "text": "自检题：9 - 5 = ?", "options": ["3", "4", "5"],
+         "answer": 1, "explain": "9 - 5 = 4。", "stage": "小学", "subject": "数学",
+         "star": 1},
+        {"type": "single", "text": "自检题：2 × 5 = ?", "options": ["10", "12", "14"],
+         "answer": 0, "explain": "2 × 5 = 10。", "stage": "小学", "subject": "数学",
+         "star": 1},
+        {"type": "single", "text": "自检题：12 ÷ 3 = ?", "options": ["3", "4", "6"],
+         "answer": 1, "explain": "12 ÷ 3 = 4。", "stage": "小学", "subject": "数学",
+         "star": 1},
+        {"type": "single", "text": "自检题：15 - 8 = ?", "options": ["6", "7", "8"],
+         "answer": 1, "explain": "15 - 8 = 7。", "stage": "小学", "subject": "数学",
+         "star": 1},
+        {"type": "single", "text": "自检题：4 × 4 = ?", "options": ["14", "16", "18"],
+         "answer": 1, "explain": "4 × 4 = 16。", "stage": "小学", "subject": "数学",
          "star": 1},
     ],
 }
@@ -209,6 +229,28 @@ def main():
     check("已过期返回 0", srv.minutes_left({"expire_at": now - 60}) == 0)
     check("今日累计按日期归零",
           srv.granted_today({"day": "2000-01-01", "today_minutes": 99}) == 0)
+
+    # ---- 3.11.0 放行规则单测（纯校验函数，不碰真实数据）----
+    s = store.validate_settings({}, {})
+    check("放行规则默认：正确率 80% / 每答错加 2 题",
+          s["pass_mode"] == "rate" and s["pass_rate_percent"] == 80 and
+          s["wrong_add_questions"] == 2)
+    s2 = store.validate_settings(
+        {"pass_mode": "strict"}, {"pass_rate_percent": 70,
+                                  "wrong_add_questions": 5})
+    check("未提交的放行规则字段沿用当前值",
+          s2["pass_mode"] == "strict" and s2["pass_rate_percent"] == 70 and
+          s2["wrong_add_questions"] == 5)
+    for name, patch in (("正确率阈值低于 50 被拒绝", {"pass_rate_percent": 40}),
+                       ("正确率阈值超过 100 被拒绝", {"pass_rate_percent": 101}),
+                       ("答错加题数为负被拒绝", {"wrong_add_questions": -1}),
+                       ("答错加题数超过 10 被拒绝", {"wrong_add_questions": 11}),
+                       ("未知的放行规则被拒绝", {"pass_mode": "随便填"})):
+        try:
+            store.validate_settings(patch, {})
+            check(name, False)
+        except store.StoreError:
+            check(name, True)
 
     # ---- 答题时段规则单测（纯函数、固定时间戳，不碰真实路由器）----
     # 2026-11-09 是周一，at(0)=周一、at(5)=周六、at(6)=周日
@@ -440,6 +482,14 @@ def main():
     code, res = start(9)
     check("非法档位被拒绝", code == 400, "HTTP %s" % code)
 
+    # ---- 3.11.0：默认判卷规则是「正确率放行」；本段先切回严格模式 ----
+    # 验证原有「全对才放行、答错整轮重来」的行为保持不变。
+    code, res = admin("/api/admin/settings", {"settings": {
+        "pass_mode": "strict", "daily_cap_minutes": orig_cap,
+        "note": orig_settings["note"]}})
+    check("后台可切回严格模式（全部答对才放行）",
+          code == 200 and (res.get("settings") or {}).get("pass_mode") == "strict")
+
     # ---- 逐题作答：答错重来 ----
     code, d = start(1)
     check("按档位出题（2 题档）", code == 200 and d.get("total") == 2,
@@ -512,6 +562,83 @@ def main():
           {"settings": {"daily_cap_minutes": orig_cap,
                         "note": orig_settings["note"]}})
 
+    # ---- 3.11.0 正确率放行：答错当场加题 + 达标放行 ----
+    code, res = admin("/api/admin/settings", {"settings": {
+        "pass_mode": "rate", "pass_rate_percent": 80,
+        "wrong_add_questions": 2, "daily_cap_minutes": orig_cap,
+        "note": orig_settings["note"]}})
+    check("切换到正确率放行（80% / 每答错加 2 题）",
+          code == 200 and (res.get("settings") or {}).get("pass_mode") == "rate"
+          and (res.get("settings") or {}).get("pass_rate_percent") == 80
+          and (res.get("settings") or {}).get("wrong_add_questions") == 2)
+
+    # 给自检题库加一个 5 题档，让「答错还能达标」有稀释空间
+    code, cur = admin("/api/admin/state")
+    tb = next((b for b in cur.get("banks") or []
+               if b.get("id") == test_bank.get("id")), {})
+    tb["tiers"] = (tb.get("tiers") or []) + [{"questions": 5, "minutes": 30}]
+    code, res = admin("/api/admin/bank", tb)
+    check("题库新增 5 题档位",
+          code == 200 and len((res.get("bank") or {}).get("tiers") or []) == 3)
+
+    code, info = admin("/api/quiz")
+    pr = info.get("pass_rule") or {}
+    check("答题页下发放行规则（模式/阈值/加题数）",
+          pr.get("mode") == "rate" and pr.get("rate") == 80 and pr.get("add") == 2)
+
+    right = answers_of(test_bank["id"])
+
+    # ① 答错当场加题：5 题档答错第 1 题 → 本轮 5 → 7 题，继续作答
+    code, d = start(2)
+    q1 = d.get("question") or {}
+    code, d = answer(q1["id"], wrong_pick(q1, right))
+    check("答错当场追加 2 题（本轮 5 → 7）",
+          d.get("ok") is True and d.get("done") is False and
+          d.get("added_questions") == 2 and d.get("total") == 7 and
+          bool(d.get("question")), "加 %s 题 / 共 %s 题"
+          % (d.get("added_questions"), d.get("total")))
+    last = play(d, right)
+    check("正确率 86% ≥ 80%，答错一题也能达标放行",
+          last.get("done") is True and last.get("all_correct") is True and
+          last.get("accuracy_percent") == 86 and last.get("minutes") == 30,
+          "正确率 %s%%" % last.get("accuracy_percent"))
+    check("达标放行同样按档位给时长",
+          bool(last.get("expire_at")) and
+          last.get("remaining_minutes") in (29, 30),
+          "剩余 %s 分钟" % last.get("remaining_minutes"))
+
+    # ② 不达标：2 题档答错 1 题 → 4 题里对 3 道 = 75% < 80%，需要重来
+    code, d = start(1)
+    q1 = d.get("question") or {}
+    code, d = answer(q1["id"], wrong_pick(q1, right))
+    check("小档位同样当场加题（2 → 4）",
+          d.get("done") is False and d.get("added_questions") == 2 and
+          d.get("total") == 4)
+    last = play(d, right)
+    check("75% < 80% 不算通过，需要重来",
+          last.get("done") is True and last.get("all_correct") is False and
+          last.get("accuracy_percent") == 75 and
+          last.get("pass_rate_percent") == 80 and last.get("pass_mode") == "rate",
+          "正确率 %s%% / 阈值 %s%%"
+          % (last.get("accuracy_percent"), last.get("pass_rate_percent")))
+
+    # ③ 边界：正确率恰好等于阈值也放行（≥ 判定）
+    code, res = admin("/api/admin/settings", {"settings": {
+        "pass_rate_percent": 75, "daily_cap_minutes": orig_cap,
+        "note": orig_settings["note"]}})
+    check("阈值可以调成 75", code == 200 and
+          (res.get("settings") or {}).get("pass_rate_percent") == 75)
+    code, d = start(1)
+    q1 = d.get("question") or {}
+    code, d = answer(q1["id"], wrong_pick(q1, right))
+    last = play(d, right)
+    check("正确率恰好达到阈值也放行（≥ 判定）",
+          last.get("all_correct") is True and last.get("accuracy_percent") == 75,
+          "正确率 %s%%" % last.get("accuracy_percent"))
+    admin("/api/admin/settings", {"settings": {
+        "pass_rate_percent": 80, "daily_cap_minutes": orig_cap,
+        "note": orig_settings["note"]}})
+
     # ---- 题库校验 ----
     bad = dict(TEST_BANK, id=test_bank.get("id"),
                tiers=[{"questions": 99, "minutes": 30}])
@@ -576,9 +703,17 @@ def main():
     code, res = start(0)
     check("不受控设备无法开始答题", code == 403, "HTTP %s" % code)
 
-    # ---- 答错次数锁定（放最后，会锁 60 秒） ----
+    # ---- 答错次数锁定（放最后，会锁 60 秒）----
     admin("/api/admin/bank/assign",
           {"mac": mac, "bank_id": test_bank.get("id")})
+    # 3.11.0：锁定语义按「整轮重来」验证，先切回严格模式；
+    # 前面正确率模式的用例已累计错误计数，这里清零保持用例独立。
+    admin("/api/admin/settings", {"settings": {
+        "pass_mode": "strict", "daily_cap_minutes": orig_cap,
+        "note": orig_settings["note"]}})
+    code, res = admin("/api/admin/unlock", {})
+    check("清零答题错误计数（后台一键解锁）",
+          code == 200 and res.get("ok") is True)
     limit = int(CFG["server"]["max_wrong_per_window"])
     right = answers_of(test_bank["id"])
     for i in range(limit):
@@ -1351,6 +1486,33 @@ def main():
     check("至少勾一个科目才允许出题/保存",
           admin_html.count("请至少勾选一个科目") >= 2,
           str(admin_html.count("请至少勾选一个科目")))
+
+    # ---- 3.11.0 放行规则（答错加题 + 正确率达标）----
+    check("后台设置页有放行规则三项（模式/阈值/加题）",
+          all(w in admin_html for w in
+              ('id="pass-mode"', 'id="pass-rate"', 'id="wrong-add"',
+               "pass_mode: el('pass-mode').value",
+               "pass_rate_percent: Number(el('pass-rate').value)",
+               "wrong_add_questions: Number(el('wrong-add').value)")))
+    check("判卷支持两种模式且默认正确率放行",
+          'value="rate">正确率达到阈值就放行' in admin_html and
+          'value="strict">一轮全部答对才放行' in admin_html)
+    check("服务端按模式判卷并下发加题信息",
+          "pass_mode" in server_html and "added_questions" in server_html and
+          "accuracy_percent" in server_html and
+          "wrong_add_questions" in server_html and
+          "correct_n * 100 >= rate * total" in server_html)
+    check("答错加题只挑本轮没出过的题",
+          "sess[\"bank_id\"]" in server_html and
+          "x[\"id\"] not in used" in server_html)
+    check("答题页展示加题提示与正确率结算",
+          "本轮加做" in index_html and "正确率" in index_html and
+          "本轮正确率" in index_html and
+          "passRuleText" in index_html and
+          "if (d.total) S.total = d.total" in index_html)
+    check("答题页档位说明按放行规则显示",
+          "pass_rule" in index_html and
+          "即可放行" in index_html)
 
     for _p, _raw in extra_paths.items():
         try:

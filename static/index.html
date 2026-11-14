@@ -364,6 +364,16 @@
     });
   }
 
+  function passRuleText() {
+    var rule = (S.info && S.info.pass_rule) || {};
+    if (rule.mode === 'strict')
+      return '一轮全部答对才生效，答错一道要重来。';
+    var rate = rule.rate || 80, add = rule.add || 0;
+    return (add > 0
+      ? '答错一题当场加做 ' + add + ' 题，'
+      : '答错不扣分也不加题，') + '本轮正确率达到 ' + rate + '% 就放行。';
+  }
+
   function renderTiers(t) {
     var box = el('tiers');
     box.innerHTML = '';
@@ -371,7 +381,8 @@
     el('pick-title').textContent = bankName ? bankName + ' · 选一个目标开始答题'
                                            : '选一个目标开始答题';
     var who = S.target ? '答对后将放行「' + label(t) + '」。' : '';
-    el('pick-desc').textContent = who + '一轮全部答对才生效，答错一道要重来。';
+    el('pick-desc').textContent = who + passRuleText();
+    var rule = (S.info && S.info.pass_rule) || {};
     (t.tiers || []).forEach(function (tier, i) {
       var b = document.createElement('button');
       b.type = 'button';
@@ -384,7 +395,9 @@
       var b1 = document.createElement('b');
       b1.textContent = tier.minutes === 0 ? '一直可以上网' : tier.minutes + ' 分钟';
       var s1 = document.createElement('span');
-      s1.textContent = tier.minutes === 0 ? '答对就长期有效' : '答对 ' + tier.questions + ' 道全部正确';
+      s1.textContent = tier.minutes === 0 ? '答对就长期有效'
+        : (rule.mode === 'strict' ? '答对 ' + tier.questions + ' 道全部正确'
+                                  : '正确率 ≥ ' + (rule.rate || 80) + '% 即可放行');
       txt.appendChild(b1); txt.appendChild(s1);
       var go = document.createElement('div');
       go.className = 'go';
@@ -711,10 +724,17 @@
 
       S.results = d.results || S.results;
       S.index = d.index;
+      if (d.total) S.total = d.total;   // 答错加题后本轮总数会变大
       showFeedback(d.correct, d.explain, d.answer);
       renderProgress();
 
       if (!d.done) {
+        if (d.added_questions > 0) {
+          var addNote = document.createElement('p');
+          addNote.textContent = '答错了，本轮加做 ' + d.added_questions +
+            ' 题，一共 ' + d.total + ' 题。';
+          el('feedback').appendChild(addNote);
+        }
         S.next = d.question;
         setMain('下一题', true);
         el('main').onclick = nextQuestion;
@@ -730,10 +750,19 @@
           ? '<p>到 ' + hhmm(d.expire_at) + ' 自动断开，到时再答一次即可。</p>' +
             '<div class="cd" id="cd"></div>'
           : '<p>不会再自动断开。</p>';
-        showPanel('ok', S.targetName ? '全部答对，「' + S.targetName + '」已放行'
-                                     : '全部答对，已放行',
+        var rateMode = d.pass_mode === 'rate';
+        var accLine = rateMode && d.accuracy_percent < 100
+          ? '<p style="margin-top:4px">本轮正确率 ' + d.accuracy_percent +
+            '%，达到 ' + d.pass_rate_percent + '% 的要求。</p>' : '';
+        showPanel('ok',
+          rateMode && d.accuracy_percent < 100
+            ? (S.targetName
+                ? '正确率 ' + d.accuracy_percent + '% 达标，「' + S.targetName + '」已放行'
+                : '正确率 ' + d.accuracy_percent + '% 达标，已放行')
+            : (S.targetName ? '全部答对，「' + S.targetName + '」已放行'
+                            : '全部答对，已放行'),
           '<div class="big">' + (d.minutes ? '+' + d.minutes + ' 分钟' : '已开网') + '</div>' +
-          '<p>' + esc(d.message || '') + '（' + leftText + '）</p>' + extra +
+          '<p>' + esc(d.message || '') + '（' + leftText + '）</p>' + accLine + extra +
           (d.today_minutes ? '<p style="margin-top:6px">今日累计获得 ' +
             d.today_minutes + ' 分钟。</p>' : ''));
         if (d.expire_at) startCountdown(d.expire_at, d.now);
@@ -742,9 +771,16 @@
 
       showQuiz(false);
       if (d.locked_for > 0) { startLock(d.locked_for); return; }
-      showPanel('no', '这一轮有错题',
-        '<p>答错 ' + (d.total - d.results.filter(Boolean).length) + ' 题，需要重新答一轮。' +
-        (d.remain > 0 ? '还剩 ' + d.remain + ' 次机会。' : '') + '</p>');
+      if (d.pass_mode === 'rate') {
+        showPanel('no', '这一轮没达标',
+          '<p>本轮正确率 ' + d.accuracy_percent + '%，需要 ≥ ' +
+            d.pass_rate_percent + '%，需要重新答一轮。' +
+            (d.remain > 0 ? '还剩 ' + d.remain + ' 次机会。' : '') + '</p>');
+      } else {
+        showPanel('no', '这一轮有错题',
+          '<p>答错 ' + (d.total - d.results.filter(Boolean).length) + ' 题，需要重新答一轮。' +
+            (d.remain > 0 ? '还剩 ' + d.remain + ' 次机会。' : '') + '</p>');
+      }
       setMain('再来一轮', true);
       el('main').onclick = function () { startTier(d.tier || 0); };
     }).catch(function () {

@@ -282,7 +282,28 @@
       <label class="fld" for="cap">每人每天最多获得多少分钟（0 = 不限）</label>
       <input id="cap" type="number" min="0" max="1440" value="0">
       <p class="hint" style="margin-top:10px">防止反复答题无限加时。到上限后答题会提示「今天额度已用完」。</p>
-      <label class="fld" for="note">答题页底部提示语</label>
+
+      <h2 style="margin-top:22px">放行规则</h2>
+      <label class="fld" for="pass-mode">怎样算答完一轮可以上网</label>
+      <select id="pass-mode">
+        <option value="rate">正确率达到阈值就放行（答错当场加题，默认）</option>
+        <option value="strict">一轮全部答对才放行（答错整轮重来）</option>
+      </select>
+      <div class="grid2">
+        <div>
+          <label class="fld" for="pass-rate">放行需要的正确率（50~100%）</label>
+          <input id="pass-rate" type="number" min="50" max="100" value="80">
+        </div>
+        <div>
+          <label class="fld" for="wrong-add">每答错一题，本轮追加几题（0~10，0 = 不加）</label>
+          <input id="wrong-add" type="number" min="0" max="10" value="2">
+        </div>
+      </div>
+      <p class="hint" style="margin-top:10px">例：阈值 80%、加 2 题 → 一轮 10 题答错 1 道，
+        本轮当场变 12 道，答完 11 道正确就是 92%，达到 80% 直接放行；
+        没达到才需要重来一轮。追加的题从本题库本轮还没出过的题里挑，答错越多做得越多。</p>
+
+      <label class="fld" for="note" style="margin-top:14px">答题页底部提示语</label>
       <textarea id="note" rows="3"></textarea>
       <div class="row"><button id="save-settings">保存设置</button></div>
 
@@ -852,6 +873,11 @@
       badge.className = 'badge';
     }
     el('cap').value = state.settings.daily_cap_minutes;
+    el('pass-mode').value = state.settings.pass_mode === 'strict' ? 'strict' : 'rate';
+    el('pass-rate').value = state.settings.pass_rate_percent != null
+      ? state.settings.pass_rate_percent : 80;
+    el('wrong-add').value = state.settings.wrong_add_questions != null
+      ? state.settings.wrong_add_questions : 2;
     el('note').value = state.settings.note || '';
     el('upd-auto').checked = state.settings.update_auto_check !== false;
     el('upd-auto-apply').checked = !!state.settings.update_auto_apply;
@@ -2058,6 +2084,9 @@
     api('/api/admin/settings', {
       settings: {
         daily_cap_minutes: Number(el('cap').value),
+        pass_mode: el('pass-mode').value,
+        pass_rate_percent: Number(el('pass-rate').value),
+        wrong_add_questions: Number(el('wrong-add').value),
         note: el('note').value,
         update_auto_check: el('upd-auto').checked,
         update_auto_apply: el('upd-auto-apply').checked
