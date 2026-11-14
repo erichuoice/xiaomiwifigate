@@ -361,8 +361,15 @@ def main():
     code, raw = call("/admin")
     check("管理后台可访问", code == 200 and "管理后台" in raw, "HTTP %s" % code)
     check("后台含断网/放行控制", "deviceWan" in raw and "已放行" in raw)
-    check("后台每台设备都有按钮",
-          "if (d.bank_id)" not in raw)
+    check("后台设备页只显示受控设备 + 顶部有添加入口",
+          "controlled = devices.filter(function (d) { return !!d.bank_id; })" in raw and
+          'id="dev-add"' in raw and 'id="dev-add-mac"' in raw and
+          'id="dev-add-bank"' in raw and 'id="dev-add-btn"' in raw and
+          "function renderAddDevicePicker(" in raw and
+          "function addControlledDevice(" in raw and
+          "/api/admin/bank/assign" in raw and
+          "添加受控设备" in raw,
+          "列表按 bank_id 过滤，顶部可添加")
 
     code, res = admin("/api/admin/state")
     check("未登录访问后台被拒", code == 401, "HTTP %s" % code)

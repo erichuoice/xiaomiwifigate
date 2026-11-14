@@ -308,8 +308,8 @@
     <!-- 设备 -->
     <div id="tab-devices" class="card" style="display:none">
       <h2>设备归属与控制</h2>
-      <p class="hint">给每台设备选一套题库（选「不受控」的设备不会自动断网）。
-        每台设备右侧都有控制按钮：限制方式为「直接断网」的题库显示「断网 / 放行」，
+      <p class="hint">下面只列<b>受题库控制的设备</b>（已经加进某个题库的）。
+        受控设备右侧有控制按钮：限制方式为「直接断网」的题库显示「断网 / 放行」，
         为「限速」的题库显示「限速 / 解除限速」——限速只降低速度、不切断外网，
         <b>点「限速」会先弹出输入框让你填限速值</b>（默认带出当前值）。
         放行/解除限速可填分钟数（0 或留空 = 永久），到期自动恢复限制。
@@ -318,8 +318,28 @@
       <p class="hint">设备名下方的「时段设置」可按周一～周日设定<b>允许答题放行的时间段</b>：
         时段外不能答题、设备保持断网，放行时长也会自动截到本时段结束。
         家长手动点「放行」属于临时破例，不受时段限制。</p>
+
+      <h2 style="margin-top:18px">添加受控设备</h2>
+      <p class="hint">从路由器设备列表里挑一台加进题库（也可以直接填 MAC，设备不在线也能加）；
+        加进题库后它就会出现在下面的列表里，参与答题与限制。
+        想解除管控，把下面列表里它的「答题题库」改回「不受控」即可。</p>
+      <div class="row" style="align-items:flex-end;gap:10px;flex-wrap:wrap">
+        <div style="flex:1;min-width:240px">
+          <label class="fld" for="dev-add">路由器里的设备（未被管控的）</label>
+          <select id="dev-add" style="width:100%"></select>
+        </div>
+        <div style="width:190px">
+          <label class="fld" for="dev-add-mac">或手动填 MAC</label>
+          <input id="dev-add-mac" type="text" placeholder="aa:bb:cc:dd:ee:ff" style="width:100%">
+        </div>
+        <div style="width:200px">
+          <label class="fld" for="dev-add-bank">加到哪个题库</label>
+          <select id="dev-add-bank" style="width:100%"></select>
+        </div>
+        <div><button type="button" id="dev-add-btn" style="white-space:nowrap">+ 添加受控设备</button></div>
+      </div>
       <p id="dev-hint" class="hint warn" style="display:none"></p>
-      <div class="row"><button class="ghost" id="refresh-dev">刷新设备列表</button></div>
+      <div class="row" style="margin-top:14px"><button class="ghost" id="refresh-dev">刷新设备列表</button></div>
       <div id="devlist" style="margin-top:12px"></div>
     </div>
 
@@ -1135,11 +1155,17 @@
 
   function renderDevices() {
     var box = el('devlist'); box.innerHTML = '';
-    if (!devices.length) { box.innerHTML = '<p class="hint">还没有设备记录。</p>'; return; }
+    // 4.0.0：列表只显示「受题库控制」的设备（加进题库的），其余在顶部选择器里添加
+    var controlled = devices.filter(function (d) { return !!d.bank_id; });
+    if (!controlled.length) {
+      box.innerHTML = '<p class="hint">还没有受控设备：用上面的「<b>添加受控设备</b>」' +
+        '把要管控的手机 / 平板加进题库（设备不在线时可以直接填 MAC）。</p>';
+      return;
+    }
     var tb = document.createElement('table');
     tb.innerHTML = '<thead><tr><th>名称</th><th>IP</th><th>MAC</th><th>外网</th><th>答题题库</th><th>控制</th></tr></thead>';
     var body = document.createElement('tbody');
-    devices.forEach(function (d) {
+    controlled.forEach(function (d) {
       var tr = document.createElement('tr');
       var td0 = document.createElement('td'); td0.textContent = d.name || '—';
       // 暂时放行时在设备名旁显示实时倒计时（永久放行/已断网则留空）
@@ -1284,6 +1310,56 @@
       }).catch(function () { sel.disabled = false; toast('分配失败'); });
   }
 
+  // 顶部「添加受控设备」选择器：列出路由器里还没被管控的设备
+  function renderAddDevicePicker() {
+    var sel = el('dev-add');
+    if (!sel) return;
+    var free = devices.filter(function (d) { return !d.bank_id; });
+    sel.innerHTML = '';
+    if (!free.length) {
+      var none = document.createElement('option');
+      none.value = '';
+      none.textContent = '（没有可添加的在线设备，可在右边手动填 MAC）';
+      sel.appendChild(none);
+    } else {
+      free.forEach(function (d) {
+        var o = document.createElement('option');
+        o.value = d.mac;
+        o.textContent = (d.name || d.mac) + ' · ' +
+          ((d.ip || []).join(',') || '不在线') + ' · ' + d.mac;
+        sel.appendChild(o);
+      });
+    }
+    fillSel('dev-add-bank', (banks || []).map(function (b) {
+      return { id: b.id, name: b.name + (b.enabled ? '' : '（已停用）') };
+    }), 'id', 'name');
+  }
+
+  function addControlledDevice() {
+    var txt = String(el('dev-add-mac').value || '').trim().toLowerCase()
+      .replace(/\s+/g, '');
+    var mac = txt || String(el('dev-add').value || '').trim().toLowerCase();
+    if (!mac) { toast('请选择一台设备，或手动填 MAC'); return; }
+    if (!/^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/.test(mac)) {
+      toast('MAC 格式不对，应形如 aa:bb:cc:dd:ee:ff');
+      return;
+    }
+    var bankId = el('dev-add-bank').value;
+    if (!bankId) { toast('请选择要加到的题库'); return; }
+    var btn = el('dev-add-btn');
+    btn.disabled = true;
+    api('/api/admin/bank/assign', { mac: mac, bank_id: bankId })
+      .then(function (res) {
+        btn.disabled = false;
+        if (!requireAuth(res)) return;
+        if (!res.data.ok) { toast(res.data.detail || '添加失败'); return; }
+        el('dev-add-mac').value = '';
+        toast('已加入受控设备：' + (res.data.result.bank_name || bankId));
+        loadState();
+        refreshDevices();
+      }).catch(function () { btn.disabled = false; toast('添加失败'); });
+  }
+
   function refreshDevices() {
     Promise.all([
       api('/api/admin/devices'),
@@ -1328,6 +1404,7 @@
         wanSkew = (Number(b.server_now) || localNow) - localNow;
         cdRefreshPending = false;
         schChangePending = false;
+        renderAddDevicePicker();
         renderDevices();
         tickCountdowns();
       }).catch(function () { toast('设备列表加载失败'); });
@@ -2177,6 +2254,7 @@
   };
 
   el('refresh-dev').onclick = refreshDevices;
+  el('dev-add-btn').onclick = addControlledDevice;
   el('sch-save').onclick = saveSchedule;
   el('sch-del').onclick = deleteSchedule;
   el('sch-cancel').onclick = closeSchedule;
