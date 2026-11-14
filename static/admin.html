@@ -547,6 +547,9 @@
     <!-- 学情 -->
     <div id="tab-learning" class="card" style="display:none">
       <h2>学情与错题本</h2>
+      <p class="hint">AI 出题的难度会<b>按最近正确率自动调</b>：每答 5 题看最近 20 题，
+        低于 90% 就把出题难度降半星、高于 96% 升 0.25 星，目标是让孩子稳定答对九成以上
+        （卡片里的「出题难度」= 当前出几星题）。</p>
       <p class="hint">每答一道题自动记录：错题按 2 小时 / 1 天 / 3 天 / 7 天 / 15 天间隔安排重做，
         轮到时会插入原题或同知识点的类似题；掌握度偏低的知识点会被多抽到（但一轮最多占一半）。</p>
       <div id="learn-cards"></div>
@@ -1649,6 +1652,9 @@
         ' <span style="color:var(--muted);font-weight:400;font-size:12px">' + escHtml(r.mac) + '</span></div>' +
         '<div style="margin-top:6px">' +
         '<span class="stat">正确率<b>' + acc + '</b></span>' +
+        '<span class="stat">近期正确率<b>' + (r.recent_accuracy == null ? '—'
+          : Math.round(r.recent_accuracy * 100) + '%') + '</b></span>' +
+        '<span class="stat">出题难度<b>' + (r.target_star || 2) + '★</b></span>' +
         '<span class="stat">已答题<b>' + r.total + '</b></span>' +
         '<span class="stat">错题<b>' + r.wrong_count + '</b></span>' +
         '<span class="stat">待复习<b>' + r.due_count + '</b></span></div>' +
@@ -1671,6 +1677,10 @@
     }
     var html = '<div class="stat">正确率<b>' +
       (a.accuracy === null ? '—' : Math.round(a.accuracy * 100) + '%') + '</b></div>' +
+      '<div class="stat">近期正确率<b>' +
+      (a.recent_accuracy == null ? '—' : Math.round(a.recent_accuracy * 100) + '%') +
+      '</b></div>' +
+      '<div class="stat">出题难度<b>' + (a.target_star || 2) + '★</b></div>' +
       '<div class="stat">答题数<b>' + a.total + '</b></div>' +
       '<div class="stat">轮次 / 全对<b>' + a.rounds + ' / ' + a.perfect + '</b></div>' +
       '<div class="stat">错题 / 待复习<b>' + a.wrong_count + ' / ' + a.due_count + '</b></div>' +

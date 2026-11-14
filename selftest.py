@@ -1327,6 +1327,92 @@ def main():
             {"weak": [{"topic": "分数"}], "wrong": []})
         check("按设备弱项生成专项题", len(dev_gen["questions"]) == 6)
 
+        # ---- 3.15.0 自适应难度：按最近正确率调星级（目标正确率 ≥90%）----
+        d85 = {"history": [{"ok": True}] * 17 + [{"ok": False}] * 3, "diff": 3.0}
+        check("正确率 85% → 降半星", learning.adjust_difficulty(d85) == 2.5,
+              str(learning.adjust_difficulty(d85)))
+        d90 = {"history": [{"ok": True}] * 18 + [{"ok": False}] * 2, "diff": 3.0}
+        check("正确率正好 90% 不调整", learning.adjust_difficulty(d90) == 3.0)
+        d100 = {"history": [{"ok": True}] * 20, "diff": 3.0}
+        check("正确率 100% → 升 0.25 星", learning.adjust_difficulty(d100) == 3.25,
+              str(learning.adjust_difficulty(d100)))
+        check("难度上限 5 星不会超",
+              learning.adjust_difficulty(
+                  {"history": [{"ok": True}] * 20, "diff": 5.0}) == 5.0 and
+              learning.difficulty_of({"diff": 5.0})[1] == 5)
+        check("难度下限 1 星不会破",
+              learning.adjust_difficulty(
+                  {"history": [{"ok": False}] * 20, "diff": 1.0}) == 1.0 and
+              learning.difficulty_of({"diff": 1.0})[1] == 1)
+        check("星级四舍五入（1.5→2★、2.5→3★）",
+              learning.difficulty_of({"diff": 1.5})[1] == 2 and
+              learning.difficulty_of({"diff": 2.5})[1] == 3)
+        check("老数据没 diff 时按最近正确率给起点",
+              learning.difficulty_of(
+                  {"history": [{"ok": True}] * 8 + [{"ok": False}] * 2})[1] == 2 and
+              learning.difficulty_of(
+                  {"history": [{"ok": True}] * 2 + [{"ok": False}] * 8})[1] == 1,
+              "80%→2★，20%→1★")
+        check("只按最近 20 题算，不受历史拖累",
+              learning.recent_accuracy(
+                  {"history": [{"ok": False}] * 50 + [{"ok": True}] * 20}) == 1.0)
+
+        # 端到端：答错多 → 星级降到 1；连着答对 → 星级升上去
+        DL = "02:00:00:00:00:88"
+        for i in range(10):
+            learning.record_answer(DL, {"id": "dl%d" % i, "text": "难度 %d" % i,
+                                        "subject": "数学", "topic": "分数"}, False)
+        al = learning.ability(DL)
+        check("连着答错 → 出题星级降到 1 星",
+              al["target_star"] == 1 and al["recent_accuracy"] == 0.0,
+              "star=%s acc=%s" % (al["target_star"], al["recent_accuracy"]))
+        for i in range(25):
+            learning.record_answer(DL, {"id": "dlr%d" % i, "text": "难度R %d" % i,
+                                        "subject": "数学", "topic": "分数"}, True)
+        al2 = learning.ability(DL)
+        check("连着答对 → 出题星级升上来",
+              al2["target_star"] > al["target_star"],
+              "star=%s" % al2["target_star"])
+        learning.clear(DL)
+
+        # 组卷也照顾难度：目标 1 星时优先挑 1 星题
+        DX = "02:00:00:00:00:99"
+        for i in range(10):
+            learning.record_answer(DX, {"id": "dx%d" % i, "text": "起始 %d" % i,
+                                        "subject": "数学", "topic": "分数"}, False)
+        topics = ["分数", "小数", "图形", "方程", "统计"]
+        pool_star = ([{"id": "easy%d" % i, "text": "简单 %d" % i, "subject": "数学",
+                       "star": 1, "topic": topics[i % 5], "options": ["1", "2"],
+                       "answer": 0, "type": "single"} for i in range(5)] +
+                     [{"id": "hard%d" % i, "text": "难 %d" % i, "subject": "数学",
+                       "star": 5, "topic": topics[i % 5], "options": ["1", "2"],
+                       "answer": 0, "type": "single"} for i in range(5)])
+        picked_star = learning.pick_questions(pool_star, DX, 4)
+        check("组卷优先出接近目标难度的题（目标 1 星 → 都是 1 星题）",
+              picked_star and all(int(q["star"]) == 1 for q in picked_star),
+              str([q.get("star") for q in picked_star]))
+        learning.clear(DX)
+
+        # 出题侧：prompt 写进难度要求、离线题按目标打星、按设备弱项带难度
+        star_prompt = ai_bank.build_prompt(
+            {"stage": "小学", "grade": "四年级", "subjects": ["数学"],
+             "count": 5, "star": 4}, {"single": 3, "multi": 1, "judge": 1})
+        check("prompt 写明目标难度（让孩子约 90% 能做对）",
+              "以 4 星为主" in star_prompt and "90%" in star_prompt and
+              '"star":4' in star_prompt)
+        off_qs = ai_bank.offline_generate(
+            {"stage": "小学", "grade": "四年级", "subjects": ["数学"],
+             "count": 3, "star": 4})
+        check("离线模板也按目标难度打星",
+              off_qs and all(q.get("star") == 4 for q in off_qs),
+              str([q.get("star") for q in off_qs]))
+        dev_star = ai_bank.generate_for_device(
+            {"count": 3, "mode": "offline", "subject": "数学"},
+            {"weak": [], "wrong": [], "target_star": 1, "difficulty": 1.0})
+        check("针对设备出题会带上它的目标难度",
+              dev_star["questions"] and
+              all(q.get("star") == 1 for q in dev_star["questions"]))
+
         # ---- 3.10.0 自动补题：多题库规则、阈值触发与冷却的纯逻辑 ----
         from datetime import datetime
         ab_now = datetime(2026, 11, 14, 11, 0,

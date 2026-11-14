@@ -494,12 +494,16 @@ def run_once(st, rule, reason="auto", now=None):
                 raise AutoBankError("新题已够（%s 道未做过 ≥ 阈值 %s），无需补充"
                                     % (fresh, cfg["threshold"]))
 
+        # 3.15.0：题目难度按孩子最近正确率自适应（正确率 <90% → 降星）
+        star = learning.bank_target_star(bank.get("devices") or [])
         spec = {
             "stage": cfg["stage"], "grade": cfg["grade"],
             "subject": cfg["subject"], "subjects": cfg["subjects"], "count": count,
             "topics": cfg["topics"], "mode": cfg["mode"],
             "avoid": [q["text"] for q in bank["questions"]][:600],
         }
+        if star:
+            spec["star"] = star
         if cfg["mix"]:
             wanted = sum(cfg["mix"].values())
             if wanted and wanted < count:

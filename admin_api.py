@@ -319,6 +319,11 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
         if bank:
             spec.setdefault("avoid", [q["text"] for q in bank["questions"]][:600])
         mac = str(data.get("device_mac") or "").strip().lower()
+        if "star" not in spec and "difficulty" not in spec:
+            # 3.15.0：没指定难度时按该题库设备最近正确率自动定星级
+            star = learning.bank_target_star((bank or {}).get("devices") or [])
+            if star:
+                spec["star"] = star
         try:
             if mac and data.get("focus_weak", True):
                 result = ai_bank.generate_for_device(spec, learning.ability(mac))
@@ -359,6 +364,8 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
                 "name": names.get(m) or owner.get(m, {}).get("bank_name") or "（未命名设备）",
                 "bank_id": owner.get(m, {}).get("bank_id", ""),
                 "total": a["total"], "accuracy": a["accuracy"],
+                "difficulty": a["difficulty"], "target_star": a["target_star"],
+                "recent_accuracy": a["recent_accuracy"],
                 "rounds": a["rounds"], "last": a["last"],
                 "wrong_count": a["wrong_count"], "due_count": a["due_count"],
                 "weak": [w["topic"] for w in a["weak"][:3]],

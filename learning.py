@@ -14,9 +14,14 @@
   2) 没做过的新题占约 40%，保证进度推进
   3) 以前错过、后来连对「毕业」的题占约 10%，少量复习防遗忘
   4) 做过且一直答对的已会题占约 10%，热身维持
-  某层题不够时份额自动顺延给后面的层；层内仍按弱项知识点加权。
+  某层题不够时份额自动顺延给后面的层；层内先按弱项知识点加权、
+  其次优先离目标难度（按最近正确率算出）近的题。
   另保留：弱项加权（层内排序）、同一知识点一轮最多占一半、
   尽量三种题型都出现、一轮之内不重复、乱序出题。
+
+3.15.0 起按正确率自适应难度：每答 5 题看最近 20 题的正确率，
+低于 90% 就把出题难度（1~5 星）降 0.5、高于 96% 升 0.25，
+让正确率尽量稳定在 90% 以上。AI 出题/自动出题会把星级写进 prompt。
 """
 
 import json
@@ -40,6 +45,18 @@ REVIEW_AFTER = [2 * 3600, 24 * 3600, 3 * 86400, 7 * 86400, 15 * 86400]
 WEAK_THRESHOLD = 0.62       # EWMA 掌握度低于此值算弱项
 WEAK_MIN_SAMPLES = 2        # 至少答过 2 次才下判断
 EMA_ALPHA = 0.35
+
+# ---- 自适应难度（3.15.0）----
+# 目标：让孩子的正确率稳定在 90% 以上（90%~96% 之间不调整，避免来回抖）。
+# 难度用 1~5 星表示（和题目 star 字段一致），每答 5 题按最近 ACC_WINDOW 题
+# 的正确率调一次：低于 90% 降难度、高于 96% 升难度。
+DIFF_MIN, DIFF_MAX = 1.0, 5.0
+DIFF_DEFAULT = 2.0
+ACC_WINDOW = 20            # 近期正确率窗口（最近多少题）
+DIFF_EVERY = 5             # 每答多少题调整一次
+DIFF_STEP_DOWN = 0.5       # 正确率不足时降多少星
+DIFF_STEP_UP = 0.25        # 正确率很高时升多少星
+DIFF_LOW, DIFF_HIGH = 0.90, 0.96
 
 # ---------------------------------------------------------------- 知识点
 
@@ -181,6 +198,7 @@ def record_answer(mac, q, ok, ts=None):
             "subject": q.get("subject", ""), "ok": bool(ok), "ts": int(ts),
         })
         dev["history"] = dev["history"][-HISTORY_LIMIT:]
+        dev["diff"] = adjust_difficulty(dev)
 
         wrong = dev["wrong"]
         item = next((w for w in wrong if w.get("qid") == q.get("id", "")), None)
@@ -211,6 +229,95 @@ def record_answer(mac, q, ok, ts=None):
             else:
                 item["due_at"] = int(ts + REVIEW_AFTER[min(item["count"], len(REVIEW_AFTER) - 1)])
         _save(data)
+
+
+def recent_accuracy(dev, n=ACC_WINDOW):
+    """最近 n 题的正确率；没答过返回 None。"""
+    hist = (dev or {}).get("history") or []
+    seg = hist[-max(1, int(n)):]
+    if not seg:
+        return None
+    return sum(1 for h in seg if h.get("ok")) / float(len(seg))
+
+
+def _initial_difficulty(dev):
+    """老数据还没写 diff 时，先按最近正确率给一个起点（升级后第一批题就合适）。
+
+    正确率越低起点越低；没有答题记录时用默认 2 星。
+    """
+    acc = recent_accuracy(dev)
+    if acc is None:
+        return DIFF_DEFAULT
+    if acc >= DIFF_HIGH:
+        return 3.0
+    if acc >= DIFF_LOW:
+        return 2.5
+    if acc >= 0.80:
+        return 2.0
+    if acc >= 0.65:
+        return 1.5
+    return 1.0
+
+
+def difficulty_of(dev):
+    """返回 (难度值 1~5, 目标星级 1~5)。老数据没有 diff 字段时按正确率推算。"""
+    try:
+        raw = (dev or {}).get("diff")
+        cur = None if raw in (None, "") else float(raw)
+    except (TypeError, ValueError):
+        cur = None
+    if cur is None:
+        cur = _initial_difficulty(dev)
+    cur = max(DIFF_MIN, min(DIFF_MAX, cur))
+    # 用「四舍五入」而不是银行家进位：1.5→2、2.5→3、3.5→4
+    star = int(math.floor(cur + 0.5))
+    return round(cur, 2), max(1, min(5, star))
+
+
+def adjust_difficulty(dev):
+    """按最近正确率调整目标难度，返回新的难度值。
+
+    - 最近 20 题正确率 < 90%  → 降 0.5 星（题出简单点，先把正确率拉回 90%+）
+    - 最近 20 题正确率 > 96%  → 升 0.25 星（太轻松了，加一点挑战）
+    - 90%~96% 之间不动（这就是「正确率保持在 90% 以上」的目标区间）
+    - 每答 5 题才调一次，且限幅 1~5 星，避免一题答错就剧烈变化
+    """
+    cur, _ = difficulty_of(dev)
+    hist = (dev or {}).get("history") or []
+    acc = recent_accuracy(dev)
+    if acc is None or len(hist) < DIFF_EVERY:
+        return cur
+    if len(hist) % DIFF_EVERY:
+        return cur
+    if acc < DIFF_LOW:
+        cur -= DIFF_STEP_DOWN
+    elif acc > DIFF_HIGH:
+        cur += DIFF_STEP_UP
+    return round(max(DIFF_MIN, min(DIFF_MAX, cur)), 2)
+
+
+def target_star(mac):
+    """供出题用：这台设备当前应该出几星题（1~5）。"""
+    with _lock:
+        dev = _dev(_load(), mac, create=False)
+    return difficulty_of(dev)[1]
+
+
+def bank_target_star(macs):
+    """一套题库（或一组设备）该出几星题：取有答题记录设备的平均目标难度。
+
+    没有答题记录时返回 0（表示不指定，用默认难度）。
+    多台设备（例如兄弟姐妹共用一套题）时按平均值，尽量照顾到所有人。
+    """
+    stars = []
+    for mac in macs or []:
+        a = ability(mac)
+        if a.get("total"):
+            stars.append(int(a.get("target_star") or 0))
+    stars = [x for x in stars if x]
+    if not stars:
+        return 0
+    return max(1, min(5, int(round(sum(stars) / float(len(stars))))))
 
 
 def record_round(mac, all_ok, ts=None):
@@ -309,10 +416,15 @@ def ability(mac, now=None):
             "mastery": round(float(r.get("ema", 0.5)), 3),
         })
     topics.sort(key=lambda x: (x["mastery"], -x["samples"]))
+    diff, star = difficulty_of(dev)
     return {
         "mac": (mac or "").lower(),
         "total": len(hist), "correct": correct,
         "accuracy": round(correct / len(hist), 3) if hist else None,
+        "difficulty": diff,
+        "target_star": star,
+        "recent_accuracy": (None if recent_accuracy(dev) is None
+                            else round(recent_accuracy(dev), 3)),
         "rounds": int(rounds.get("total", 0)),
         "perfect": int(rounds.get("perfect", 0)),
         "last": int(rounds.get("last", 0)),
@@ -336,6 +448,8 @@ def summary(mac, now=None):
     a = ability(mac, now)
     return {
         "total": a["total"], "accuracy": a["accuracy"],
+        "difficulty": a["difficulty"], "target_star": a["target_star"],
+        "recent_accuracy": a["recent_accuracy"],
         "wrong_count": a["wrong_count"], "due_count": a["due_count"],
         "weak": [w["topic"] for w in a["weak"][:3]],
     }
@@ -437,12 +551,37 @@ def _quotas(n, ratios):
     return q
 
 
-def _weak_order(qs, weak):
-    """层内排序：弱项知识点的题排前面（同分随机），供按配额顺序取题。"""
+def _star_of(q):
+    try:
+        return max(0, min(5, int(round(float((q or {}).get("star") or 0)))))
+    except (TypeError, ValueError):
+        return 0
+
+
+# 3.15.0：组卷也照顾难度目标——离目标星级越远的题排越后
+DIFF_PICK_WEIGHT = 0.6
+
+
+def _weak_order(qs, weak, target=0):
+    """层内排序：弱项知识点优先，其次离目标难度近的题优先（同分随机）。
+
+    这样既练弱项，又尽量让这一轮落在「孩子能做对九成」的难度上。
+    没有 star 字段的老题按目标难度处理，不会被区别对待。
+    """
     lst = list(qs)
     random.shuffle(lst)
-    lst.sort(key=lambda q: -(weak[topic_of(q)]["score"]
-                             if topic_of(q) in weak else 0))
+    if target:
+        def key(q):
+            w = weak.get(topic_of(q))
+            # 弱项归一化到 0~1，难度距离最多扣 0.6×4=2.4，
+            # 所以「离目标难度太远」能压过「是弱项」，避免一直拿难题练弱项。
+            wn = min(1.0, w["score"] / 6.0) if w else 0.0
+            dist = abs((_star_of(q) or target) - target)
+            return -(wn - DIFF_PICK_WEIGHT * dist)
+        lst.sort(key=key)
+    else:
+        lst.sort(key=lambda q: -(weak[topic_of(q)]["score"]
+                                 if topic_of(q) in weak else 0))
     return lst
 
 
@@ -468,6 +607,7 @@ def pick_questions(pool, mac, n, now=None):
     except Exception:
         dev = _empty_device()
     weak = {w["topic"]: w for w in weak_topics(dev)}
+    _, target_star = difficulty_of(dev)
     wrong = {str(w.get("qid") or ""): w for w in (dev.get("wrong") or [])}
     seen_wrong, seen_right = set(), set()
     for h in dev.get("history") or []:
@@ -517,11 +657,11 @@ def pick_questions(pool, mac, n, now=None):
     # 按四层配额取题；某层不够的份额顺延给后面的层，最后弱项加权补齐
     shortfall = 0
     for tier, quota in zip(tiers, _quotas(n, PICK_RATIOS)):
-        shortfall += quota - take(_weak_order(tier, weak), quota)
+        shortfall += quota - take(_weak_order(tier, weak, target_star), quota)
     for tier in tiers:
         if shortfall <= 0:
             break
-        shortfall -= take(_weak_order(tier, weak), shortfall)
+        shortfall -= take(_weak_order(tier, weak, target_star), shortfall)
     while len(chosen) < n:
         remaining = [q for q in pool if q.get("id") not in used]
         if not remaining:
@@ -533,7 +673,12 @@ def pick_questions(pool, mac, n, now=None):
         weights = []
         for q in eligible:
             w = weak.get(topic_of(q))
-            weights.append(1.0 + 2.0 * min(1.0, w["score"] / 6.0) if w else 1.0)
+            wt = 1.0 + 2.0 * min(1.0, w["score"] / 6.0) if w else 1.0
+            star = _star_of(q)
+            if target_star and star:
+                # 兜底补齐时也别光挑难题：离目标难度越远权重越低
+                wt *= max(0.15, 1.0 - 0.28 * abs(star - target_star))
+            weights.append(wt)
         pick = _weighted_pick(eligible, weights)
         if pick is None:
             break

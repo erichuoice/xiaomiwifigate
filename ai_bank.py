@@ -293,6 +293,30 @@ SYSTEM_PROMPT = (
 )
 
 
+DIFF_WORDS = {1: "很简单，基础识记/直接套用", 2: "偏简单，一步就能想明白",
+              3: "中等，需要两三步推理", 4: "偏难，需要综合运用",
+              5: "较难，综合运用且有小陷阱（但不超纲）"}
+
+
+def spec_star(spec):
+    """从出题参数里取目标难度星级（1~5）；spec 里可以写 star 或 difficulty。
+
+    0 表示没有指定（按各科目默认难度出题）。
+    """
+    spec = spec or {}
+    for key in ("star", "difficulty"):
+        v = spec.get(key)
+        if v in (None, ""):
+            continue
+        try:
+            star = int(round(float(v)))
+        except (TypeError, ValueError):
+            continue
+        if star:
+            return max(1, min(5, star))
+    return 0
+
+
 def build_prompt(spec, mix, variant_text=""):
     stage = str(spec.get("stage") or "小学")
     grade = str(spec.get("grade") or "")
@@ -339,6 +363,15 @@ def build_prompt(spec, mix, variant_text=""):
     if topics:
         reqs.append("优先围绕这些知识点出题：%s；其中至少一半题目必须命中上述知识点"
                     "（薄弱知识点要反复练）。" % "、".join(topics[:8]))
+    star = spec_star(spec)
+    if star:
+        lo, hi = max(1, star - 1), min(5, star + 1)
+        reqs.append(
+            "难度要求（按孩子最近正确率动态调整）：本批以 %d 星为主（%s）。"
+            "大约七成题目用 %d 星，其余在 %d~%d 星之间小幅浮动；"
+            "整体难度要让孩子大约 90%% 能做对——太简单没有练习价值，"
+            "太难会打击信心，也不要出超纲或竞赛级题目。"
+            % (star, DIFF_WORDS.get(star, ""), star, lo, hi))
     lines = [head, ""] + plines + ["", "【命题要求】"]
     lines += ["%d. %s" % (i, text) for i, text in enumerate(reqs, 1)]
     if variant_text:
@@ -352,9 +385,9 @@ def build_prompt(spec, mix, variant_text=""):
         "",
         "【输出格式】只输出 JSON 数组，每个元素字段如下：",
         '{"type":"single|multi|judge","text":"题干","options":["选项0","选项1",...],'
-        '"answer":0,"explain":"解析","topic":"知识点","star":2,'
+        '"answer":0,"explain":"解析","topic":"知识点","star":%d,'
         '"stage":"%s","grade":"%s","subject":"%s"}' % (
-            stage, grade, subject if not multi else "科目名"),
+            star or 2, stage, grade, subject if not multi else "科目名"),
     ]
     if multi:
         lines.append("上面的 subject 只能是：%s。每道题写它实际所属的那一科。" %
@@ -594,9 +627,10 @@ def _shuffled_options(correct, distractors, n=4):
     return out, out.index(str(correct)) if str(correct) in out else idx
 
 
-def _base(spec, qtype, topic, star=2, source="offline"):
+def _base(spec, qtype, topic, star=0, source="offline"):
     return {
-        "type": qtype, "topic": topic, "star": star, "source": source,
+        "type": qtype, "topic": topic,
+        "star": int(star or spec_star(spec) or 2), "source": source,
         "stage": str(spec.get("stage") or ""),
         "grade": str(spec.get("grade") or ""),
         "subject": str(spec.get("subject") or ""),
@@ -918,6 +952,11 @@ def generate_for_device(spec, ability_row, cfg=None):
     wrong = ability_row.get("wrong") or []
     due = [w for w in wrong if w.get("due")] or wrong
     spec["topics"] = weak or spec.get("topics")
+    # 3.15.0：按这台设备最近正确率算出的目标难度出题（正确率 <90% 会自动降星）
+    if ability_row.get("target_star"):
+        spec["star"] = int(ability_row["target_star"])
+    if ability_row.get("difficulty"):
+        spec["difficulty"] = float(ability_row["difficulty"])
     spec["wrong_items"] = [{
         "subject": w.get("subject", ""), "topic": w.get("topic", ""),
         "text": w.get("text", ""), "answer": "",
