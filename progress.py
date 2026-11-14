@@ -142,10 +142,11 @@ def prompt_lines(spec=None, progress=None, scope=None):
     textbook = str(spec.get("textbook") or DEFAULT_TEXTBOOK)
     grade = str(spec.get("grade") or "").strip()
     stage = str(spec.get("stage") or "").strip()
+    region = str(spec.get("region") or REGION).strip() or REGION
     lines = [
         "【教学进度｜最高优先级】",
         "今天是 %s，%s中小学处于 %s %s，%s（%s）。" % (
-            p["date"], REGION, p["school_year"], p["term"],
+            p["date"], region, p["school_year"], p["term"],
             p["week_text"], p["phase"]),
         "命题范围只覆盖：%s%s。" % (
             ("%s%s的" % (stage, grade)) if grade else "", p["scope"]),

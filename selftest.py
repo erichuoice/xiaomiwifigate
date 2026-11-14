@@ -938,6 +938,32 @@ def main():
           "生成 %s 道" % len(_off))
     check("生成结果携带当前教学进度",
           bool((res.get("progress") or {}).get("scope")))
+
+    # 3.24.0：出题范围（地区/学段年级/进度/教材）挂在管理对象上，出题自动带上
+    code, st2 = admin("/api/admin/state")
+    _b0 = [b for b in (st2.get("banks") or []) if b["id"] == ai_bank_id][0]
+    code, res = admin("/api/admin/bank", dict(
+        _b0, region="广东省广州市", stage="小学", grade="五年级",
+        progress_auto=False, term_scope="第 1—2 单元（自检范围）"))
+    check("题库可保存出题范围（地区/学段年级/进度）",
+          code == 200 and res["bank"]["region"] == "广东省广州市" and
+          res["bank"]["stage"] == "小学" and res["bank"]["grade"] == "五年级" and
+          res["bank"]["progress_auto"] is False and
+          res["bank"]["term_scope"] == "第 1—2 单元（自检范围）",
+          str((res.get("bank") or {}).get("detail")))
+    code, pr = admin("/api/admin/progress?bank=" + ai_bank_id)
+    check("进度接口按管理对象返回范围",
+          code == 200 and (pr.get("progress") or {}).get("scope") ==
+          "第 1—2 单元（自检范围）" and pr.get("region") == "广东省广州市")
+    code, gen2 = admin("/api/admin/ai/generate", {
+        "spec": {"subjects": ["数学"], "count": 2, "mode": "offline"},
+        "bank_id": ai_bank_id, "focus_weak": False})
+    check("AI 出题自动使用管理对象的出题范围",
+          code == 200 and
+          ((gen2.get("progress") or {}).get("scope") == "第 1—2 单元（自检范围）"))
+    admin("/api/admin/bank", dict(
+        _b0, region="广东省广州市", stage="", grade="",
+        progress_auto=True, term_scope=""))
     code, res = admin("/api/admin/ai/apply",
                       {"questions": [], "bank_id": ai_bank_id})
     check("没有预览题时入库被拒绝", code == 400)
@@ -1563,7 +1589,21 @@ def main():
             {"weak": [{"topic": "分数"}], "wrong": []})
         check("按设备弱项生成专项题", len(dev_gen["questions"]) == 6)
 
-        # ---- 3.15.0 自适应难度：按最近正确率调星级（目标正确率 ≥90%）----
+        # ---- 3.24.0 出题范围挂在管理对象上 ----
+        _sc = ai_bank.scope_from_bank({"region": "广东省广州市", "stage": "小学",
+                                       "grade": "四年级", "progress_auto": False,
+                                       "term_scope": "第 1—2 单元"})
+        check("管理对象的出题范围能转成出题参数",
+              _sc.get("region") == "广东省广州市" and _sc.get("stage") == "小学" and
+              _sc.get("grade") == "四年级" and _sc.get("scope") == "第 1—2 单元")
+        _prompt = ai_bank.build_prompt(
+            {"stage": "小学", "grade": "四年级", "subjects": ["数学"], "count": 3,
+             "region": "广东省广州市"}, {"single": 2, "judge": 1})
+        check("prompt 用管理对象的地区与年级",
+              "广东省广州市" in _prompt and "四年级" in _prompt and
+              "本地元素" in _prompt and "珠江" in _prompt)
+
+    # ---- 3.15.0 自适应难度：按最近正确率调星级（目标正确率 ≥90%）----
         d85 = {"history": [{"ok": True}] * 17 + [{"ok": False}] * 3, "diff": 3.0}
         check("正确率 85% → 降半星", learning.adjust_difficulty(d85) == 2.5,
               str(learning.adjust_difficulty(d85)))
@@ -1908,18 +1948,23 @@ def main():
           "if (name === 'settings') loadAiConfig()" in admin_html,
           "ai-key@%s settings@end%s ai@%s~%s" % (_key_at, _st_end, _ai_start, _ai_end))
     check("AI 出题页提示去系统设置配置 Key",
-          "API Key 在「系统设置 → AI 出题连接」里配置" in admin_html and
-          'id="ai-goset"' in admin_html)
+          "AI 出题连接" in admin_html and "系统设置" in admin_html and
+          'id="ai-goset"' in admin_html and "el('ai-goset').onclick" in admin_html)
     check("后台有 AI 出题与学情两个页签",
           all(w in admin_html for w in
-              ("tabbtn-ai", "tab-learning", "ai-progress", "ai-preview",
+              ("tabbtn-ai", "tab-learning", "ai-scope-line", "ai-preview",
                "learn-cards", "learn-detail")))
     check("后台调用全部 AI/学情接口",
           all(("/api/admin/ai/" + w) in admin_html for w in
               ("config", "test", "generate", "apply")) and
           "/api/admin/learning" in admin_html)
-    check("后台可手动覆盖教学进度", "ai-prog-auto" in admin_html and
-          "ai-scope" in admin_html and "ai-textbook" in admin_html)
+    check("出题范围（地区/学段年级/教材/进度）在管理对象上",
+          all(w in admin_html for w in
+              ("bank-region", "bank-stage", "bank-grade", "bank-textbook",
+               "bank-prog-auto", "bank-scope", "bank-progress")) and
+          "/api/admin/progress?bank=" in admin_html and
+          "ai-stage" not in admin_html and "ai-grade" not in admin_html and
+          "ai-textbook" not in admin_html)
     check("答题页显示知识点与本轮重点", "q.topic" in index_html and
           "本轮重点练习" in index_html)
 
@@ -1956,12 +2001,15 @@ def main():
           "auto_bank.due(STORE, rule)" in server_html and
           'run_once(STORE, rule, "auto")' in server_html)
     check("新模块已纳入镜像", "auto_bank.py" in dockerfile)
-    check("后台有「自动出题」页签与阈值/冷却/按库设置项",
+    check("AI 出题与自动出题合并为一页（手动/自动切换）",
           all(w in admin_html for w in
-              ("tabbtn-auto", "tab-auto", "auto-enabled", "auto-threshold",
+              ("ai-mode-manual", "ai-mode-auto", "ai-manual-sec", "ai-auto-sec",
+               "function setAiMode(", "auto-enabled", "auto-threshold",
                "auto-cooldown", "auto-count", "auto-bank",
                "auto-mode", "auto-max", "auto-run", "auto-runs",
                "auto-remove")) and
+          "tabbtn-auto" not in admin_html and 'id="tab-auto"' not in admin_html and
+          "auto-stage" not in admin_html and "auto-grade" not in admin_html and
           "auto-frequency" not in admin_html and "auto-time" not in admin_html)
     check("后台调用自动出题配置/试跑/删除/清空接口",
           all(w in admin_html for w in
@@ -2190,11 +2238,12 @@ def main():
           "按模式走会漏清" in server_html)
 
     # ---- 3.20.0 导航按「管理对象」组织 ----
-    check("页签按管理对象组织（题库/AI出题/自动出题/学习情况/管理设备）",
+    check("页签按管理对象组织（题库/AI出题/学习情况/管理设备）",
           "管理对象" in admin_html and
           all(w in admin_html for w in
-              ("tabbtn-quiz", "tabbtn-ai", "tabbtn-auto",
+              ("tabbtn-quiz", "tabbtn-ai",
                "tabbtn-learning", "tabbtn-devices")) and
+          "tabbtn-auto" not in admin_html and
           "学习情况" in admin_html and "管理设备" in admin_html and
           ">题库<" in admin_html and
           "tabbtn-import" not in admin_html and 'id="tab-import"' not in admin_html)

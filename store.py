@@ -52,6 +52,10 @@ DEFAULT_PASS_RULE = {"pass_mode": "rate", "pass_rate_percent": 80,
                      "wrong_add_questions": 2}
 # 默认限制方式：答完题到点后直接断网；throttle = 改为限速（单位 KB/s）
 DEFAULT_LIMIT = {"limit_mode": "block", "throttle_kbps": 20}
+# 3.24.0：管理对象（题库）自带「出题范围」——地区 / 学段年级 / 教材 / 进度
+DEFAULT_SCOPE = {"region": "广东省广州市", "stage": "", "grade": "",
+                 "textbook": "", "progress_auto": True, "term_scope": ""}
+SCOPE_STAGES = ("小学", "初中", "高中")
 
 
 class StoreError(Exception):
@@ -295,6 +299,37 @@ def validate_limit_rule(src, current=None):
     return {"limit_mode": mode, "throttle_kbps": kbps}
 
 
+def validate_scope(src, current=None):
+    """校验「出题范围」：地区 / 学段 / 年级 / 教材 / 教学进度方式与范围。
+
+    老题库没有这些字段时给默认值：地区广州、其它留空（出题时回落到全局 AI 配置，
+    升级后行为不变）。学段只认 小学/初中/高中，其它值当没填。
+    """
+    src = src if isinstance(src, dict) else {}
+    current = current if isinstance(current, dict) else {}
+
+    def pick(key, fallback):
+        for d in (src, current):
+            v = d.get(key)
+            if v is not None and v != "":
+                return v
+        return fallback
+
+    region = str(pick("region", DEFAULT_SCOPE["region"]) or "").strip()[:40]
+    if not region:
+        region = DEFAULT_SCOPE["region"]
+    stage = str(pick("stage", "") or "").strip()[:8]
+    if stage not in SCOPE_STAGES:
+        stage = ""
+    grade = str(pick("grade", "") or "").strip()[:8]
+    textbook = str(pick("textbook", "") or "").strip()[:80]
+    progress_auto = _flag(pick("progress_auto", True))
+    term_scope = str(pick("term_scope", "") or "").strip()[:80]
+    return {"region": region, "stage": stage, "grade": grade,
+            "textbook": textbook, "progress_auto": progress_auto,
+            "term_scope": term_scope}
+
+
 def validate_settings(settings, current):
     if not isinstance(settings, dict):
         raise StoreError("设置格式不正确")
@@ -338,7 +373,8 @@ def validate_macs(macs):
     return out
 
 
-def validate_bank(data, strict=True, pass_default=None, limit_default=None):
+def validate_bank(data, strict=True, pass_default=None, limit_default=None,
+                  scope_default=None):
     if not isinstance(data, dict):
         raise StoreError("题库格式不正确")
     name = str(data.get("name") or "").strip()[:24]
@@ -354,6 +390,7 @@ def validate_bank(data, strict=True, pass_default=None, limit_default=None):
     # （升级时由全局设置填充，保证原本的开关原样保留）。
     rule = validate_pass_rule(data, pass_default)
     limit = validate_limit_rule(data, limit_default)
+    scope = validate_scope(data, scope_default)
     return {
         "id": bid,
         "name": name,
@@ -366,6 +403,12 @@ def validate_bank(data, strict=True, pass_default=None, limit_default=None):
         "wrong_add_questions": rule["wrong_add_questions"],
         "limit_mode": limit["limit_mode"],
         "throttle_kbps": limit["throttle_kbps"],
+        "region": scope["region"],
+        "stage": scope["stage"],
+        "grade": scope["grade"],
+        "textbook": scope["textbook"],
+        "progress_auto": scope["progress_auto"],
+        "term_scope": scope["term_scope"],
     }
 
 
@@ -578,6 +621,8 @@ class Store:
                 b.setdefault(k, v)
             for k, v in DEFAULT_LIMIT.items():   # 以及默认限制方式（断网）
                 b.setdefault(k, v)
+            for k, v in DEFAULT_SCOPE.items():   # 以及默认出题范围
+                b.setdefault(k, v)
         return {
             "version": 3,
             "banks": banks,
@@ -780,6 +825,10 @@ class Store:
                 # 编辑已有题库时保留它原来的限制方式，新建时用默认值
                 "limit_mode": (existing or {}).get("limit_mode"),
                 "throttle_kbps": (existing or {}).get("throttle_kbps"),
+            }, scope_default={
+                # 出题范围同理：编辑时保留原值，新建时用默认
+                **DEFAULT_SCOPE,
+                **{k: v for k, v in (existing or {}).items() if k in DEFAULT_SCOPE},
             })
             if existing:
                 clean["id"] = existing["id"]

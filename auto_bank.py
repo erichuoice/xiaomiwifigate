@@ -502,12 +502,19 @@ def run_once(st, rule, reason="auto", now=None):
         # 3.15.0：题目难度按孩子最近正确率自适应（正确率 <90% → 降星）
         # 3.18.0：学情按题库（人），直接取这个题库的学情
         star = learning.bank_target_star(bank["id"])
+        # 3.24.0：出题范围挂在管理对象（题库）上，自动出题直接沿用，不再单独配
+        scope = ai_bank.scope_from_bank(bank)
         spec = {
-            "stage": cfg["stage"], "grade": cfg["grade"],
+            "stage": scope.get("stage") or cfg["stage"],
+            "grade": scope.get("grade") or cfg["grade"],
+            "region": scope.get("region") or "",
+            "textbook": scope.get("textbook") or "",
             "subject": cfg["subject"], "subjects": cfg["subjects"], "count": count,
             "topics": cfg["topics"], "mode": cfg["mode"],
             "avoid": [q["text"] for q in bank["questions"]][:600],
         }
+        if scope.get("scope"):
+            spec["scope"] = scope["scope"]
         if star:
             spec["star"] = star
         if cfg["mix"]:

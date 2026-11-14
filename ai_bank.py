@@ -293,6 +293,24 @@ SYSTEM_PROMPT = (
 )
 
 
+def scope_from_bank(bank):
+    """把「管理对象（题库）」上的出题范围转成出题参数（3.24.0）。
+
+    地区 / 学段 / 年级 / 教材 / 手动进度都挂在题库上，出题时直接带进 spec，
+    页面就不用再填一遍；空值由 ai_bank / progress 回落到默认。
+    """
+    bank = bank or {}
+    out = {
+        "region": str(bank.get("region") or "").strip(),
+        "stage": str(bank.get("stage") or "").strip(),
+        "grade": str(bank.get("grade") or "").strip(),
+        "textbook": str(bank.get("textbook") or "").strip(),
+    }
+    if bank.get("progress_auto") is False and str(bank.get("term_scope") or "").strip():
+        out["scope"] = str(bank["term_scope"]).strip()
+    return out
+
+
 DIFF_WORDS = {1: "很简单，基础识记/直接套用", 2: "偏简单，一步就能想明白",
               3: "中等，需要两三步推理", 4: "偏难，需要综合运用",
               5: "较难，综合运用且有小陷阱（但不超纲）"}
@@ -327,7 +345,7 @@ def build_prompt(spec, mix, variant_text=""):
     if isinstance(topics, str):
         topics = [t.strip() for t in re.split(r"[,，、;；\s]+", topics) if t.strip()]
     _, textbook, plines = progress.resolve(spec)
-    region = REGION
+    region = str(spec.get("region") or REGION).strip() or REGION
     if len(subjects) == 1:
         head = "请为%s%s的%s学生出 %d 道题。" % (
             region, stage + (grade or ""), subject, count)
@@ -340,10 +358,12 @@ def build_prompt(spec, mix, variant_text=""):
     reqs = [
         "严格依据《义务教育课程标准》与上述教材版本，不超纲、不出现该年级没学过的知识；"
         "语言难度符合该年级认知水平，使用简体中文（英语科目的题干与选项可用英文）。",
-        "情境尽量自然融入广东广州本地元素（珠江、广州塔、越秀公园、陈家祠、沙面、"
-        "白云山、海心沙、北京路、上下九、广州地铁、早茶点心、荔枝、醒狮、粤剧、龙舟、"
-        "木棉花、南沙湿地等），但不得因情境引入超纲内容，也不要出现商业广告、"
-        "真实人名隐私或政治敏感内容。",
+        "情境尽量自然融入%s本地元素%s，但不得因情境引入超纲内容，"
+        "也不要出现商业广告、真实人名隐私或政治敏感内容。" % (
+            region,
+            "（珠江、广州塔、越秀公园、陈家祠、沙面、白云山、海心沙、北京路、"
+            "上下九、广州地铁、早茶点心、荔枝、醒狮、粤剧、龙舟、木棉花、南沙湿地等）"
+            if "广州" in region else "（当地自然、人文、生活场景即可）"),
         "题型严格按下列数量出题：单选题 %d 道（4 个选项、唯一正确答案）、"
         "多选题 %d 道（4~5 个选项、至少 2 个正确答案）、"
         "判断题 %d 道（选项固定为 [\"正确\", \"错误\"]）。" % (
@@ -896,9 +916,13 @@ def generate(spec, force_offline=False):
     spec["count"] = count
     mix = split_mix(count, spec.get("mix"))
     cfg = load_config()
-    # 教材版本与「手动教学进度」来自后台配置，注入 spec 供 prompt 使用
-    spec["textbook"] = cfg["textbook"]
-    if not cfg.get("progress_auto", True) and str(cfg.get("term_scope") or "").strip():
+    # 3.24.0：教材与「手动教学进度」优先用管理对象（题库）上的设置；
+    # 题库没填时回落到全局 AI 配置（老数据行为不变）
+    if not str(spec.get("textbook") or "").strip():
+        spec["textbook"] = cfg["textbook"]
+    if (not str(spec.get("scope") or "").strip() and
+            not cfg.get("progress_auto", True) and
+            str(cfg.get("term_scope") or "").strip()):
         spec["scope"] = cfg["term_scope"]
     prog = progress.current_progress(scope=spec.get("scope"))
     mode = str(spec.get("mode") or "auto")

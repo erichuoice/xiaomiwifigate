@@ -177,7 +177,6 @@
     <div class="tabs">
       <button id="tabbtn-quiz" data-tab="quiz">题库</button>
       <button id="tabbtn-ai" data-tab="ai" class="off">AI 出题</button>
-      <button id="tabbtn-auto" data-tab="auto" class="off">自动出题</button>
       <button id="tabbtn-learning" data-tab="learning" class="off">学习情况</button>
       <button id="tabbtn-devices" data-tab="devices" class="off">管理设备</button>
     </div>
@@ -193,6 +192,40 @@
 
       <label class="fld" for="bank-name">题库名称</label>
       <input id="bank-name" type="text" maxlength="24" placeholder="例如：小学低年级 / 姐姐的题">
+
+      <h2 style="margin-top:20px">出题范围<span class="count">AI 出题 / 自动补题都按这个范围</span></h2>
+      <p class="hint">这个管理对象（孩子）在哪儿、几年级、用什么教材、讲到哪儿，都记在这里；
+        AI 出题时自动带上，不用每次再填。</p>
+      <div class="grid3">
+        <div>
+          <label class="fld" for="bank-region">地区</label>
+          <input id="bank-region" type="text" maxlength="40" placeholder="例如：广东省广州市">
+        </div>
+        <div>
+          <label class="fld" for="bank-stage">学段</label>
+          <select id="bank-stage"></select>
+        </div>
+        <div>
+          <label class="fld" for="bank-grade">年级</label>
+          <select id="bank-grade"></select>
+        </div>
+      </div>
+      <div class="grid2">
+        <div>
+          <label class="fld" for="bank-textbook">教材版本</label>
+          <select id="bank-textbook"></select>
+        </div>
+        <div>
+          <label class="fld" for="bank-prog-auto">进度方式</label>
+          <select id="bank-prog-auto">
+            <option value="1">按当前日期自动推断（广州校历）</option>
+            <option value="0">手动指定范围</option>
+          </select>
+        </div>
+      </div>
+      <label class="fld" for="bank-scope">教学进度范围（选「手动指定」时生效）</label>
+      <input id="bank-scope" type="text" placeholder="例如：第 1—3 单元（分数加减、周长）">
+      <p class="hint" id="bank-progress" style="margin-top:8px"></p>
 
       <label class="fld">奖励档位：答对几道题 → 换多少分钟（分钟填 0 = 一直放行）</label>
       <div id="tier-list"></div>
@@ -428,40 +461,17 @@
     <!-- AI 出题 -->
     <div id="tab-ai" class="card" style="display:none">
       <h2>AI 出题</h2>
-      <div class="ai-note" id="ai-progress">正在读取当前教学进度…</div>
-
-
-      <p class="hint">API Key 在「系统设置 → AI 出题连接」里配置。
+      <div class="row" style="margin-bottom:10px">
+        <button type="button" id="ai-mode-manual" class="mini">手动出题</button>
+        <button type="button" id="ai-mode-auto" class="mini ghost">自动补题</button>
+      </div>
+      <p class="hint" id="ai-scope-line">正在读取当前管理对象的出题范围…</p>
+      <p class="hint">API Key 在右上角「系统设置 → AI 出题连接」里配置。
         <button type="button" class="mini ghost" id="ai-goset">去系统设置</button></p>
 
-      <h3>① 教学进度与教材（广州）</h3>
-      <div class="grid2">
-        <div>
-          <label class="fld" for="ai-textbook">教材版本</label>
-          <select id="ai-textbook"></select>
-        </div>
-        <div>
-          <label class="fld" for="ai-prog-auto">进度方式</label>
-          <select id="ai-prog-auto">
-            <option value="1">按当前日期自动推断</option>
-            <option value="0">手动指定范围</option>
-          </select>
-        </div>
-      </div>
-      <label class="fld" for="ai-scope">教学进度范围（选「手动指定」时生效）</label>
-      <input id="ai-scope" type="text" placeholder="例如：第 1—3 单元（分数加减、周长）">
-      <p class="hint" id="ai-progress-note"></p>
-
-      <h3>② 出一批新题</h3>
+      <div id="ai-manual-sec">
+      <h3>① 出一批新题</h3>
       <div class="grid3">
-        <div>
-          <label class="fld" for="ai-stage">学段</label>
-          <select id="ai-stage"></select>
-        </div>
-        <div>
-          <label class="fld" for="ai-grade">年级</label>
-          <select id="ai-grade"></select>
-        </div>
         <div>
           <label class="fld" for="ai-count">题量（1~30）</label>
           <input id="ai-count" type="number" min="1" max="30" value="10">
@@ -499,16 +509,15 @@
         <label class="chk"><input type="checkbox" id="ai-all" checked> 全选</label>
       </div>
       <p class="hint">预览题按题干去重，入库后保存立即生效；答案只存在服务端，答题页看不到。</p>
-    </div>
+      </div><!-- /ai-manual-sec -->
 
-    <!-- 自动补充新题（3.10.0：每个题库可以设置不同的自动出题要求）-->
-    <div id="tab-auto" class="card" style="display:none">
-      <h2>自动出题</h2>
+      <div id="ai-auto-sec" style="display:none">
       <p class="hint">开启后由路由器上的服务自动盯着题库：<b>当某个题库里「还没做过」
         的题目少于该题库设置的阈值时</b>，自动生成一批新题并<b>直接入库</b>补足，
-        不需要任何人点「生成预览 / 入库」。<b>每个题库可以设置一套不同的要求</b>：
-        例如小学库补四年级数学、初中库补八年级物理英语，阈值、冷却、题型也各配各的，
-        互不影响。生成时会避开该题库已有的题干；没配 Key 或接口失败时自动改用离线模板。</p>
+        不需要任何人点「生成预览 / 入库」。<b>每个管理对象（孩子）一套设置</b>：
+        阈值、冷却、科目、题型各配各的，互不影响；学段、年级、教材、地区、教学进度
+        直接沿用上面「题库」页里这个管理对象的出题范围，不用再填。
+        生成时会避开该题库已有的题干；没配 Key 或接口失败时自动改用离线模板。</p>
       <div id="auto-status" class="ai-note">正在读取状态…</div>
 
       <h3>① 设置当前管理对象的执行条件</h3>
@@ -533,14 +542,8 @@
         少于阈值时服务自动生成一批，<b>每次按下面「每次生成」的数量出满（缺 1 道也出满一批）</b>，
         全程不需要人工操作。</p>
 
-      <h3>② 每次出什么样的题（同样只对上面选中的题库生效）</h3>
+      <h3>② 每次出什么样的题（只对当前管理对象生效）</h3>
       <div class="grid3">
-        <div>
-          <label class="fld" for="auto-stage">学段</label><select id="auto-stage"></select>
-        </div>
-        <div>
-          <label class="fld" for="auto-grade">年级</label><select id="auto-grade"></select>
-        </div>
         <div>
           <label class="fld" for="auto-count">每次生成（1~30）</label>
           <input id="auto-count" type="number" min="1" max="30" value="30">
@@ -576,7 +579,7 @@
       <p class="hint">超过上限时只删该题库最旧的「自动题」，内置题和你在预览页手动入库的题都不会被动到。</p>
       <div class="row">
         <button id="auto-save">保存自动出题设置</button>
-        <button class="mini ghost" id="auto-fill">用「AI 出题」③ 当前参数填入</button>
+        <button class="mini ghost" id="auto-fill">用「手动出题」当前参数填入</button>
         <button class="mini ghost" id="auto-run">立即试跑一次</button>
         <button class="mini danger" id="auto-remove">删除该题库的规则</button>
       </div>
@@ -588,6 +591,7 @@
         <button class="mini ghost" id="auto-refresh">刷新状态</button>
         <button class="mini danger" id="auto-clear">清空运行记录</button>
       </div>
+      </div><!-- /ai-auto-sec -->
     </div>
 
     <!-- 学情 -->
@@ -703,6 +707,11 @@
       ? b.pass_rate_percent : 80;
     el('bank-wrong-add').value = b.wrong_add_questions != null
       ? b.wrong_add_questions : 2;
+    el('bank-region').value = b.region || '';
+    el('bank-prog-auto').value = b.progress_auto === false ? '0' : '1';
+    el('bank-scope').value = b.term_scope || '';
+    renderBankScopeOpts();          // 学段/年级/教材下拉（并回填当前题库的值）
+    loadBankProgress(b.id);
     el('bank-limit-mode').value = b.limit_mode === 'throttle' ? 'throttle' : 'block';
     el('bank-throttle').value = b.throttle_kbps != null ? b.throttle_kbps : 20;
     el('dl-csv').href = '/api/admin/export.csv?bank=' + encodeURIComponent(b.id);
@@ -756,10 +765,10 @@
     var idx = banks.indexOf(b);
     cur = idx;
     pickBank(idx, true);          // 题库页内容（隐藏时也无副作用，纯本地渲染）
-    if (el('tab-auto').style.display !== 'none' && typeof autoData !== 'undefined' &&
-        autoData) {
+    if (typeof autoData !== 'undefined' && autoData) {
       renderAutoRuleForm(b.id);
     }
+    loadBankProgress(b.id);
     if (el('tab-learning').style.display !== 'none') loadLearning(b.id);
     if (el('tab-devices').style.display !== 'none') renderAddDevicePicker();
   }
@@ -1041,6 +1050,10 @@
     var _idx = banks.map(function (b) { return b.id; }).indexOf(_want);
     pickBank(_idx < 0 ? 0 : _idx, true);
     setCurrentBank(banks[_idx < 0 ? 0 : _idx] ? banks[_idx < 0 ? 0 : _idx].id : _want);
+    var _aiMode = 'manual';
+    try { _aiMode = localStorage.getItem('wifigate.ai_mode') || 'manual'; } catch (e) {}
+    setAiMode(_aiMode);
+    loadAiConfig();      // 学段/年级/教材下拉要用到 AI 配置里的选项
   }
 
   function loadState() {
@@ -1065,6 +1078,12 @@
       wrong_add_questions: Number(el('bank-wrong-add').value),
       limit_mode: el('bank-limit-mode').value,
       throttle_kbps: Number(el('bank-throttle').value),
+      region: el('bank-region').value,
+      stage: el('bank-stage').value,
+      grade: el('bank-grade').value,
+      textbook: el('bank-textbook').value,
+      progress_auto: el('bank-prog-auto').value === '1',
+      term_scope: el('bank-scope').value,
       questions: Q
     }).then(function (res) {
       if (!requireAuth(res)) return;
@@ -1596,6 +1615,8 @@
   // ---------- AI 出题 / 学情（3.6.0）----------
 
   var aiConfig = null, aiPreview = [], learnRows = [];
+  var lastScopeInfo = null;        // 3.24.0：当前管理对象的出题范围/进度（/api/admin/progress）
+  var aiMode = 'manual';
 
   function escHtml(s) {
     return String(s === undefined || s === null ? '' : s)
@@ -1659,30 +1680,77 @@
     }).catch(function () {});
   }
 
+  function renderBankScopeOpts() {
+    var c = aiConfig || {};
+    var stages = c.stages || ['小学', '初中', '高中'];
+    var grades = c.grades || [];
+    var textbooks = c.textbooks || [];
+    var b = banks[cur] || {};
+    fillSel('bank-stage', [{ value: '', label: '（不指定）' }].concat(
+      stages.map(function (x) { return { value: x, label: x }; })), 'value', 'label',
+      b.stage || '');
+    fillSel('bank-grade', [{ value: '', label: '（不指定）' }].concat(
+      grades.map(function (x) { return { value: x, label: x }; })), 'value', 'label',
+      b.grade || '');
+    fillSel('bank-textbook', [{ value: '', label: '（默认教材）' }].concat(
+      textbooks), 'value', 'label', b.textbook || '');
+  }
+
+  function updateAiScopeLine(d) {
+    var line = el('ai-scope-line');
+    if (!line) return;
+    if (d && d.ok) lastScopeInfo = d;
+    var x = lastScopeInfo;
+    if (!x) {
+      line.textContent = '出题范围：在「题库」页设置（地区 / 学段年级 / 教材 / 进度）';
+      return;
+    }
+    var p = x.progress || {};
+    var who = [x.region, (x.stage || '') + (x.grade || ''),
+               x.textbook].filter(function (v) { return !!v; }).join(' · ');
+    line.innerHTML = '当前管理对象：<b>' + escHtml(x.bank_name || '') + '</b>' +
+      (who ? '（' + escHtml(who) + '）' : '') +
+      '　教学进度：' + escHtml(p.label || '') +
+      '；命题范围：' + escHtml(p.scope || '') +
+      '　<button type="button" class="mini ghost" id="ai-scope-edit">去题库修改</button>';
+    var edit = el('ai-scope-edit');
+    if (edit) edit.onclick = function () { switchTab('quiz'); };
+  }
+
+  function loadBankProgress(bid) {
+    if (!bid) return;
+    api('/api/admin/progress?bank=' + encodeURIComponent(bid)).then(function (res) {
+      if (!requireAuth(res)) return;
+      var d = res.data || {};
+      var box = el('bank-progress');
+      if (box) {
+        if (!d.ok) { box.textContent = d.detail || ''; }
+        else {
+          var p = d.progress || {};
+          box.innerHTML = '<b>当前进度：</b>' + escHtml(p.label || '') +
+            '　<b>命题范围：</b>' + escHtml(p.scope || '') +
+            '<br><span style="color:var(--muted)">' + escHtml(p.note || '') + '</span>';
+        }
+      }
+      updateAiScopeLine(d);
+    }).catch(function () {});
+  }
+
   function renderAiConfig() {
     var c = aiConfig;
     if (!c) return;
     fillSel('ai-provider', c.presets, 'id', 'label', c.provider);
-    fillSel('ai-textbook', c.textbooks, 'value', 'label', c.textbook);
-    fillSel('ai-stage', c.stages, null, null, el('ai-stage').value || '小学');
-    fillSel('ai-grade', c.grades, null, null, el('ai-grade').value || '四年级');
+    renderBankScopeOpts();
     var curSub = subjectPick('ai-subject');
     subjectChips('ai-subject', c.subjects, curSub.length ? curSub : ['数学']);
     el('ai-base').value = c.base_url || '';
     el('ai-model').value = c.model || '';
-    el('ai-prog-auto').value = c.progress_auto ? '1' : '0';
-    el('ai-scope').value = c.term_scope || '';
     el('ai-key').value = '';                 // 明文永不回填
     el('ai-keyhint').textContent = c.has_key
       ? '当前已保存：' + c.key_hint + '（要换 Key 就直接填新的再保存）'
       : '当前未配置 API Key —— 在上方填写 DeepSeek 的 sk-… 后点「保存连接设置」。';
-    var p = c.progress || {};
-    el('ai-progress').innerHTML = '<b>当前教学进度：</b>' + escHtml(p.label || '') +
-      '<br><b>命题范围：</b>' + escHtml(p.scope || '') +
-      '<br><span style="color:var(--muted)">' + escHtml(p.note || '') + '</span>';
-    el('ai-progress-note').textContent = '按广州校历粗略推断（9 月 1 日 / 2 月下旬开学）；'
-      + '如与孩子实际进度不符，选「手动指定范围」并填写，例如「第 1—3 单元（分数加减）」。';
     fillAiBanks();
+    updateAiScopeLine();
   }
 
   function loadAiConfig() {
@@ -1700,9 +1768,6 @@
       base_url: el('ai-base').value,
       model: el('ai-model').value,
       api_key: el('ai-key').value,
-      textbook: el('ai-textbook').value,
-      progress_auto: el('ai-prog-auto').value === '1',
-      term_scope: el('ai-scope').value,
       timeout: 90
     };
     if (extra) Object.keys(extra).forEach(function (k) { patch[k] = extra[k]; });
@@ -1713,9 +1778,6 @@
       el('ai-key').value = '';
       el('ai-keyhint').textContent = aiConfig.has_key
         ? '当前已保存：' + aiConfig.key_hint : '当前未配置 API Key';
-      var p = aiConfig.progress || {};
-      el('ai-progress').innerHTML = '<b>当前教学进度：</b>' + escHtml(p.label || '') +
-        '<br><b>命题范围：</b>' + escHtml(p.scope || '');
       if (!silent) toast('已保存');
       return aiConfig;
     }).catch(function () { toast('保存失败'); return null; });
@@ -1777,7 +1839,6 @@
   function aiSpec(mode) {
     var subs = subjectPick('ai-subject');
     var spec = {
-      stage: el('ai-stage').value, grade: el('ai-grade').value,
       subjects: subs, subject: subs[0] || '',
       count: Math.min(30, Math.max(1, parseInt(el('ai-count').value, 10) || 10)),
       topics: el('ai-topics').value, mode: mode
@@ -1984,8 +2045,6 @@
       cooldown_minutes: parseInt(el('auto-cooldown').value, 10) || 30,
       count: parseInt(el('auto-count').value, 10) || 30,
       bank_id: currentAutoBank(),
-      stage: el('auto-stage').value,
-      grade: el('auto-grade').value,
       subjects: subs,
       subject: subs[0] || '',
       topics: el('auto-topics').value,
@@ -2068,10 +2127,6 @@
       el(AUTO_MIX_IDS[i]).value = (cfg.mix && cfg.mix[k] !== undefined)
         ? cfg.mix[k] : '';
     });
-    fillSel('auto-stage', (autoOpts && autoOpts.stages) ||
-            ['小学', '初中', '高中'], null, null, cfg.stage);
-    fillSel('auto-grade', [''].concat((autoOpts && autoOpts.grades) || []),
-            null, null, cfg.grade);
     subjectChips('auto-subject', (autoOpts && autoOpts.subjects) || [],
                  (cfg.subjects && cfg.subjects.length)
                    ? cfg.subjects : [cfg.subject || '数学']);
@@ -2162,8 +2217,6 @@
 
   function autoFillFromAi() {
     loadAiConfig().then(function () {
-      el('auto-stage').value = el('ai-stage').value;
-      el('auto-grade').value = el('ai-grade').value;
       subjectChips('auto-subject',
         (autoOpts && autoOpts.subjects) || (aiConfig && aiConfig.subjects) || [],
         subjectPick('ai-subject'));
@@ -2202,22 +2255,36 @@
   }
 
   setInterval(function () {
-    if (el('tab-auto').style.display !== 'none') refreshAutoStatus();
+    if (el('tab-ai').style.display !== 'none' &&
+        el('ai-auto-sec').style.display !== 'none') refreshAutoStatus();
   }, 30000);
 
   // ---------- 交互 ----------
 
+  function setAiMode(m) {
+    aiMode = m === 'auto' ? 'auto' : 'manual';
+    el('ai-manual-sec').style.display = aiMode === 'manual' ? 'block' : 'none';
+    el('ai-auto-sec').style.display = aiMode === 'auto' ? 'block' : 'none';
+    el('ai-mode-manual').className = aiMode === 'manual' ? 'mini' : 'mini ghost';
+    el('ai-mode-auto').className = aiMode === 'auto' ? 'mini' : 'mini ghost';
+    if (aiMode === 'auto') loadAutoBank();
+    try { localStorage.setItem('wifigate.ai_mode', aiMode); } catch (e) {}
+  }
+
   function switchTab(name) {
     // 5 个「管理对象」页签 + 右上角「系统设置」（没有页签按钮，从顶栏进入）
-    ['quiz', 'ai', 'auto', 'learning', 'devices', 'settings'].forEach(function (n) {
+    ['quiz', 'ai', 'learning', 'devices', 'settings'].forEach(function (n) {
       el('tab-' + n).style.display = n === name ? 'block' : 'none';
       var btn = el('tabbtn-' + n);
       if (btn) btn.className = n === name ? '' : 'off';
     });
     if (name === 'devices') refreshDevices();
     if (name === 'quiz') syncImportBank();
-    if (name === 'ai') loadAiConfig();
-    if (name === 'auto') loadAutoBank();
+    if (name === 'ai') {
+      loadAiConfig();            // 手动/自动合并成一页：两边数据都准备好
+      loadAutoBank();
+      loadBankProgress(currentBankId);
+    }
     if (name === 'learning') {
       loadLearning(currentBankId || el('learn-sel').value || '');
     }
@@ -2236,9 +2303,11 @@
   el('open-settings').onclick = function () { switchTab('settings'); };
   el('ai-goset').onclick = function () { switchTab('settings'); };
   el('obj-sel').onchange = function () { setCurrentBank(el('obj-sel').value); };
-  ['quiz', 'ai', 'auto', 'learning', 'devices'].forEach(function (n) {
+  ['quiz', 'ai', 'learning', 'devices'].forEach(function (n) {
     el('tabbtn-' + n).onclick = function () { switchTab(n); };
   });
+  el('ai-mode-manual').onclick = function () { setAiMode('manual'); };
+  el('ai-mode-auto').onclick = function () { setAiMode('auto'); };
 
   el('auto-save').onclick = saveAutoBank;
   el('auto-run').onclick = runAutoBank;

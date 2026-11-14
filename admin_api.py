@@ -357,6 +357,27 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
         return 200, Raw(importer.bank_to_csv(bank["questions"]),
                         "text/csv; charset=utf-8", name), None
 
+    # ---- 3.24.0：管理对象（题库）的出题范围与教学进度预览 ----
+    if path == "/api/admin/progress" and method == "GET":
+        bid = str((query.get("bank") or [""])[0]).strip()
+        bank = st.bank(bid) if bid else st.first_bank()
+        if not bank:
+            return 404, {"ok": False, "detail": "题库不存在"}, None
+        spec = ai_bank.scope_from_bank(bank)
+        p, textbook, plines = progress.resolve(
+            spec, {"textbook": bank.get("textbook") or "",
+                   "progress_auto": bank.get("progress_auto", True),
+                   "term_scope": bank.get("term_scope") or ""})
+        return 200, {
+            "ok": True, "bank_id": bank["id"], "bank_name": bank["name"],
+            "region": bank.get("region") or "",
+            "stage": bank.get("stage") or "", "grade": bank.get("grade") or "",
+            "textbook": textbook, "progress_auto": bank.get("progress_auto", True),
+            "term_scope": bank.get("term_scope") or "",
+            "progress": p, "lines": plines,
+            "textbooks": progress.textbook_options(),
+        }, None
+
     # ---- AI 出题（3.6.0）：密钥只进 state/ai.json，响应一律打码 ----
     if path == "/api/admin/ai/config" and method == "GET":
         return 200, {"ok": True, "config": ai_bank.public_config()}, None
@@ -383,6 +404,11 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
         bid = data.get("bank_id") or spec.get("bank_id")
         bank = st.bank(bid) if bid else st.first_bank()
         if bank:
+            # 3.24.0：出题范围（地区/学段/年级/教材/进度）挂在管理对象上，
+            # 出题时自动带上，页面不用再填；显式传了就以传入的为准。
+            merged = dict(ai_bank.scope_from_bank(bank))
+            merged.update(spec)
+            spec = merged
             spec.setdefault("avoid", [q["text"] for q in bank["questions"]][:600])
         if "star" not in spec and "difficulty" not in spec and bank:
             # 3.15.0：没指定难度时按这个题库（人）最近正确率自动定星级
