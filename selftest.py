@@ -455,15 +455,17 @@ def main():
     code, raw = call("/admin")
     check("管理后台可访问", code == 200 and "管理后台" in raw, "HTTP %s" % code)
     check("后台含断网/放行控制", "deviceWan" in raw and "已放行" in raw)
-    check("后台设备页只显示受控设备 + 顶部有添加入口",
-          "controlled = devices.filter(function (d) { return !!d.bank_id; })" in raw and
+    check("后台设备页只显示当前管理对象的受控设备 + 顶部有添加入口",
+          "controlled = devices.filter(function (d) {" in raw and
+          "d.bank_id === currentBankId" in raw and
           'id="dev-add"' in raw and 'id="dev-add-mac"' in raw and
           'id="dev-add-bank"' in raw and 'id="dev-add-btn"' in raw and
           "function renderAddDevicePicker(" in raw and
           "function addControlledDevice(" in raw and
           "/api/admin/bank/assign" in raw and
-          "添加受控设备" in raw,
-          "列表按 bank_id 过滤，顶部可添加")
+          "添加受控设备" in raw and
+          "当前管理对象" in raw,
+          "列表按当前管理对象过滤，顶部可添加")
 
     code, res = admin("/api/admin/state")
     check("未登录访问后台被拒", code == 401, "HTTP %s" % code)
@@ -2321,6 +2323,10 @@ def main():
           "function setLearnDownload(" in admin_html)
 
     # ---- 3.18.0 学情按题库（人）：界面与服务端 ----
+    check("学情页只显示当前管理对象（3.27.0）",
+          "r.bank_id === currentBankId" in admin_html and
+          "当前管理对象还没有答题记录" in admin_html and
+          "这里只显示顶栏选中的管理对象" in admin_html)
     check("学情页按题库（人）展示",
           "选择题库（人）" in admin_html and
           "学情是按「人」算的" in admin_html and
