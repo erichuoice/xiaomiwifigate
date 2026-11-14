@@ -692,13 +692,17 @@ def main():
         "enabled": False, "threshold": 30, "cooldown_minutes": 5,
         "count": 3, "mode": "offline", "max_auto": 5,
         "bank_id": ai_bank_id, "stage": "小学", "grade": "四年级",
-        "subject": "数学", "topics": "",
+        "subjects": ["数学", "英语"], "topics": "",
         "mix": {"single": 1, "multi": 1, "judge": 1},
     })
     check("保存自动出题设置（保持关闭，避免自检期间被定时触发）",
           code == 200 and (res.get("config") or {}).get("count") == 3 and
           (res.get("config") or {}).get("max_auto") == 5 and
           (res.get("config") or {}).get("enabled") is False)
+    check("自动出题科目多选可保存并回读",
+          (res.get("config") or {}).get("subjects") == ["数学", "英语"] and
+          (res.get("status") or {}).get("subjects") == ["数学", "英语"],
+          str((res.get("config") or {}).get("subjects")))
 
     added_total, run_ok = 0, True
     for _i in range(3):
@@ -960,6 +964,38 @@ def main():
               len(parsed_ctrl) == 1 and "第二行" in parsed_ctrl[0]["text"],
               json.dumps(parsed_ctrl, ensure_ascii=False)[:80])
 
+        # ---- 3.9.0 出题科目可多选 ----
+        check("科目多选解析：顿号/逗号/数组/去重/回落",
+              ai_bank.normalize_subjects("数学、语文，英语") == ["数学", "语文", "英语"] and
+              ai_bank.normalize_subjects(["数学", "数学", "科学"]) == ["数学", "科学"] and
+              ai_bank.normalize_subjects("") == ["数学"] and
+              ai_bank.normalize_subjects(["科学", "历史"]) == ["科学", "历史"])
+        check("多科目题量平均分配",
+              ai_bank.allocate(30, 3) == [10, 10, 10] and
+              ai_bank.allocate(10, 3) == [4, 3, 3], str(ai_bank.allocate(10, 3)))
+        multi_spec = {"stage": "小学", "grade": "四年级",
+                      "subjects": ["数学", "语文", "英语"], "count": 9}
+        multi_qs = ai_bank.offline_generate(multi_spec)
+        subj_count = {}
+        for q in multi_qs:
+            subj_count[q["subject"]] = subj_count.get(q["subject"], 0) + 1
+        check("离线多科出题：每科都有且总量正好",
+              len(multi_qs) == 9 and set(subj_count) == {"数学", "语文", "英语"} and
+              all(v == 3 for v in subj_count.values()), str(subj_count))
+        multi_prompt = ai_bank.build_prompt(dict(multi_spec), ai_bank.split_mix(9))
+        check("多科目 prompt 写明每科题量与 subject 约束",
+              "混合以下科目" in multi_prompt and "数学 3 道" in multi_prompt and
+              "语文 3 道" in multi_prompt and
+              "subject 字段只能写实际所属的那一科" in multi_prompt)
+        ai_multi = ai_bank.normalize_ai_questions(
+            [{"type": "single", "text": "1+1=?", "options": ["1", "2", "3", "4"],
+              "answer": 0, "subject": "数学（四年级）"}],
+            {"stage": "小学", "subjects": ["数学", "语文"], "count": 1})
+        check("多科目下科目名归一化，数字答案 0 不再被丢",
+              len(ai_multi) == 1 and ai_multi[0]["subject"] == "数学" and
+              ai_multi[0]["answer"] == 0,
+              str([(q["subject"], q["answer"]) for q in ai_multi]))
+
         M = "02:00:00:00:00:66"
         pool = [{"id": "q%02d" % i, "text": "题%d" % i, "subject": "数学",
                  "type": ["single", "multi", "judge"][i % 3],
@@ -1025,6 +1061,13 @@ def main():
         check("未启用时不安排冷却",
               auto_bank.cooldown_until(
                   auto_bank.normalize({"enabled": False}), ab_now) == 0)
+        ab_multi = auto_bank.normalize({"subjects": ["数学", "英语"]})
+        check("自动出题支持科目多选（含兼容字段）",
+              ab_multi["subjects"] == ["数学", "英语"] and
+              ab_multi["subject"] == "数学、英语", str(ab_multi["subjects"]))
+        check("旧配置只有单科目时自动补成列表",
+              auto_bank.normalize({"subject": "语文"})["subjects"] == ["语文"] and
+              auto_bank.normalize({"subjects": ["语文", "语文"]})["subjects"] == ["语文"])
 
         # 守护线程的核心路径：新题少于阈值 → due → run_once(auto) 补缺口
         # → 进入冷却并留痕。临时 runtime + 临时学情，不碰真实数据。
@@ -1156,6 +1199,21 @@ def main():
     check("自动出题定时刷状态不覆盖正在编辑的表单",
           bool(ab_refresh) and "renderAutoBank" not in ab_refresh.group(0) and
           "renderAutoStatus" in ab_refresh.group(0))
+
+    # ---- 3.9.0 出题科目多选 ----
+    check("科目改成多选控件（不再是单选下拉）",
+          bool(re.search(r'<div id="ai-subject"[^>]*class="chips"', admin_html)) and
+          bool(re.search(r'<div id="auto-subject"[^>]*class="chips"', admin_html)) and
+          '<select id="ai-subject"' not in admin_html and
+          '<select id="auto-subject"' not in admin_html)
+    check("前端按勾选框读写科目数组",
+          "function subjectChips(" in admin_html and
+          "function subjectPick(" in admin_html and
+          "subjects: subs" in admin_html and
+          "box.querySelectorAll('input')" in admin_html)
+    check("至少勾一个科目才允许出题/保存",
+          admin_html.count("请至少勾选一个科目") >= 2,
+          str(admin_html.count("请至少勾选一个科目")))
 
     for _p, _raw in extra_paths.items():
         try:

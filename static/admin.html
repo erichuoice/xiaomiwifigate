@@ -112,6 +112,15 @@
   .grid2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:2px 12px; }
   .grid3 { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:2px 12px; }
   @media (max-width:620px) { .grid2,.grid3 { grid-template-columns:1fr; } }
+  /* 3.9.0：科目多选（chip 勾选，可同时选多科） */
+  .chips { display:flex; flex-wrap:wrap; gap:7px; margin:2px 0 4px; }
+  .chips label { display:flex; align-items:center; gap:5px; border:1px solid var(--line);
+    border-radius:999px; padding:5px 12px; font-size:13px; cursor:pointer; background:#fff;
+    user-select:none; }
+  .chips label.on { border-color:var(--accent); background:var(--soft); color:var(--accent);
+    font-weight:600; }
+  .chips input[type=checkbox] { width:15px; height:15px; margin:0; accent-color:var(--accent); }
+  .chips .chips-hint { font-size:12px; color:var(--muted); align-self:center; }
   h3 { font-size:14.5px; font-weight:600; margin:20px 0 10px; }
   .ai-note { background:var(--warn-bg); border:1px solid var(--warn-line); border-radius:10px;
     padding:9px 12px; font-size:13px; line-height:1.7; }
@@ -365,10 +374,6 @@
           <select id="ai-grade"></select>
         </div>
         <div>
-          <label class="fld" for="ai-subject">科目</label>
-          <select id="ai-subject"></select>
-        </div>
-        <div>
           <label class="fld" for="ai-count">题量（1~30）</label>
           <input id="ai-count" type="number" min="1" max="30" value="10">
         </div>
@@ -381,6 +386,8 @@
           <select id="ai-device"></select>
         </div>
       </div>
+      <label class="fld">科目（可多选，可同时出多个科目）</label>
+      <div id="ai-subject" class="chips"></div>
       <label class="fld" for="ai-topics">知识点（可选，逗号分隔）</label>
       <input id="ai-topics" type="text" placeholder="例如：分数加减，长方形周长，古诗默写">
       <label class="fld">题型数量（留空 = 自动按 50% 单选 / 25% 多选 / 25% 判断分配）</label>
@@ -437,9 +444,6 @@
           <label class="fld" for="auto-grade">年级</label><select id="auto-grade"></select>
         </div>
         <div>
-          <label class="fld" for="auto-subject">科目</label><select id="auto-subject"></select>
-        </div>
-        <div>
           <label class="fld" for="auto-count">每次最多生成（1~30）</label>
           <input id="auto-count" type="number" min="1" max="30" value="30">
         </div>
@@ -462,6 +466,8 @@
           <input id="auto-max" type="number" min="0" max="5000" value="60">
         </div>
       </div>
+      <label class="fld">科目（可多选，可同时出多个科目）</label>
+      <div id="auto-subject" class="chips"></div>
       <label class="fld" for="auto-topics">知识点（可选，逗号分隔）</label>
       <input id="auto-topics" type="text" placeholder="例如：分数加减，长方形周长，古诗默写">
       <label class="fld">题型数量（留空 = 自动按 50% 单选 / 25% 多选 / 25% 判断分配）</label>
@@ -1257,6 +1263,31 @@
     if (selected !== undefined && selected !== null) sel.value = selected;
   }
 
+  // 3.9.0：科目多选。用 chip + 勾选框，可同时选多科；返回/读取都是数组。
+  function subjectChips(id, list, selected) {
+    var box = el(id);
+    var picked = (selected || []).filter(function (s) { return !!s; });
+    if (!picked.length) picked = ['数学'];
+    var all = (list && list.length) ? list.slice() : [];
+    picked.forEach(function (s) { if (all.indexOf(s) < 0) all.push(s); });
+    box.innerHTML = all.map(function (s) {
+      var on = picked.indexOf(s) >= 0;
+      return '<label class="' + (on ? 'on' : '') + '"><input type="checkbox" value="' +
+        escHtml(s) + '"' + (on ? ' checked' : '') + '>' + escHtml(s) + '</label>';
+    }).join('');
+    Array.prototype.forEach.call(box.querySelectorAll('input'), function (inp) {
+      inp.onchange = function () { inp.parentNode.className = inp.checked ? 'on' : ''; };
+    });
+  }
+
+  function subjectPick(id) {
+    var out = [];
+    Array.prototype.forEach.call(el(id).querySelectorAll('input'), function (inp) {
+      if (inp.checked && inp.value) out.push(inp.value);
+    });
+    return out;
+  }
+
   function fillAiBanks() {
     var cur = el('ai-bank').value;
     fillSel('ai-bank', banks.map(function (b) {
@@ -1285,7 +1316,8 @@
     fillSel('ai-textbook', c.textbooks, 'value', 'label', c.textbook);
     fillSel('ai-stage', c.stages, null, null, el('ai-stage').value || '小学');
     fillSel('ai-grade', c.grades, null, null, el('ai-grade').value || '四年级');
-    fillSel('ai-subject', c.subjects, null, null, el('ai-subject').value || '数学');
+    var curSub = subjectPick('ai-subject');
+    subjectChips('ai-subject', c.subjects, curSub.length ? curSub : ['数学']);
     el('ai-base').value = c.base_url || '';
     el('ai-model').value = c.model || '';
     el('ai-prog-auto').value = c.progress_auto ? '1' : '0';
@@ -1394,9 +1426,10 @@
   }
 
   function aiSpec(mode) {
+    var subs = subjectPick('ai-subject');
     var spec = {
       stage: el('ai-stage').value, grade: el('ai-grade').value,
-      subject: el('ai-subject').value,
+      subjects: subs, subject: subs[0] || '',
       count: Math.min(30, Math.max(1, parseInt(el('ai-count').value, 10) || 10)),
       topics: el('ai-topics').value, mode: mode
     };
@@ -1411,6 +1444,7 @@
   }
 
   function generateAi(mode) {
+    if (!subjectPick('ai-subject').length) { toast('请至少勾选一个科目'); return; }
     var b = el('ai-gen');
     b.disabled = true; b.textContent = '生成中…';
     el('ai-result-note').textContent = '正在保存设置并调用 AI（最多约 90 秒），请稍候…';
@@ -1552,6 +1586,7 @@
   }
 
   function autoForm() {
+    var subs = subjectPick('auto-subject');
     return {
       enabled: el('auto-enabled').checked,
       threshold: parseInt(el('auto-threshold').value, 10) || 30,
@@ -1560,7 +1595,8 @@
       bank_id: el('auto-bank').value,
       stage: el('auto-stage').value,
       grade: el('auto-grade').value,
-      subject: el('auto-subject').value,
+      subjects: subs,
+      subject: subs[0] || '',
       topics: el('auto-topics').value,
       mode: el('auto-mode').value,
       device_mac: el('auto-device').value,
@@ -1595,6 +1631,7 @@
       '<b>上次执行：</b>' + escHtml(s.last_run_text || '—'),
       '<b>目标题库：</b>' + escHtml(s.bank_name || '—') + ' · 共 ' +
         (s.bank_total || 0) + ' 道，其中自动题 ' + (s.auto_questions || 0) + ' 道',
+      '<b>出题科目：</b>' + escHtml((s.subjects || []).join('、') || '—'),
       '<b>AI Key：</b>' + (s.has_key ? '已配置' : '未配置（将用离线模板出题）')
     ].join('<br>');
   }
@@ -1638,7 +1675,9 @@
             null, null, autoCfg.stage);
     fillSel('auto-grade', [''].concat(autoOpts.grades || []),
             null, null, autoCfg.grade);
-    fillSel('auto-subject', autoOpts.subjects || [], null, null, autoCfg.subject);
+    var autoSubs = (autoCfg.subjects && autoCfg.subjects.length)
+      ? autoCfg.subjects : [autoCfg.subject || '数学'];
+    subjectChips('auto-subject', autoOpts.subjects || [], autoSubs);
     fillSel('auto-bank', autoBanks.map(function (b) {
       return { id: b.id, name: b.name + '（' + b.questions + ' 题）' };
     }), 'id', 'name', autoCfg.bank_id || (autoBanks[0] && autoBanks[0].id));
@@ -1665,6 +1704,7 @@
   }
 
   function saveAutoBank() {
+    if (!subjectPick('auto-subject').length) { toast('请至少勾选一个科目'); return; }
     var b = el('auto-save'); b.disabled = true;
     api('/api/admin/auto-bank', autoForm()).then(function (res) {
       b.disabled = false;
@@ -1709,7 +1749,9 @@
     loadAiConfig().then(function () {
       el('auto-stage').value = el('ai-stage').value;
       el('auto-grade').value = el('ai-grade').value;
-      el('auto-subject').value = el('ai-subject').value;
+      subjectChips('auto-subject',
+        (autoOpts && autoOpts.subjects) || (aiConfig && aiConfig.subjects) || [],
+        subjectPick('ai-subject'));
       el('auto-count').value = el('ai-count').value;
       el('auto-bank').value = el('ai-bank').value;
       el('auto-topics').value = el('ai-topics').value;

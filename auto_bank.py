@@ -44,7 +44,8 @@ DEFAULTS = {
     "bank_id": "",             # 空 = 第一个题库
     "stage": "小学",
     "grade": "四年级",
-    "subject": "数学",
+    "subject": "数学",           # 兼容旧配置：单科目字符串
+    "subjects": ["数学"],        # 3.9.0：可多选的科目列表（为准）
     "topics": "",
     "mode": "auto",             # auto=优先 AI 失败降级 / offline / ai=不降级
     "mix": {},                  # 空 = 自动按比例分配三种题型
@@ -122,7 +123,15 @@ def normalize(raw, base=None):
     out["bank_id"] = str(src.get("bank_id") or "").strip()[:64]
     out["stage"] = str(src.get("stage") or "").strip()[:16] or "小学"
     out["grade"] = str(src.get("grade") or "").strip()[:16]
-    out["subject"] = str(src.get("subject") or "").strip()[:16] or "数学"
+    # 科目：本次请求里显式给了就以它为准（subjects 优先），否则沿用已保存的配置。
+    # 不能直接读 src：DEFAULTS 里带着 subjects 默认值，会把旧的单科目配置盖掉。
+    picked = None
+    if isinstance(raw, dict):
+        picked = raw.get("subjects") or raw.get("subject")
+    if not picked:
+        picked = src.get("subjects") or src.get("subject")
+    out["subjects"] = ai_bank.normalize_subjects(picked, default=("数学",))
+    out["subject"] = ("、".join(out["subjects"]))[:64]
     out["topics"] = str(src.get("topics") or "").strip()[:200]
     mode = str(src.get("mode") or "auto").strip()
     if mode not in MODES:
@@ -286,6 +295,7 @@ def status(st, now=None):
         "bank_name": bank["name"] if bank else "（题库不存在）",
         "bank_total": len(bank["questions"]) if bank else 0,
         "auto_questions": auto_count,
+        "subjects": cfg["subjects"],
         "has_key": has_key,
         "runs": cfg["runs"],
     }
@@ -337,7 +347,7 @@ def run_once(st, reason="auto", now=None):
 
         spec = {
             "stage": cfg["stage"], "grade": cfg["grade"],
-            "subject": cfg["subject"], "count": count,
+            "subject": cfg["subject"], "subjects": cfg["subjects"], "count": count,
             "topics": cfg["topics"], "mode": cfg["mode"],
             "avoid": [q["text"] for q in bank["questions"]][:600],
         }

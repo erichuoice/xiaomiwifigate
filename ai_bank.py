@@ -69,10 +69,51 @@ GRADES = ["一年级", "二年级", "三年级", "四年级", "五年级", "六�
           "七年级", "八年级", "九年级"]
 SUBJECTS = ["语文", "数学", "英语", "科学", "物理", "化学", "生物", "历史", "地理"]
 TYPES = {"single": "单选题", "multi": "多选题", "judge": "判断题"}
+MAX_SUBJECTS = 6          # 一次最多混合几个科目（题量 30 时每科仍有 5 道）
 
 
 class AIError(Exception):
     pass
+
+
+def normalize_subjects(value, default=("数学",)):
+    """把「科目」收敛成列表（3.9.0 起支持多选）。
+
+    兼容四种输入：列表 ``["数学","语文"]``、逗号/顿号/空格分隔的字符串
+    ``"数学、语文"``、单字符串 ``"数学"``、空值（回落到 default）。
+    去重保序，单项最多 16 字，最多 MAX_SUBJECTS 项。
+    """
+    if isinstance(value, (list, tuple, set)):
+        parts = [str(x) for x in value]
+    else:
+        parts = re.split(r"[,，、;；/|\s]+", str(value or ""))
+    out = []
+    for part in parts:
+        name = str(part).strip()[:16]
+        if not name or name in out:
+            continue
+        out.append(name)
+        if len(out) >= MAX_SUBJECTS:
+            break
+    if not out:
+        out = [str(x).strip() for x in default if str(x).strip()] or ["数学"]
+    return out
+
+
+def spec_subjects(spec):
+    """从出题参数里取科目列表：优先 subjects，回退旧的 subject 字段。"""
+    spec = spec or {}
+    raw = spec.get("subjects")
+    if not raw:
+        raw = spec.get("subject")
+    return normalize_subjects(raw)
+
+
+def allocate(count, n):
+    """把 count 道题尽量平均分给 n 个科目，余数给前面的科目。"""
+    count, n = max(0, int(count or 0)), max(1, int(n or 1))
+    base, rem = divmod(count, n)
+    return [base + (1 if i < rem else 0) for i in range(n)]
 
 
 # ---------------------------------------------------------------- 配置
@@ -253,40 +294,51 @@ SYSTEM_PROMPT = (
 def build_prompt(spec, mix, variant_text=""):
     stage = str(spec.get("stage") or "小学")
     grade = str(spec.get("grade") or "")
-    subject = str(spec.get("subject") or "数学")
+    subjects = spec_subjects(spec)
+    subject = subjects[0]
+    count = int(spec.get("count") or 10)
     topics = spec.get("topics") or []
     if isinstance(topics, str):
         topics = [t.strip() for t in re.split(r"[,，、;；\s]+", topics) if t.strip()]
     _, textbook, plines = progress.resolve(spec)
     region = REGION
-    lines = [
-        "请为%s%s的%s学生出 %d 道题。" % (
-            region, stage + (grade or ""), subject, int(spec.get("count") or 10)),
-        "",
-    ] + plines + [
-        "",
-        "【命题要求】",
-        "1. 严格依据《义务教育课程标准》与上述教材版本，不超纲、不出现该年级没学过的知识；"
+    if len(subjects) == 1:
+        head = "请为%s%s的%s学生出 %d 道题。" % (
+            region, stage + (grade or ""), subject, count)
+    else:
+        alloc = allocate(count, len(subjects))
+        head = "请为%s%s学生出 %d 道题，混合以下科目：%s（每科都要有题，可按难度微调）。" % (
+            region, stage + (grade or ""), count,
+            "、".join("%s %d 道" % (s, n) for s, n in zip(subjects, alloc) if n))
+    multi = len(subjects) > 1
+    reqs = [
+        "严格依据《义务教育课程标准》与上述教材版本，不超纲、不出现该年级没学过的知识；"
         "语言难度符合该年级认知水平，使用简体中文（英语科目的题干与选项可用英文）。",
-        "2. 情境尽量自然融入广东广州本地元素（珠江、广州塔、越秀公园、陈家祠、沙面、"
+        "情境尽量自然融入广东广州本地元素（珠江、广州塔、越秀公园、陈家祠、沙面、"
         "白云山、海心沙、北京路、上下九、广州地铁、早茶点心、荔枝、醒狮、粤剧、龙舟、"
         "木棉花、南沙湿地等），但不得因情境引入超纲内容，也不要出现商业广告、"
         "真实人名隐私或政治敏感内容。",
-        "3. 题型严格按下列数量出题：单选题 %d 道（4 个选项、唯一正确答案）、"
+        "题型严格按下列数量出题：单选题 %d 道（4 个选项、唯一正确答案）、"
         "多选题 %d 道（4~5 个选项、至少 2 个正确答案）、"
         "判断题 %d 道（选项固定为 [\"正确\", \"错误\"]）。" % (
             mix.get("single", 0), mix.get("multi", 0), mix.get("judge", 0)),
-        "4. 选项文字长度接近、干扰项合理；不要用「以上都对」「以上都不对」「无法确定」这类选项；"
+        "选项文字长度接近、干扰项合理；不要用「以上都对」「以上都不对」「无法确定」这类选项；"
         "不要让两道题的题干重复或只是换了数字。",
-        "5. 每题必须有 explain（一句话解析，说明为什么）、topic（具体知识点名称，"
+        "每题必须有 explain（一句话解析，说明为什么）、topic（具体知识点名称，"
         "如「两位数进位加法」「古诗文默写」「一般现在时第三人称单数」，"
         "不要写「综合」「其他」这种笼统词）、star（1~5 的难度星级）。",
-        "6. 答案字段 answer：单选/判断写选项序号（0 开始）或字母 A/B/C/D；"
+        "答案字段 answer：单选/判断写选项序号（0 开始）或字母 A/B/C/D；"
         "判断题也可以写「正确」或「错误」；多选题写序号数组如 [0,2] 或字母 \"A,C\"。",
     ]
+    if multi:
+        reqs.append("本次要混合多个科目，每题的 subject 字段只能写实际所属的那一科"
+                    "（%s），不要写「综合」「多科」，也不要把不同科目的知识混进同一道题。"
+                    % "、".join(subjects))
     if topics:
-        lines.append("7. 优先围绕这些知识点出题：%s。" % "、".join(topics[:8]))
-        lines.append("   其中至少一半题目必须命中上述知识点（薄弱知识点要反复练）。")
+        reqs.append("优先围绕这些知识点出题：%s；其中至少一半题目必须命中上述知识点"
+                    "（薄弱知识点要反复练）。" % "、".join(topics[:8]))
+    lines = [head, ""] + plines + ["", "【命题要求】"]
+    lines += ["%d. %s" % (i, text) for i, text in enumerate(reqs, 1)]
     if variant_text:
         lines += [
             "",
@@ -299,8 +351,12 @@ def build_prompt(spec, mix, variant_text=""):
         "【输出格式】只输出 JSON 数组，每个元素字段如下：",
         '{"type":"single|multi|judge","text":"题干","options":["选项0","选项1",...],'
         '"answer":0,"explain":"解析","topic":"知识点","star":2,'
-        '"stage":"%s","grade":"%s","subject":"%s"}' % (stage, grade, subject),
+        '"stage":"%s","grade":"%s","subject":"%s"}' % (
+            stage, grade, subject if not multi else "科目名"),
     ]
+    if multi:
+        lines.append("上面的 subject 只能是：%s。每道题写它实际所属的那一科。" %
+                     "、".join(subjects))
     return "\n".join(lines)
 
 
@@ -331,10 +387,16 @@ def split_mix(count, mix=None):
 # ---------------------------------------------------------------- 答案解析
 
 def _parse_answer(value, qtype, n_options):
-    if isinstance(value, (list, tuple)):
+    # 3.9.0 修复：纯数字答案（尤其是 0）以前会因 "value or ''" 被当成空值整题丢掉
+    if isinstance(value, bool):
+        value = int(value)
+    if isinstance(value, (int, float)):
+        parts = [str(int(value))]
+    elif isinstance(value, (list, tuple)):
         parts = [str(x).strip() for x in value]
     else:
-        parts = re.split(r"[,，、;；/|\s]+", str(value or "").strip())
+        parts = re.split(r"[,，、;；/|\s]+",
+                         str(value if value is not None else "").strip())
     idxs = []
     for part in parts:
         if not part:
@@ -430,7 +492,19 @@ def normalize_ai_questions(raw, spec, source="ai"):
     """AI 输出 → 统一题目结构，逐题校验，坏题跳过而不是整批失败。"""
     stage = str(spec.get("stage") or "")
     grade = str(spec.get("grade") or "")
-    subject = str(spec.get("subject") or "")
+    subjects = spec_subjects(spec)
+    single = subjects[0] if len(subjects) == 1 else ""
+
+    def _subject_of(value):
+        """把 AI 写的科目收敛到本次勾选的科目里；对不上就留空（不瞎猜）。"""
+        name = str(value or "").strip()[:16]
+        if not name:
+            return single
+        for known in subjects:
+            if name == known or known in name or name in known:
+                return known
+        return "" if len(subjects) > 1 else name
+
     out = []
     for i, item in enumerate(raw[:60], 1):
         if not isinstance(item, dict):
@@ -456,7 +530,7 @@ def normalize_ai_questions(raw, spec, source="ai"):
             "topic": topic, "star": item.get("star", 2),
             "stage": str(item.get("stage") or stage),
             "grade": str(item.get("grade") or grade),
-            "subject": str(item.get("subject") or subject),
+            "subject": _subject_of(item.get("subject")),
             "source": source,
         }
         if not q["text"]:
@@ -710,32 +784,52 @@ def _science(spec, qtype):
 
 
 def offline_generate(spec, avoid=None):
-    """不联网也能出的随机题：广州情境 + 三种题型 + 知识点标签。"""
+    """不联网也能出的随机题：广州情境 + 三种题型 + 知识点标签。
+
+    3.9.0 起支持科目多选：题量按科目平均分配，每科用自己的模板出题，
+    再把结果打散，保证每个勾选的科目都有题、且都是该科的内容。
+    """
     count = max(1, min(30, int(spec.get("count") or 10)))
-    mix = split_mix(count, spec.get("mix"))
-    subject = str(spec.get("subject") or "数学")
-    builder = {"数学": _math, "语文": _chinese, "英语": _english}.get(subject, _science)
+    subjects = spec_subjects(spec)
+    alloc = allocate(count, len(subjects))
     avoid = {str(t).strip() for t in (avoid or [])}
     out, seen = [], set(avoid)
-    for qtype in ("single", "multi", "judge"):
-        for _ in range(mix.get(qtype, 0)):
-            for attempt in range(40):
-                q = builder(spec, qtype)
-                if subject != "数学":
-                    # 广州研学练习册编号：同一知识点也能出多道不重复的题
-                    q["text"] = "【%s·练习%02d】%s" % (
-                        random.choice(SCENES), random.randint(1, 99), q["text"])
-                if q["text"] in seen:
-                    continue
-                try:
-                    clean = store.validate_question(q, len(out) + 1)
-                except store.StoreError:
-                    continue
-                clean["topic"] = q["topic"]
-                clean["source"] = "offline"
-                seen.add(q["text"])
-                out.append(clean)
-                break
+    for subject, quota in zip(subjects, alloc):
+        if quota <= 0:
+            continue
+        mix = split_mix(quota, spec.get("mix"))
+        # split_mix 为极小配额会补齐三种题型，可能超出本科配额，这里收敛到刚好 quota 道
+        while sum(mix.values()) > quota:
+            for k in ("multi", "judge", "single"):
+                if sum(mix.values()) <= quota:
+                    break
+                if mix.get(k):
+                    mix[k] -= 1
+        while sum(mix.values()) < quota:
+            mix["single"] = mix.get("single", 0) + 1
+        builder = {"数学": _math, "语文": _chinese,
+                   "英语": _english}.get(subject, _science)
+        sub_spec = dict(spec, subject=subject, subjects=[subject], count=quota)
+        for qtype in ("single", "multi", "judge"):
+            for _ in range(mix.get(qtype, 0)):
+                for attempt in range(40):
+                    q = builder(sub_spec, qtype)
+                    if subject != "数学":
+                        # 广州研学练习册编号：同一知识点也能出多道不重复的题
+                        q["text"] = "【%s·练习%02d】%s" % (
+                            random.choice(SCENES), random.randint(1, 99), q["text"])
+                    if q["text"] in seen:
+                        continue
+                    try:
+                        clean = store.validate_question(q, len(out) + 1)
+                    except store.StoreError:
+                        continue
+                    clean["topic"] = q["topic"]
+                    clean["subject"] = subject
+                    clean["source"] = "offline"
+                    seen.add(q["text"])
+                    out.append(clean)
+                    break
     random.shuffle(out)
     return out
 
@@ -757,7 +851,10 @@ def generate(spec, force_offline=False):
     """生成题目 → {questions, source, note, prompt?, latency?}。"""
     spec = dict(spec or {})
     spec.setdefault("stage", "小学")
-    spec.setdefault("subject", "数学")
+    # 3.9.0：科目可多选；内部统一用 subjects 列表，subject 保留兼容与展示
+    subjects = spec_subjects(spec)
+    spec["subjects"] = subjects
+    spec["subject"] = subjects[0] if len(subjects) == 1 else "、".join(subjects)
     spec.setdefault("grade", "")
     count = max(1, min(30, int(spec.get("count") or 10)))
     spec["count"] = count
