@@ -30,6 +30,31 @@ _MAC_RE = re.compile(r"^([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}$")
 _IPV4_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 
 
+def kbps_to_router_mbps(kbps):
+    """KB/s → 路由器限速接口的 Mbps 整数。
+
+    BE7000 实测（3.14.1）：qos_limits 只收整数 Mbps，小数被静默丢弃；
+    0 = 不限速；最小可配 1 Mbps。250 KB/s = 2 Mbps，50 KB/s 不足 1 Mbps
+    就按 1 Mbps 生效（实际 0.8 Mbps ≈ 100 KB/s）。
+    """
+    try:
+        kbps = max(0, int(kbps or 0))
+    except (TypeError, ValueError):
+        return 0
+    if not kbps:
+        return 0
+    return max(1, int(round(kbps * 8 / 1000.0)))
+
+
+def router_mbps_to_kbps(mbps):
+    """路由器的 Mbps → KB/s（qos_info 里读出来的 upmax/downmax 用）。"""
+    try:
+        v = float(mbps or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, int(round(v * 1000 / 8.0)))
+
+
 class RouterError(Exception):
     pass
 
@@ -498,18 +523,25 @@ class MiWifiAdapter:
 
     # ---- 全局限速（QoS）：BE7000 官方接口，实测可用 ----
     #
-    # GET  /api/misystem/qos_info     全局开关、模式、每台设备的 upmax/downmax（KB/s）
-    # POST /api/misystem/qos_limits   data=[{"mac","maxup","maxdown"}]，单位 KB/s，0=不限
+    # GET  /api/misystem/qos_info     全局开关、模式、每台设备的 upmax/downmax（Mbps）
+    # POST /api/misystem/qos_limits   data=[{"mac","maxup","maxdown"}]，单位 Mbps 整数，0=不限
     # GET  /api/misystem/qos_switch   on=0|1
     # GET  /api/misystem/qos_mode     mode=3（自定义限速模式）
+    # POST /api/xqnetwork/set_band    总带宽（misystem/set_band 是假接口，实测只认这个）
     #
-    # 只有「QoS 开启 + mode=3」时每台设备的限速才生效；BE7000 实测该模式
-    # 只限制被设过值的设备，其它设备照常全速。
+    # 单位说明（3.14.1 实测标定）：maxup/maxdown 的单位是 Mbps，路由器按 80%
+    # 落盘生效（upmax=2 → upmaxper=1600 kbps = 1.6 Mbps）；小数会被静默丢弃，
+    # 所以最小可配限速 = 1 Mbps（≈125 KB/s，实际生效 0.8 Mbps = 100 KB/s）。
+    # 程序对外统一用 KB/s，在这层和 Mbps 互转。
+    #
+    # 只有「QoS 开启 + mode=3 + 总带宽已设」时每台设备的限速才生效；QoS 关闭时
+    # qos_limits 照样返回 code:0 但静默无效，所以 set_limit 前必须 ensure_qos。
 
     QOS_INFO_PATH = "/cgi-bin/luci/;stok={stok}/api/misystem/qos_info"
     QOS_LIMITS_PATH = "/cgi-bin/luci/;stok={stok}/api/misystem/qos_limits"
     QOS_SWITCH_PATH = "/cgi-bin/luci/;stok={stok}/api/misystem/qos_switch"
     QOS_MODE_PATH = "/cgi-bin/luci/;stok={stok}/api/misystem/qos_mode"
+    QOS_BAND_PATH = "/cgi-bin/luci/;stok={stok}/api/xqnetwork/set_band"
 
     def _qos_path(self, key, default):
         return self.cfg.get(key) or default
@@ -550,7 +582,11 @@ class MiWifiAdapter:
         return self._qos_call(self._qos_path("qos_info_path", self.QOS_INFO_PATH))
 
     def ensure_qos(self):
-        """确认 QoS 已开启且处于「自定义限速」模式；否则打开（只改这两个开关）。"""
+        """确认限速前提成立：QoS 开启 + mode=3 + 总带宽已设；缺哪个补哪个。
+
+        QoS 关闭时 qos_limits 静默无效（实测 code:0 但不生效），总带宽为 0 时
+        设备限速同样可能被忽略，所以这三样都得保证。
+        """
         info = self.qos_info()
         status = info.get("status") or {}
         changed = []
@@ -562,6 +598,12 @@ class MiWifiAdapter:
             self._qos_call(self._qos_path("qos_mode_path", self.QOS_MODE_PATH),
                            {"mode": 3})
             changed.append("已切到自定义限速模式")
+        band = info.get("band") or {}
+        if not int(band.get("upload") or 0) or not int(band.get("download") or 0):
+            # 总带宽没设过：给一个远高于任何家用宽带的上限，避免设备限速被忽略
+            self._qos_call(self._qos_path("qos_band_path", self.QOS_BAND_PATH),
+                           {"upload": 100000, "download": 100000})
+            changed.append("已补设总带宽")
         if changed:
             self.log("QOS %s" % "，".join(changed))
         return info if not changed else self.qos_info()
@@ -573,25 +615,37 @@ class MiWifiAdapter:
         for dev in info.get("list") or []:
             if str(dev.get("mac", "")).lower().replace("-", ":") == mac:
                 q = dev.get("qos") or {}
-                return {"down": int(float(q.get("downmax") or 0)),
-                        "up": int(float(q.get("upmax") or 0))}
+                return {"down": router_mbps_to_kbps(q.get("downmax")),
+                        "up": router_mbps_to_kbps(q.get("upmax"))}
         return {"down": 0, "up": 0}
 
     def set_limit(self, mac, down_kbps, up_kbps):
-        """给一台设备设/清限速（KB/s，0=不限速）。"""
+        """给一台设备设/清限速（对外单位 KB/s，0=不限速）。
+
+        路由器接口收的是 Mbps 整数（实际生效再打 8 折），这里做换算；
+        设限速前先 ensure_qos，防止 QoS 关着时静默无效。
+        """
         if not mac:
             raise RouterError("MAC 为空，拒绝调用限速接口")
-        down, up = max(0, int(down_kbps or 0)), max(0, int(up_kbps or 0))
+        down = max(0, int(down_kbps or 0))
+        up = max(0, int(up_kbps or 0))
         if self.cfg.get("dry_run"):
             self.log("[DRY-RUN] LIMIT mac=%s down=%sKB/s up=%sKB/s"
                      "（演练模式，未调用路由器接口）" % (mac, down, up))
             return "dry-run"
-        payload = json.dumps([{"mac": mac.upper(), "maxup": str(up),
-                               "maxdown": str(down)}], separators=(",", ":"))
+        if down or up:
+            self.ensure_qos()
+        payload = json.dumps([{"mac": mac.upper(),
+                               "maxup": str(kbps_to_router_mbps(up)),
+                               "maxdown": str(kbps_to_router_mbps(down))}],
+                             separators=(",", ":"))
         raw = self._qos_call(self._qos_path("qos_limits_path", self.QOS_LIMITS_PATH),
                              {"data": payload}, method="POST")
-        self.log("[MIWIFI] LIMIT mac=%s down=%sKB/s up=%sKB/s resp=%s"
-                 % (mac, down, up, json.dumps(raw, ensure_ascii=False)[:160]))
+        self.log("[MIWIFI] LIMIT mac=%s down=%sKB/s up=%sKB/s"
+                 "（≈%s/%s Mbps）resp=%s"
+                 % (mac, down, up,
+                    kbps_to_router_mbps(down), kbps_to_router_mbps(up),
+                    json.dumps(raw, ensure_ascii=False)[:120]))
         return raw
 
     def describe(self):

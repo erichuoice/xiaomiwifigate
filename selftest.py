@@ -1698,8 +1698,24 @@ def main():
     check("mock 适配器解除限速",
           mock_ad.limit_of("aa:bb:cc:dd:ee:ff") == {"down": 0, "up": 0})
 
+    # 换算函数（3.14.1：路由器接口单位是 Mbps 整数，对外统一 KB/s）
+    conv = router_adapter.kbps_to_router_mbps
+    back = router_adapter.router_mbps_to_kbps
+    check("限速值换算 KB/s→Mbps（250→2、50→1、0→0、小数被拒绝）",
+          conv(250) == 2 and conv(50) == 1 and conv(0) == 0 and
+          conv(125) == 1 and conv(1000) == 8 and conv(-5) == 0 and
+          conv("abc") == 0, str((conv(250), conv(50), conv(125), conv(1000))))
+    check("限速值回读 Mbps→KB/s（2→250、0→0、非法→0）",
+          back(2) == 250 and back(0) == 0 and back("x") == 0 and back(None) == 0)
+    check("换算往返一致（250→2→250）",
+          back(conv(250)) == 250 and back(conv(125)) == 125)
+
     _lim_mac = "aa:bb:cc:dd:ee:01"
     _thr_bank = {"limit_mode": "throttle", "throttle_kbps": 250}
+    # 接线用例用 Mock 跑：真适配器按假 MAC 下发后 qos_info 里查不到这台
+    # 「设备」（不在路由器设备列表），limit_of 恒为 0，用例会误报。
+    _saved_adapter = srv.ADAPTER
+    srv.ADAPTER = router_adapter.MockAdapter({}, lambda m: None)
     mode = srv.restrict_mac(_lim_mac, _thr_bank, "自检")
     check("到点按限制方式改成限速（不断网）",
           mode == "throttle" and
@@ -1711,6 +1727,9 @@ def main():
     check("断网模式仍然走 set_wan 断开",
           mode == "block" and srv.ADAPTER.limit_of(_lim_mac)["down"] == 0)
     srv.release_mac(_lim_mac, {"limit_mode": "block"})
+    check("断网模式放行也顺手清残留限速",
+          srv.ADAPTER.limit_of(_lim_mac)["down"] == 0)
+    srv.ADAPTER = _saved_adapter
 
     # 前面的「退出登录」用例已经注销过，这里重新登录再做后台接口检查
     admin("/api/admin/login", {"password": CFG["server"].get("admin_password", "")})
@@ -1760,6 +1779,19 @@ def main():
           '"limit_rule": rule,' in server_html and
           '"limit_rule": limit_rule({"limit_mode": t.get("limit_mode")' in server_html and
           "ADAPTER.limit_of(mac)" in server_html)
+    with open(os.path.join(BASE, "router_adapter.py"), encoding="utf-8") as f:
+        adapter_src = f.read()
+    check("限速接口按 Mbps 换算且先确保 QoS 开启（3.14.1 修复）",
+          "def kbps_to_router_mbps" in adapter_src and
+          "def router_mbps_to_kbps" in adapter_src and
+          "self.ensure_qos()" in adapter_src and
+          "kbps_to_router_mbps(down)" in adapter_src and
+          "QOS_BAND_PATH" in adapter_src and
+          "已补设总带宽" in adapter_src,
+          "换算/ensure_qos/band 三处缺一不可")
+    check("手动解除限速不看题库模式直接清零（3.14.1 修复）",
+          "清残留限速" in server_html and
+          "按模式走会漏清" in server_html)
 
     for _p, _raw in extra_paths.items():
         try:

@@ -269,8 +269,9 @@ def validate_pass_rule(src, current=None):
 def validate_limit_rule(src, current=None):
     """校验「限制方式」：block = 到点直接断网；throttle = 到点降到限速。
 
-    限速值单位是 KB/s（和小米后台 QoS 页面一致），0 没有意义所以下限 1；
-    1 Mbps ≈ 125 KB/s，2 Mbps ≈ 250 KB/s。
+    限速值单位是 KB/s（程序对外统一 KB/s，路由器接口按 Mbps 换算），
+    0 没有意义所以下限 1；1 Mbps ≈ 125 KB/s，2 Mbps ≈ 250 KB/s。
+    路由器最小限速 1 Mbps，不足 1 Mbps 的配置按 1 Mbps 生效（约 100 KB/s）。
     """
     src = src if isinstance(src, dict) else {}
     current = current if isinstance(current, dict) else {}

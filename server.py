@@ -346,13 +346,21 @@ def restrict_mac(mac, bank=None, reason="到期"):
 
 
 def release_mac(mac, bank=None, reason="放行"):
-    """解除限制：断网模式恢复外网；限速模式把限速清零（恢复全速）。"""
+    """解除限制：断网模式恢复外网；限速模式把限速清零（恢复全速）。
+
+    断网模式也顺手把残留限速清掉——题库可能刚从「限速」改回「断网」，
+    不清的话设备会既恢复外网又还慢着，家长看不出问题在哪。
+    """
     rule = limit_rule(bank)
     if rule["mode"] == "throttle":
         ADAPTER.set_limit(mac, 0, 0)
         ADAPTER.set_wan(mac, True)
         log("THROTTLE-OFF mac=%s（%s）" % (mac, reason))
         return "throttle"
+    try:
+        ADAPTER.set_limit(mac, 0, 0)   # 清残留限速；失败不阻断放行本身
+    except Exception as exc:
+        log("清理残留限速失败（忽略）mac=%s err=%s" % (mac, exc))
     ADAPTER.set_wan(mac, True)
     return "block"
 
@@ -708,7 +716,18 @@ class Handler(BaseHTTPRequestHandler):
                     {"ok": False, "detail": "kbps 需在 0-1000000 之间"}, 400)
             try:
                 if kbps == 0:
-                    release_mac(mac, STORE.bank_for_mac(mac), "手动解除限速")
+                    # 解除限速：直接清零，不看题库模式（题库模式可能刚被改过，
+                    # 按模式走会漏清）；同时把放行记录置为永久，防止回收线程
+                    # 又把限速加回去。
+                    ADAPTER.set_limit(mac, 0, 0)
+                    with _grants_lock:
+                        grants = load_grants()
+                        rec = dict(grants.get(mac) or {})
+                        rec.update({"mac": mac, "expire_at": 0,
+                                    "reblocked": False})
+                        grants[mac] = rec
+                        save_grants(grants)
+                    log("MANUAL-THROTTLE-OFF mac=%s（手动解除限速）" % mac)
                 else:
                     ADAPTER.set_limit(mac, kbps, kbps)
                     log("MANUAL-THROTTLE mac=%s %sKB/s" % (mac, kbps))

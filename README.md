@@ -76,7 +76,7 @@ python3 simulate_device.py --url http://<内网IP>:8080 \
         --password 管理密码 --mode wrong --rounds 3
 ```
 
-自检 279 项：
+自检 288 项：
 
 ```bash
 python3 selftest.py
@@ -101,7 +101,7 @@ host 模式下不写 `ports:`，端口由 `config.json` 决定。
 | `./gate.sh up` / `down` / `restart` | 启停 |
 | `./gate.sh status` / `logs` | 状态、健康检查、跟随日志 |
 | `./gate.sh check` | 配置与权限检查 |
-| `./gate.sh selftest` | 容器内 279 项全链路自检 |
+| `./gate.sh selftest` | 容器内 288 项全链路自检 |
 | `./gate.sh sim --mode correct --password xxx --tier 1` | 容器内模拟手机答题 |
 | `./gate.sh probe` | 只读探测路由器（不改规则） |
 | `./gate.sh dryrun` / `live` | 切换演练 / 真实放行 |
@@ -403,6 +403,10 @@ python3 gatectl.py on  huo-2     # 放行，不给分钟数 = 永久
 误伤，只剩勾选框看不到题。折叠样式现限定在题库卡片内，预览正文强制可见，
 并加了前端静态自检防止回归；升级后刷新 `/admin` 即可，题库与配置不受影响。）
 
+（`3.14.1` 修复：限速功能实测三处缺陷——① 路由器 `qos_limits` 接口的单位是 **Mbps** 而不是 KB/s，原实现填 250 会被当成 250 Mbps，限速形同虚设；现改为在适配层 KB/s↔Mbps 自动换算（250 KB/s → 2 Mbps，实际生效 1.6 Mbps），路由器只收整数 Mbps、实际生效再打 8 折，最小 1 Mbps（约 100 KB/s）。② QoS 关闭时 `qos_limits` 返回 code:0 但**静默无效**，而 `ensure_qos` 写了没人调用；现改为 `set_limit` 前自动执行 ensure_qos（开 QoS + mode=3 + band 为 0 时补设总带宽，走真接口 `xqnetwork/set_band`，`misystem/set_band` 实测是假接口）。③ 手动解除限速原来按题库模式走，block 题库设备的限速会漏清；现改为直接清零 + 放行记录置永久，断网模式的放行也顺手清残留限速。后台「限制方式」的提示文字同步更新，自检 279→288 项。）
+
+（`3.14.0`：新增题库级「限制方式」——答完到点、禁止时段或配额用完时，可以不断网，改为把该设备**限速**到设定值（默认 50 KB/s），孩子还能上网但很慢，答对题自动恢复全速；后台设备页按钮随模式切换（断网/放行 ↔ 限速/解除限速），新增手动限速接口。题库级配置：`limit_mode`（block/throttle）+ `throttle_kbps`，老题库升级自动继承默认「直接断网」，行为不变。）
+
 （`3.13.0`：组卷升级为**四层优先级取题**——每轮按「还没答对过的错题 40% → 没做过的新题 40% → 以前错过、后来连对『毕业』的题 10%（防遗忘）→ 做过且一直答对的已会题 10%」的顺序组成；错题里复习到期的排最优先，某层题不够时份额自动顺延给后面的层（例：孩子只有 2 道错题时，一轮 6 题 = 2 错题 + 4 新题）。层内仍按弱项知识点加权、同一知识点一轮最多占一半、三种题型尽量都出现。升级对已有学情数据完全兼容，无需任何设置。）
 
 （`3.12.0`：放行规则从全局设置移到**每个题库自己身上**——后台「题库」页签的每个题库在档位下方多了「放行规则」块（模式 / 正确率阈值 / 答错加题数），答哪套题就按那套题的规则判卷。例：小学库 80% + 答错加 2 题（宽松），初中库必须全对（严格），互不影响。老题库升级时自动继承原全局设置，行为不变；新建题库默认继承全局那份作初始值。规则在「一轮开始」时快照进本轮，答题中途改设置不打断孩子正在做的一轮。原「设置」页里的放行规则块已移除。）
@@ -476,31 +480,38 @@ python3 gatectl.py on  huo-2     # 放行，不给分钟数 = 永久
 | **直接断网（默认）** | 调 `set_mac_filter?wan=0`，完全断外网，老行为 | 想让孩子彻底停下来 |
 | **限速** | 调路由器 QoS 把上下行限到设定值（KB/s），外网仍然可用 | 想让孩子「能上网但不好玩」/ 防止刷视频 |
 
-限速值单位是 **KB/s**（和小米后台一致）：**1 Mbps ≈ 125 KB/s，2 Mbps ≈ 250 KB/s，
-10 Mbps ≈ 1250 KB/s**。默认 50 KB/s（约 0.4 Mbps，只够发消息和看文字）。
+限速值单位是 **KB/s**：**1 Mbps ≈ 125 KB/s，2 Mbps ≈ 250 KB/s，
+10 Mbps ≈ 1250 KB/s**。默认 50 KB/s。
+**路由器最小限速 1 Mbps**（3.14.1 实测标定）：填不足 125 KB/s 的值会按
+1 Mbps 生效（实际约 100 KB/s，只够发消息和看文字）。
 
 实现走的是 BE7000 官方接口（实测，不是抓包推测）：
 
 ```
-GET  /api/misystem/qos_info     → status{on,mode} + 每台设备 qos.downmax/upmax(KB/s)
-POST /api/misystem/qos_limits   → data=[{"mac","maxup","maxdown"}]，单位 KB/s，0=不限
+GET  /api/misystem/qos_info     → status{on,mode} + 每台设备 qos.downmax/upmax(Mbps)
+POST /api/misystem/qos_limits   → data=[{"mac","maxup","maxdown"}]，单位 Mbps 整数，0=不限
 GET  /api/misystem/qos_switch   → on=1 开启 QoS
 GET  /api/misystem/qos_mode     → mode=3 自定义限速模式
+POST /api/xqnetwork/set_band    → 总带宽（misystem/set_band 是假接口）
 ```
 
-程序用到时会自动把 QoS 打开、切到「自定义限速」模式（只改这两个开关），
-并且只限制题库里的设备，家里其它设备不受影响。
+程序对外统一 KB/s，在适配层和 Mbps 互算（`kbps_to_router_mbps`）。3.14.1 起
+`set_limit` 前会自动 `ensure_qos`：**QoS 关闭时 qos_limits 返回 code:0 但静默无效**，
+所以必须先把 QoS 打开、切到「自定义限速」模式、补上总带宽（band 为 0 时设备限速
+同样可能被忽略），并且只限制题库里的设备，家里其它设备不受影响。
 
 几个边界：
 
 - 限速模式下「到点」不会断网，只是变慢；**答对题、家长点「解除限速」都会恢复全速**，
   解除限速同样可以填分钟数（0 = 永久），到期重新限速。
 - 后台设备页的按钮会跟着变：断网题库显示「断网 / 放行」，限速题库显示「限速 / 解除限速」。
-- 限速值**不是线性精确的**：实测小米的限速器有效速率约为设定值的 0.6–0.8 倍
-  （设 250 KB/s 实测约 1.2–1.6 Mbps）。想要「实际 2 Mbps」就填 400 KB/s 左右；
-  想按标称值填就按 125 KB/s = 1 Mbps 换算。
+- 限速实际生效约为标称 Mbps 的 **80%**（路由器按 0.8 落盘 kbps：设 2 Mbps →
+  实际 1.6 Mbps = 200 KB/s）；小数会被路由器静默丢弃，所以只发整数 Mbps。
+- 题库从「限速」改回「断网」后，放行/断网路径会**顺手清掉残留限速**，防止设备
+  「外网通了却还慢着」。
 - 演练模式（`dry_run=true`）下限速接口同样只记日志不发请求，日志里是 `[DRY-RUN] LIMIT`。
-- 新增接口：`POST /api/admin/device/limit`（`{"mac":…,"kbps":0|N}`，0 = 解除限速）。
+- 新增接口：`POST /api/admin/device/limit`（`{"mac":…,"kbps":0|N}`，0 = 解除限速；
+  解除时直接清零，不看题库模式）。
 
 ---
 
@@ -546,7 +557,7 @@ GET  /api/misystem/qos_mode     → mode=3 自定义限速模式
 | `static/admin.html` | 管理后台（题库 / AI 出题 / 学情 / 导入 / 设备 / 设置） |
 | `simulate_device.py` | 模拟手机走完整流程 |
 | `probe_miwifi.py` | 只读探测路由器（不改任何规则） |
-| `selftest.py` | 279 项全链路自检（含时段、进度、学情、出题纯函数单测与前后端约定检查） |
+| `selftest.py` | 288 项全链路自检（含时段、进度、学情、出题纯函数单测与前后端约定检查） |
 | `docker-entrypoint.py` `Dockerfile` `docker-compose.yml` `gate.sh` | 常驻部署与运维 |
 
 运行时文件（`state/`，会随容器持久化）：

@@ -214,7 +214,8 @@
       <h2 style="margin-top:22px">限制方式<span class="count">到点后怎么限制</span></h2>
       <p class="hint">答完题到点、或进入禁止答题时段时，用哪种方式限制这台设备：
         「直接断网」= 老做法，完全不能上网；「限速」= <b>不切断外网，只把速度降到下面这个值</b>，
-        孩子还能上网但很慢，答对题就恢复全速。限速值单位 KB/s（1 Mbps ≈ 125 KB/s，2 Mbps ≈ 250 KB/s）。</p>
+        孩子还能上网但很慢，答对题就恢复全速。限速值单位 KB/s（1 Mbps ≈ 125 KB/s，2 Mbps ≈ 250 KB/s）。
+        <b>路由器最小限速 1 Mbps</b>：填不足 125 KB/s 的值会按 1 Mbps 生效（实际约 100 KB/s）。</p>
       <div class="grid2">
         <div>
           <label class="fld" for="bank-limit-mode">限制方式</label>
@@ -224,7 +225,7 @@
           </select>
         </div>
         <div>
-          <label class="fld" for="bank-throttle">限速值（KB/s，50 ≈ 0.4 Mbps）</label>
+          <label class="fld" for="bank-throttle">限速值（KB/s，250 ≈ 2 Mbps）</label>
           <input id="bank-throttle" type="number" min="1" max="1000000" value="50">
         </div>
       </div>
