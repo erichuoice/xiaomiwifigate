@@ -240,6 +240,27 @@ def all_devices():
         return sorted(_load()["devices"].keys())
 
 
+def done_qids():
+    """所有设备「做过」的题目 id 集合（history + 错题本）。
+
+    供自动出题判断题库里还剩多少没做过的新题；
+    history 每台设备最多记最近 400 条，足够覆盖日常使用。
+    """
+    with _lock:
+        data = _load()
+    done = set()
+    for dev in (data.get("devices") or {}).values():
+        for h in dev.get("history") or []:
+            qid = str(h.get("qid") or "").strip()
+            if qid:
+                done.add(qid)
+        for w in dev.get("wrong") or []:
+            qid = str(w.get("qid") or "").strip()
+            if qid:
+                done.add(qid)
+    return done
+
+
 # ---------------------------------------------------------------- 分析
 
 def weak_topics(dev, limit=6):

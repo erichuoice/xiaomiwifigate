@@ -364,7 +364,7 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
         learning.clear(mac)
         return 200, {"ok": True}, None
 
-    # ---- 定时自动出题（3.7.0）----
+    # ---- 自动补充新题（3.8.0：未做过的题少于阈值时触发）----
     if path.startswith("/api/admin/auto-bank"):
         def payload():
             return {"ok": True, "config": auto_bank.load(),

@@ -510,21 +510,22 @@ def update_worker():
 
 
 def auto_bank_worker():
-    """无人值守出题：到点就生成一批新题并入库，全程不需要人工操作。
+    """无人值守补题：题库里「没做过」的题少于阈值时自动生成一批并入库。
 
-    配置在 state/auto_bank.json；停机期间不补跑，失败也推进下次时间，
-    单次执行与后台「立即试跑」共用锁，不会并发写题库。
+    配置在 state/auto_bank.json；每 30 秒检查一次，冷却期内不重复触发，
+    生成失败也进入冷却，单次执行与后台「立即试跑」共用锁，不会并发写题库。
     """
     time.sleep(AUTO_BANK_FIRST_DELAY)
     while True:
         try:
-            if auto_bank.due(auto_bank.load()):
-                rec = auto_bank.run_once(STORE, "schedule")
+            cfg = auto_bank.load()
+            if auto_bank.due(STORE, cfg):
+                rec = auto_bank.run_once(STORE, "auto")
                 if rec.get("ok"):
-                    log("AUTO-BANK %s 生成 %s 道，入库 %s 道（重复 %s），淘汰旧题 %s 道，"
-                        "题库 %s 现有 %s 道，用时 %ss"
+                    log("AUTO-BANK %s 补充新题：生成 %s 道，入库 %s 道（重复 %s），"
+                        "淘汰旧题 %s 道，未做过 %s/%s 道，用时 %ss"
                         % (rec["bank_name"], rec["generated"], rec["added"],
-                           rec["skipped"], rec["pruned"], rec["source"],
+                           rec["skipped"], rec["pruned"], rec["fresh"],
                            rec["total"], rec["latency"]))
                 else:
                     log("AUTO-BANK-FAIL %s" % rec.get("detail"))

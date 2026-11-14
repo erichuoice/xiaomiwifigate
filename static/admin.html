@@ -404,35 +404,29 @@
       <p class="hint">预览题按题干去重，入库后保存立即生效；答案只存在服务端，答题页看不到。</p>
     </div>
 
-    <!-- 定时自动出题（3.7.0）-->
+    <!-- 自动补充新题（3.8.0：未做过的题少于阈值时自动触发）-->
     <div id="tab-auto" class="card" style="display:none">
-      <h2>定时自动出题</h2>
-      <p class="hint">开启后由路由器上的服务按设定时间自动生成一批新题并<b>直接入库</b>，
-        不需要任何人点「生成预览 / 入库」。生成时会避开题库里已有的题干；教材版本、
-        广州本地化和当前教学进度沿用「AI 出题」页的设置；没配 Key 或接口失败时自动改用离线模板。
-        停机期间不补跑，服务恢复后只按新的时间继续，不会一次补一大堆。</p>
+      <h2>自动出题</h2>
+      <p class="hint">开启后由路由器上的服务自动盯着题库：<b>当「还没做过」的题目少于阈值时</b>，
+        自动生成一批新题并<b>直接入库</b>补足，不需要任何人点「生成预览 / 入库」。
+        生成时会避开题库里已有的题干；教材版本、广州本地化和当前教学进度沿用「AI 出题」页的设置；
+        没配 Key 或接口失败时自动改用离线模板。刚执行完（无论成败）会先冷却一段时间再检查，不会反复轰炸。</p>
       <div id="auto-status" class="ai-note">正在读取状态…</div>
 
       <h3>① 什么时候执行</h3>
-      <label class="chk"><input type="checkbox" id="auto-enabled"> 启用定时自动出题（保存后立即生效）</label>
+      <label class="chk"><input type="checkbox" id="auto-enabled"> 启用自动出题（保存后立即生效）</label>
       <div class="grid2">
         <div>
-          <label class="fld" for="auto-frequency">执行频率</label>
-          <select id="auto-frequency">
-            <option value="daily">每天固定时间</option>
-            <option value="interval">每隔 N 小时</option>
-          </select>
+          <label class="fld" for="auto-threshold">触发阈值：未做过的题少于多少道（5~500）</label>
+          <input id="auto-threshold" type="number" min="5" max="500" value="30">
         </div>
-        <div id="auto-time-wrap">
-          <label class="fld" for="auto-time">每天执行时间（广州 / 北京时间）</label>
-          <input id="auto-time" type="time" value="03:00">
-        </div>
-        <div id="auto-interval-wrap" style="display:none">
-          <label class="fld" for="auto-interval">每隔多少小时（1~720）</label>
-          <input id="auto-interval" type="number" min="1" max="720" value="24">
+        <div>
+          <label class="fld" for="auto-cooldown">两次执行最小间隔（分钟，1~1440）</label>
+          <input id="auto-cooldown" type="number" min="1" max="1440" value="30">
         </div>
       </div>
-      <p class="hint">建议设在凌晨（如 03:00），不占孩子答题时间；服务每 30 秒检查一次是否到点。</p>
+      <p class="hint">「做过」= 这道题被孩子答过（学情有记录）。题一被答掉新题就会减少；
+        少于阈值时服务自动补一批（缺多少补多少，每次最多 30 道），全程不需要人工操作。</p>
 
       <h3>② 每次出什么样的题</h3>
       <div class="grid3">
@@ -446,8 +440,8 @@
           <label class="fld" for="auto-subject">科目</label><select id="auto-subject"></select>
         </div>
         <div>
-          <label class="fld" for="auto-count">题量（1~30）</label>
-          <input id="auto-count" type="number" min="1" max="30" value="10">
+          <label class="fld" for="auto-count">每次最多生成（1~30）</label>
+          <input id="auto-count" type="number" min="1" max="30" value="30">
         </div>
         <div>
           <label class="fld" for="auto-bank">入到哪个题库</label><select id="auto-bank"></select>
@@ -1542,7 +1536,7 @@
     }).catch(function () { toast('读取学情失败'); });
   }
 
-  // ---------- 定时自动出题（3.7.0）----------
+  // ---------- 自动补充新题（3.8.0：新题少于阈值时自动触发）----------
 
   var autoCfg = null, autoOpts = null, autoBanks = [], autoBusy = false;
   var AUTO_MIX_IDS = ['auto-mix-single', 'auto-mix-multi', 'auto-mix-judge'];
@@ -1560,10 +1554,9 @@
   function autoForm() {
     return {
       enabled: el('auto-enabled').checked,
-      frequency: el('auto-frequency').value,
-      time: el('auto-time').value || '03:00',
-      interval_hours: parseInt(el('auto-interval').value, 10) || 24,
-      count: parseInt(el('auto-count').value, 10) || 10,
+      threshold: parseInt(el('auto-threshold').value, 10) || 30,
+      cooldown_minutes: parseInt(el('auto-cooldown').value, 10) || 30,
+      count: parseInt(el('auto-count').value, 10) || 30,
       bank_id: el('auto-bank').value,
       stage: el('auto-stage').value,
       grade: el('auto-grade').value,
@@ -1576,19 +1569,29 @@
     };
   }
 
-  function toggleAutoFreq() {
-    var daily = el('auto-frequency').value === 'daily';
-    el('auto-time-wrap').style.display = daily ? 'block' : 'none';
-    el('auto-interval-wrap').style.display = daily ? 'none' : 'block';
-  }
-
   function renderAutoStatus(s) {
     if (!s) return;
+    var on = autoCfg && autoCfg.enabled;
+    var freshLine;
+    if (!on) {
+      freshLine = '<b>当前状态：</b>未启用';
+    } else if (!s.bank_id) {
+      freshLine = '<b>当前状态：</b>已启用 · 目标题库不存在，请在下方重新选择';
+    } else {
+      freshLine = '<b>当前状态：</b>已启用　·　未做过的题 <b>' + (s.fresh || 0) +
+        '</b> 道（阈值 ' + (s.threshold || 0) + '）';
+      if (s.running) freshLine += '　·　正在生成题目…';
+      if ((s.fresh || 0) < (s.threshold || 0)) freshLine +=
+        '　·　<span style="color:#b45309">缺 ' + (s.need || 0) + ' 道，' +
+        escHtml(s.next_text || '等待执行') + '</span>';
+    }
     el('auto-status').innerHTML = [
-      '<b>当前状态：</b>' + (autoCfg && autoCfg.enabled ? '已启用' : '未启用') +
-        (s.running ? '　·　正在生成题目…' : ''),
-      '<b>下次执行：</b>' + escHtml(s.next_run_text || '—') +
-        '（' + escHtml(s.next_run_relative || '—') + '）',
+      freshLine,
+      '<b>冷却间隔：</b>' + (s.cooldown_minutes || 30) + ' 分钟' +
+        (on && (s.cooldown_until || 0) > 0
+          ? '　·　上次执行后至 ' + escHtml(s.cooldown_until_text || '—') +
+            '（' + escHtml(s.cooldown_relative || '—') + '）'
+          : ''),
       '<b>上次执行：</b>' + escHtml(s.last_run_text || '—'),
       '<b>目标题库：</b>' + escHtml(s.bank_name || '—') + ' · 共 ' +
         (s.bank_total || 0) + ' 道，其中自动题 ' + (s.auto_questions || 0) + ' 道',
@@ -1599,7 +1602,7 @@
   function renderAutoRuns(runs) {
     var box = el('auto-runs');
     if (!runs || !runs.length) {
-      box.innerHTML = '<p class="hint">还没有运行记录。启用并保存后，到点会自动记一条；' +
+      box.innerHTML = '<p class="hint">还没有运行记录。启用并保存后，新题不足时会自动记一条；' +
         '也可以点「立即试跑一次」验证。</p>';
       return;
     }
@@ -1607,7 +1610,7 @@
       '<th>生成 / 入库</th><th>说明</th></tr></thead><tbody>';
     runs.forEach(function (r) {
       html += '<tr><td class="mono">' + escHtml(r.at_text || '') + '</td>' +
-        '<td>' + (r.reason === 'manual' ? '手动试跑' : '定时') + '</td>' +
+        '<td>' + (r.reason === 'manual' ? '手动试跑' : '自动触发') + '</td>' +
         '<td>' + (r.ok ? '<span class="pill ok">成功</span>'
                        : '<span class="pill no">失败</span>') + '</td>' +
         '<td>' + (r.generated || 0) + ' / ' + (r.added || 0) +
@@ -1621,9 +1624,8 @@
     var d = res.data;
     autoCfg = d.config; autoOpts = d.options || {}; autoBanks = d.banks || [];
     el('auto-enabled').checked = !!autoCfg.enabled;
-    el('auto-frequency').value = autoCfg.frequency;
-    el('auto-time').value = autoCfg.time;
-    el('auto-interval').value = autoCfg.interval_hours;
+    el('auto-threshold').value = autoCfg.threshold;
+    el('auto-cooldown').value = autoCfg.cooldown_minutes;
     el('auto-count').value = autoCfg.count;
     el('auto-mode').value = autoCfg.mode;
     el('auto-max').value = autoCfg.max_auto;
@@ -1642,7 +1644,6 @@
     }), 'id', 'name', autoCfg.bank_id || (autoBanks[0] && autoBanks[0].id));
     renderAutoStatus(d.status);
     renderAutoRuns(d.status && d.status.runs);
-    toggleAutoFreq();
     return fillDeviceSelect('auto-device', autoCfg.device_mac || '');
   }
 
@@ -1671,7 +1672,8 @@
       if (!res.data.ok) { toast(res.data.detail || '保存失败'); return; }
       renderAutoBank(res);
       toast(res.data.config.enabled
-        ? '已保存，下次执行：' + res.data.status.next_run_text
+        ? '已保存：未做过的题少于 ' + res.data.status.threshold +
+          ' 道时自动补题'
         : '已保存（当前未启用）');
     }).catch(function () { b.disabled = false; toast('保存失败'); });
   }
@@ -1763,7 +1765,6 @@
   el('auto-fill').onclick = autoFillFromAi;
   el('auto-refresh').onclick = loadAutoBank;
   el('auto-clear').onclick = clearAutoRuns;
-  el('auto-frequency').onchange = toggleAutoFreq;
 
   el('ai-save').onclick = function () { saveAiConfig(); };
   el('ai-test').onclick = testAi;

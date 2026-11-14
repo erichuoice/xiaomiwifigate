@@ -667,19 +667,20 @@ def main():
     code, res = admin("/api/admin/learning/clear", {})
     check("清空学情缺少 MAC 被拒绝", code == 400)
 
-    # ---- 3.7.0 定时自动出题接口（全程离线，不联网、不消耗 Key）----
+    # ---- 3.8.0 自动补题接口（全程离线，不联网、不消耗 Key）----
     code, res = admin("/api/admin/auto-bank")
     ab_status = res.get("status") or {}
     check("自动出题接口返回配置/状态/题库/选项",
           code == 200 and res.get("ok") is True and
           all(k in res for k in ("config", "status", "banks", "options")) and
           bool((res.get("options") or {}).get("stages")))
-    check("状态卡含下次执行与自动题统计",
+    check("状态卡含未做过的题数/阈值/冷却与自动题统计",
           all(k in ab_status for k in
-              ("next_run_text", "last_run_text", "auto_questions", "has_key")))
-    code, res = admin("/api/admin/auto-bank", {"time": "99:99"})
-    check("非法执行时间被后台拒绝",
-          code == 400 and "时间" in (res.get("detail") or ""))
+              ("fresh", "threshold", "need", "cooldown_minutes",
+               "last_run_text", "auto_questions", "has_key")))
+    code, res = admin("/api/admin/auto-bank", {"threshold": 2})
+    check("非法触发阈值被后台拒绝",
+          code == 400 and "阈值" in (res.get("detail") or ""))
 
     code, before = admin("/api/admin/state")
     bank_before = next((b for b in before.get("banks", [])
@@ -688,7 +689,7 @@ def main():
                          if not str(q.get("source") or "").startswith("auto-")])
 
     code, res = admin("/api/admin/auto-bank", {
-        "enabled": False, "frequency": "daily", "time": "03:00",
+        "enabled": False, "threshold": 30, "cooldown_minutes": 5,
         "count": 3, "mode": "offline", "max_auto": 5,
         "bank_id": ai_bank_id, "stage": "小学", "grade": "四年级",
         "subject": "数学", "topics": "",
@@ -999,44 +1000,97 @@ def main():
             {"weak": [{"topic": "分数"}], "wrong": []})
         check("按设备弱项生成专项题", len(dev_gen["questions"]) == 6)
 
-        # ---- 3.7.0 定时自动出题：时间与配置纯函数（广州 UTC+8）----
+        # ---- 3.8.0 自动补题：阈值触发与冷却的纯逻辑 ----
         from datetime import datetime
         ab_now = datetime(2026, 11, 14, 11, 0,
                           tzinfo=auto_bank.TZ).timestamp()
-        check("定时按广州时间显示", auto_bank.fmt_ts(ab_now) == "2026-11-14 11:00")
-        ab_daily = auto_bank.normalize({"enabled": True, "time": "03:00"})
-        ab_next = auto_bank.next_run_at(ab_daily, ab_now)
-        ab_dt = datetime.fromtimestamp(ab_next, auto_bank.TZ)
-        check("每天 03:00 的下次执行是次日凌晨",
-              (ab_dt.year, ab_dt.month, ab_dt.day, ab_dt.hour, ab_dt.minute)
-              == (2026, 11, 15, 3, 0), auto_bank.fmt_ts(ab_next))
-        check("到点后再排下一次顺延一天",
-              auto_bank.next_run_at(ab_daily, ab_next) - ab_next == 86400)
-        ab_iv = auto_bank.normalize(
-            {"enabled": True, "frequency": "interval", "interval_hours": 6})
-        check("每隔 N 小时的下次执行",
-              auto_bank.next_run_at(ab_iv, ab_now) - ab_now == 6 * 3600)
-        check("未启用时没有下次执行时间",
-              auto_bank.next_run_at(auto_bank.normalize({"enabled": False}),
-                                   ab_now) == 0)
+        check("时间按广州（UTC+8）显示",
+              auto_bank.fmt_ts(ab_now) == "2026-11-14 11:00")
         try:
-            auto_bank.normalize({"time": "99:99"})
-            check("非法执行时间被拒绝", False)
+            auto_bank.normalize({"threshold": 3})
+            check("非法触发阈值被拒绝", False)
         except auto_bank.AutoBankError:
-            check("非法执行时间被拒绝", True)
-        auto_bank.save({"enabled": True, "frequency": "daily", "time": "03:00"},
-                       ab_now)
-        n1 = auto_bank.load()["next_run"]
-        auto_bank.save({"count": 20}, ab_now)
-        check("只改题量不重置计时", auto_bank.load()["next_run"] == n1)
-        auto_bank.save({"time": "04:30"}, ab_now)
-        check("改执行时间才重排计时", auto_bank.load()["next_run"] != n1)
-        auto_bank.save({"enabled": False}, ab_now)
-        check("关闭后清除下次执行时间", auto_bank.load()["next_run"] == 0)
-        check("到点判定只在到期后触发",
-              auto_bank.due({"enabled": True, "next_run": ab_now - 1}, ab_now)
-              and not auto_bank.due({"enabled": True,
-                                     "next_run": ab_now + 1}, ab_now))
+            check("非法触发阈值被拒绝", True)
+        ab_cfg = auto_bank.normalize({"enabled": True, "threshold": 30,
+                                      "cooldown_minutes": 30})
+        check("冷却结束时刻 = 本次时刻 + 冷却间隔",
+              auto_bank.cooldown_until(ab_cfg, ab_now) - ab_now == 30 * 60)
+        check("未启用时不安排冷却",
+              auto_bank.cooldown_until(
+                  auto_bank.normalize({"enabled": False}), ab_now) == 0)
+
+        # 守护线程的核心路径：新题少于阈值 → due → run_once(auto) 补缺口
+        # → 进入冷却并留痕。临时 runtime + 临时学情，不碰真实数据。
+        old_rt = store.RUNTIME_PATH
+        try:
+            store.RUNTIME_PATH = os.path.join(tmp, "runtime.json")
+            M2 = "02:00:00:00:00:88"
+            seed = [{"id": "f%02d" % i, "type": "single",
+                     "text": "原始题%d" % i, "options": ["A", "B"],
+                     "answer": 0, "explain": "", "stage": "小学",
+                     "subject": "数学", "star": 1} for i in range(20)]
+            with open(store.RUNTIME_PATH, "w", encoding="utf-8") as f:
+                json.dump({
+                    "version": 3,
+                    "banks": [{"id": "bank_test", "name": "自动自检题库",
+                               "enabled": True, "devices": [],
+                               "tiers": [{"questions": 1, "minutes": 30}],
+                               "questions": seed}],
+                    "settings": {}, "schedules": {},
+                }, f, ensure_ascii=False)
+            fake_st = store.Store()
+            auto_bank.save({
+                "enabled": True, "threshold": 30, "cooldown_minutes": 30,
+                "count": 30, "mode": "offline", "max_auto": 100,
+                "bank_id": "bank_test", "stage": "小学", "grade": "四年级",
+                "subject": "数学",
+            }, ab_now)
+            ab_cfg = auto_bank.load()
+            check("没人答过题时整库都是新题",
+                  auto_bank.fresh_count(fake_st, ab_cfg) == 20)
+            check("保存设置后先进入冷却，缺题也不会立刻触发",
+                  auto_bank.fresh_count(fake_st, ab_cfg) < ab_cfg["threshold"]
+                  and not auto_bank.due(fake_st, ab_cfg, ab_now))
+            for q in seed[:18]:            # 孩子答掉 18 道，只剩 2 道新题
+                learning.record_answer(M2, q, True)
+            check("答过的题不再算新题",
+                  auto_bank.fresh_count(fake_st, ab_cfg) == 2)
+            ab_cfg["next_run"] = ab_now - 1        # 冷却已结束
+            auto_bank._save_cfg(ab_cfg)
+            check("新题低于阈值且冷却结束，对守护线程可见",
+                  auto_bank.due(fake_st, auto_bank.load(), ab_now))
+            rec = auto_bank.run_once(fake_st, "auto", ab_now)
+            check("守护线程自动补题入库，全程无需人工操作",
+                  rec["ok"] and rec["reason"] == "auto" and rec["added"] >= 1,
+                  "生成 %s，入库 %s" % (rec["generated"], rec["added"]))
+            check("只补缺口：缺 28 道就生成 28 道",
+                  rec["generated"] == 28, "生成 %s 道" % rec["generated"])
+            ab_after = auto_bank.load()
+            check("执行后进入冷却并留下自动触发记录",
+                  ab_after["next_run"] - ab_now == 30 * 60 and
+                  bool(ab_after["runs"]) and
+                  ab_after["runs"][0]["reason"] == "auto")
+            check("补完后新题回到不低于阈值",
+                  auto_bank.fresh_count(fake_st, ab_after) >= 30,
+                  "新题 %s 道" % auto_bank.fresh_count(fake_st, ab_after))
+            check("冷却期内即使缺题也不触发",
+                  not auto_bank.due(fake_st, ab_after, ab_now + 60))
+            check("冷却结束但新题充足也不触发",
+                  not auto_bank.due(fake_st, ab_after, ab_now + 3600))
+            check("题库里出现自动来源的新题",
+                  any(str(q.get("source") or "").startswith("auto-")
+                      for q in fake_st.bank("bank_test")["questions"]))
+            for q in seed[18:]:           # 又答掉剩下的 2 道原始题
+                learning.record_answer(M2, q, True)
+            check("缺题但冷却未结束，仍不触发",
+                  auto_bank.fresh_count(fake_st, auto_bank.load()) <
+                  auto_bank.load()["threshold"] and
+                  not auto_bank.due(fake_st, auto_bank.load(), ab_now + 60))
+            later2 = ab_now + 31 * 60
+            check("冷却结束后缺题状态会再次触发",
+                  auto_bank.due(fake_st, auto_bank.load(), later2))
+        finally:
+            store.RUNTIME_PATH = old_rt
     finally:
         learning.STATE, learning.PATH = old_l
         ai_bank.STATE, ai_bank.CONFIG_PATH = old_a
@@ -1069,21 +1123,23 @@ def main():
     check("AI 预览题目正文强制可见",
           bool(re.search(r"\.qprev\s+\.qbody\s*\{[^}]*display\s*:\s*block", admin_html)))
 
-    # ---- 3.7.0 定时自动出题 ----
+    # ---- 3.8.0 自动补题（阈值触发）----
     with open(os.path.join(BASE, "server.py"), encoding="utf-8") as f:
         server_html = f.read()
     with open(os.path.join(BASE, "Dockerfile"), encoding="utf-8") as f:
         dockerfile = f.read()
-    check("服务端启动定时自动出题守护线程",
+    check("服务端守护线程按阈值触发自动补题",
           "def auto_bank_worker" in server_html and
           "target=auto_bank_worker" in server_html and
-          "auto_bank.due(" in server_html)
+          "auto_bank.due(STORE" in server_html and
+          'run_once(STORE, "auto")' in server_html)
     check("新模块已纳入镜像", "auto_bank.py" in dockerfile)
-    check("后台有「自动出题」页签与完整设置项",
+    check("后台有「自动出题」页签与阈值/冷却设置项",
           all(w in admin_html for w in
-              ("tabbtn-auto", "tab-auto", "auto-enabled", "auto-frequency",
-               "auto-time", "auto-interval", "auto-count", "auto-bank",
-               "auto-mode", "auto-max", "auto-run", "auto-runs")))
+              ("tabbtn-auto", "tab-auto", "auto-enabled", "auto-threshold",
+               "auto-cooldown", "auto-count", "auto-bank",
+               "auto-mode", "auto-max", "auto-run", "auto-runs")) and
+          "auto-frequency" not in admin_html and "auto-time" not in admin_html)
     check("后台调用自动出题配置/试跑/清空接口",
           all(w in admin_html for w in
               ("/api/admin/auto-bank/run", "/api/admin/auto-bank/clear",
