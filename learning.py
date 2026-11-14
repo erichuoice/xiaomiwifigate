@@ -473,8 +473,13 @@ def _weighted_pick(candidates, weights):
     return candidates.pop()
 
 
-def _fix_type_mix(chosen, pool, topic_cap=None):
-    """尽量让一轮里三种题型都出现：缺哪种就用池里的同类题换掉一道普通题。"""
+def _fix_type_mix(chosen, pool, topic_cap=None, protect=None):
+    """尽量让一轮里三种题型都出现：缺哪种就用池里的同类题换掉一道普通题。
+
+    protect 里的题（错题层）不会被换掉——错题优先于题型搭配，
+    否则会出现「明明有错题没出，却被换成了随机题型」的情况。
+    """
+    protect = set(protect or ())
     wanted = [t for t in ("single", "multi", "judge")
               if any(q.get("type") == t for q in pool)]
     if len(wanted) < 2 or len(chosen) < 2:
@@ -495,9 +500,14 @@ def _fix_type_mix(chosen, pool, topic_cap=None):
             preferred = [c for c in candidates if counts.get(topic_of(c), 0) < topic_cap]
             if preferred:
                 candidates = preferred
-        # 换掉一道「非唯一题型」的题，避免把刚补进来的又换走
+        # 换掉一道「非唯一题型」的题，避免把刚补进来的又换走；
+        # 有 protect（错题）时优先不碰它们
         slots = [i for i, q in enumerate(chosen)
-                 if sum(1 for x in chosen if x.get("type") == q.get("type")) > 1]
+                 if sum(1 for x in chosen if x.get("type") == q.get("type")) > 1
+                 and q.get("id") not in protect]
+        if not slots:
+            slots = [i for i, q in enumerate(chosen)
+                     if sum(1 for x in chosen if x.get("type") == q.get("type")) > 1]
         if not slots:
             slots = list(range(len(chosen)))
         chosen[random.choice(slots)] = random.choice(candidates)
@@ -687,7 +697,8 @@ def pick_questions(pool, mac, n, now=None):
         counts[t] = counts.get(t, 0) + 1
         chosen.append(pick)
 
-    chosen = _fix_type_mix(chosen, pool, topic_cap)
+    chosen = _fix_type_mix(chosen, pool, topic_cap,
+                           protect={q.get("id") for q in tiers[0]})
     chosen = _enforce_topic_cap(chosen, pool, topic_cap)
     # 去重保险（题库里若有重复 id）
     out, seen = [], set()

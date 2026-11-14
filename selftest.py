@@ -354,6 +354,100 @@ def main():
               "02:00:00:00:00:82": {"days": ["18:00-20:00"] * 7},
           })) == 1)
 
+    # ---- 3.17.0 时段更灵活：一天多段 + 免答题自由上网时段 ----
+    multi = schedule.normalize({
+        "enabled": True,
+        "days": ["07:30-08:00, 18:00-20:00", "", "", "", "", "", ""],
+    })
+    check("一天可以配多个可答题时段",
+          multi["days"][0] == [["07:30", "08:00"], ["18:00", "20:00"]],
+          str(multi["days"][0]))
+    check("免答题时段写法 free:18:00-19:00 能被解析",
+          schedule.parse_window("free:18:00-19:00") == ["18:00", "19:00", "free"] and
+          schedule.parse_window("free：22:00-06:00") == ["22:00", "06:00", "free"] and
+          schedule.parse_window("free:00:00-24:00") == ["00:00", "24:00", "free"])
+
+    mixed = schedule.normalize({
+        "enabled": True,
+        "days": ["07:30-08:00, free:20:00-21:00", "", "", "", "", "", ""],
+    })
+    check("可答题与免答题时段可以混在同一天",
+          mixed["days"][0] == [["07:30", "08:00"],
+                               ["20:00", "21:00", "free"]],
+          str(mixed["days"][0]))
+    st_free = schedule.window_state(mixed, at(0, 20, 30))
+    check("自由上网时段内 free=True，且不用答题",
+          st_free["free"] and st_free["allowed"] and
+          st_free["free_hhmm"] == "21:00" and not st_free["unlimited"],
+          str({k: st_free.get(k) for k in ("free", "allowed", "free_hhmm")}))
+    check("自由上网时段结束后恢复禁止",
+          not schedule.window_state(mixed, at(0, 21, 30))["allowed"])
+    check("答题时段内 free=False",
+          not schedule.window_state(mixed, at(0, 7, 45))["free"])
+    check("答题页提示会说明自由上网时段",
+          "自由上网" in schedule.hint(st_free) and "21:00" in schedule.hint(st_free))
+    check("摘要里标出免答题时段",
+          "免答题" in schedule.summary(mixed), schedule.summary(mixed))
+
+    overlap = schedule.normalize({
+        "enabled": True,
+        "days": ["18:00-22:00, free:19:00-20:00", "", "", "", "", "", ""],
+    })
+    check("重叠时按自由上网算（不用答题）",
+          schedule.window_state(overlap, at(0, 19, 30))["free"] and
+          schedule.window_state(overlap, at(0, 21, 0))["free"] is False)
+
+    # 免答题时段的放行同样截到时段结束
+    t2 = at(0, 20, 30)
+    e2, _ = schedule.clamp_expire(int(t2 + 3600), mixed, t2)
+    check("自由上网时段里放行也截到时段结束",
+          e2 == int(at(0, 21)) and
+          schedule.window_state(mixed, t2)["free"])
+
+    # ---- 服务器：自由上网时段自动放行 / 时段结束自动回收 ----
+    _saved_adapter, _saved_store = srv.ADAPTER, srv.STORE
+    srv.ADAPTER = router_adapter.MockAdapter({}, lambda m: None)
+
+    class _FakeStore:
+        def bank_for_mac(self, mac):
+            return {"id": "bank_x", "name": "自由时段测试库"}
+
+    srv.STORE = _FakeStore()
+    try:
+        _now = time.time()
+        _free_mac = "aa:bb:cc:dd:ee:31"
+        _sched_states = {_free_mac: {
+            "limited": True, "free": True, "allowed": True,
+            "free_until": _now + 600, "free_start": _now - 60,
+            "free_hhmm": "21:00",
+        }}
+        _grants = {_free_mac: {"mac": _free_mac, "reblocked": True,
+                               "manual": True, "reblocked_at": _now - 3600}}
+        _ch = srv._sync_free_windows(_grants, _sched_states, _now)
+        _rec = _grants.get(_free_mac) or {}
+        check("自由上网时段自动放行，并把放行记录写到时段结束",
+              _ch and _rec.get("free") is True and
+              int(_rec.get("expire_at") or 0) == int(_now + 600) and
+              srv.ADAPTER.limit_of(_free_mac)["down"] == 0,
+              str({k: _rec.get(k) for k in ("free", "expire_at")}))
+        _ch2 = srv._sync_free_windows(_grants, _sched_states, _now)
+        check("同一自由时段不会反复调路由器", _ch2 is False)
+
+        # 家长在本时段里手动断过网 → 尊重，不自动放开
+        srv._free_opened.clear()
+        _ch3 = srv._sync_free_windows(
+            {_free_mac: {"mac": _free_mac, "manual": True, "reblocked": True,
+                         "reblocked_at": _now - 10}}, _sched_states, _now)
+        check("家长在自由时段内手动断网时不会被自动放开", _ch3 is False)
+        check("自由时段结束后状态回到禁止，放行记录到点即被回收",
+              not schedule.window_state(
+                  schedule.normalize({"enabled": True,
+                                      "days": ["free:18:00-19:00"] * 7}),
+                  at(0, 19, 30))["allowed"])
+    finally:
+        srv.ADAPTER, srv.STORE = _saved_adapter, _saved_store
+        srv._free_opened.clear()
+
     # ---- 页面与鉴权 ----
     code, raw = call("/")
     check("答题页可访问", code == 200 and "上网先答题" in raw, "HTTP %s" % code)
@@ -1030,6 +1124,27 @@ def main():
     code, res = start(0, target=sch_mac)
     check("时段内可以开始答题", code == 200, "HTTP %s" % code)
 
+    # 3.17.0：免答题自由上网时段——后台保存后 status 里 free=True
+    now_lt = time.localtime()
+    today_win = "%02d:%02d-%02d:%02d" % (
+        max(0, now_lt.tm_hour) % 24, 0 if now_lt.tm_hour == 23 else 0,
+        0, 0)
+    # 用一个「覆盖现在」的自由时段：今天 00:00-24:00 全免答题
+    free_days = [""] * 7
+    free_days[time.localtime().tm_wday] = "free:00:00-24:00"
+    code, res = admin("/api/admin/schedule", {
+        "mac": sch_mac, "schedule": {"enabled": True, "days": free_days},
+    })
+    check("后台可以保存免答题自由上网时段", code == 200 and
+          res.get("ok") is True and
+          "免答题" in ((res.get("status") or {}).get("summary") or ""),
+          str(res.get("detail", ""))[:40])
+    code, res = admin("/api/admin/schedules")
+    sst2 = (res.get("status") or {}).get(sch_mac) or {}
+    pub2 = srv.schedule_public(sst2) if sst2 else {}
+    check("自由上网时段内 status.free=True 且 hint 说明无需答题",
+          sst2.get("free") is True and "自由上网" in (pub2.get("hint") or ""),
+          str({k: pub2.get(k) for k in ("free", "hint")})[:80])
     code, res = admin("/api/admin/schedule", {
         "mac": sch_mac, "schedule": {"enabled": True, "days": ["bad"]},
     })

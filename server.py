@@ -138,6 +138,8 @@ def schedule_public(st):
     return {
         "limited": st["limited"], "allowed": st["allowed"],
         "unlimited": st["unlimited"], "hint": schedule.hint(st),
+        # 3.17.0：免答题的自由上网时段
+        "free": bool(st.get("free")), "free_hhmm": st.get("free_hhmm"),
         "next_label": st["next_label"], "summary": st["summary"],
         "today_text": st["today_text"], "ends_hhmm": st["ends_hhmm"],
         "change_at": st["change_at"],
@@ -495,6 +497,53 @@ def manual_unblock(mac, minutes):
 
 
 _sched_blocked = {}   # mac → 是否已因「禁止时段」断过网，避免每轮重复调路由器
+_free_opened = {}     # mac → 已经为哪个「自由上网时段」开过网（避免每 30 秒重复调路由器）
+
+
+def _sync_free_windows(grants, states, now):
+    """免答题的「自由上网时段」：到点自动放行，并把放行记录写成到时段结束。
+
+    放行记录 expire_at = 时段结束，所以时段一过，原有的到期回收逻辑
+    会把它重新限制（断网或限速），不需要额外代码。
+    家长在本时段内手动断网的，尊重家长、不自动放开。
+    返回是否有改动。
+    """
+    changed = False
+    for mac in list(_free_opened):
+        if mac not in states:          # 规则删掉了：清掉缓存的「开过网」标记
+            _free_opened.pop(mac, None)
+    for mac, st in states.items():
+        if not st.get("limited") or not st.get("free"):
+            _free_opened.pop(mac, None)
+            continue
+        until = int(st["free_until"])
+        rec = dict(grants.get(mac) or {})
+        # 家长刚在本时段里手动断过网（reblocked 且 manual）：尊重，不自动开
+        if (rec.get("manual") and rec.get("reblocked") and
+                int(rec.get("reblocked_at") or 0) >= int(st.get("free_start") or 0)):
+            _free_opened[mac] = until
+            continue
+        if (_free_opened.get(mac) or 0) >= until:
+            continue
+        bank = STORE.bank_for_mac(mac) or {}
+        try:
+            release_mac(mac, bank, "自由上网时段")
+        except Exception as exc:
+            log("FREE-ALLOW-FAIL mac=%s err=%s" % (mac, exc))
+            continue
+        if rec.get("day") != today():
+            rec["today_minutes"] = 0
+        rec.update({
+            "mac": mac, "at": now, "expire_at": until, "minutes": 0,
+            "bank": bank.get("id", ""), "bank_name": bank.get("name", ""),
+            "day": today(), "reblocked": False, "manual": False, "free": True,
+        })
+        grants[mac] = rec
+        _free_opened[mac] = until
+        changed = True
+        log("FREE-ALLOW mac=%s（自由上网时段，%s 到 %s）"
+            % (mac, bank.get("name", ""), st.get("free_hhmm") or "—"))
+    return changed
 
 
 def reblock_worker():
@@ -507,13 +556,20 @@ def reblock_worker():
                 now = time.time()
                 changed = False
 
+                # ---- 时段状态一次算好：自由上网时段 / 答题时段 / 禁止时段 ----
+                states = {mac: schedule.window_state(sched, now)
+                          for mac, sched in STORE.schedules().items()}
+                # 免答题时段：到点自动放行（放行记录写到时段结束）
+                if _sync_free_windows(grants, states, now):
+                    changed = True
+
                 # ---- 答题时段：进入禁止时段时，设备保持断网 ----
-                for mac, sched in STORE.schedules().items():
-                    st = schedule.window_state(sched, now)
+                for mac, st in states.items():
                     if not st["limited"]:
                         _sched_blocked.pop(mac, None)
                         continue
                     if st["allowed"]:
+                        # 自由上网 / 可答题时段：不在这里限制
                         _sched_blocked[mac] = False
                         continue
                     rec = grants.get(mac)
@@ -546,6 +602,9 @@ def reblock_worker():
                 # ---- 原有：配额到期回收 ----
                 for mac, rec in grants.items():
                     if rec.get("reblocked"):
+                        continue
+                    if (states.get(mac) or {}).get("free"):
+                        # 正处在免答题自由上网时段：先不回收，时段结束再收
                         continue
                     expire = int(rec.get("expire_at") or 0)
                     if not expire or now < expire:

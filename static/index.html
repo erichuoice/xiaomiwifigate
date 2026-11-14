@@ -342,7 +342,11 @@
         b.appendChild(s);
       }
       var sch = t.schedule || {};
-      if (sch.limited && !sch.allowed) {
+      if (sch.limited && sch.free) {
+        var fr = document.createElement('small');
+        fr.textContent = '自由上网中';
+        b.appendChild(fr);
+      } else if (sch.limited && !sch.allowed) {
         var no = document.createElement('small');
         no.textContent = '当前不可答题';
         b.appendChild(no);
@@ -356,6 +360,12 @@
           el('pick-card').style.display = 'none';
           showPanel('info', '这台设备现在不是答题时间',
             '<p>' + esc(sch.hint || '') + '</p>');
+        } else if (sch.limited && sch.free) {
+          el('pick-card').style.display = 'none';
+          showPanel('info', '这台设备现在自由上网',
+            '<p>' + esc(sch.hint || '') + '</p>' +
+            '<p style="font-size:12.5px;color:#6b7280">这个时段不用答题；' +
+            '到点后如果想继续上网，再来答题就行。</p>');
         } else {
           el('result').style.display = 'none';
         }
@@ -609,6 +619,15 @@
           return;
         }
         if (data.locked_for > 0) { startLock(data.locked_for); return; }
+        // 3.17.0：免答题的自由上网时段，直接告诉孩子现在能上网、到几点
+        if (data.schedule && data.schedule.limited && data.schedule.free) {
+          showPanel('info', '现在是自由上网时段',
+            '<p>' + esc(data.schedule.hint || '') + '</p>' +
+            '<p style="font-size:12.5px;color:#6b7280">这个时段不用答题，直接能上网；' +
+            '到点后会恢复限制，到时再答题就行。</p>');
+          scheduleAutoRefresh(data.schedule);
+          return;
+        }
         // 设备设了答题时段：时段外不展示题目，直接说明下次开放时间
         if (data.schedule && data.schedule.limited && !data.schedule.allowed) {
           showPanel('info', '现在不是答题时间',
@@ -634,12 +653,21 @@
         renderTiers(chosen);
         var blocked = chosen.schedule && chosen.schedule.limited &&
                       !chosen.schedule.allowed;
-        if (list.length === 1 && (chosen.tiers || []).length === 1 && !blocked) startTier(0);
+        var freeNow = chosen.schedule && chosen.schedule.limited &&
+                      chosen.schedule.free;
+        if (list.length === 1 && (chosen.tiers || []).length === 1 &&
+            !blocked && !freeNow) startTier(0);
         if (blocked) {
           showQuiz(false);
           el('pick-card').style.display = 'none';
           showPanel('info', '这台设备现在不是答题时间',
             '<p>' + esc(chosen.schedule.hint || '') + '</p>');
+        } else if (freeNow) {
+          showQuiz(false);
+          el('pick-card').style.display = 'none';
+          showPanel('info', '这台设备现在自由上网',
+            '<p>' + esc(chosen.schedule.hint || '') + '</p>' +
+            '<p style="font-size:12.5px;color:#6b7280">这个时段不用答题。</p>');
         }
       })
       .catch(function () {

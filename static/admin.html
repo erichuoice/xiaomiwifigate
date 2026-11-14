@@ -92,11 +92,13 @@
     font-weight:500; text-decoration:underline; }
   .mask { position:fixed; inset:0; background:rgba(15,20,28,.45); z-index:20;
     align-items:center; justify-content:center; padding:16px; }
-  .sheet { background:#fff; border-radius:14px; padding:18px; width:100%; max-width:540px;
+  .sheet { background:#fff; border-radius:14px; padding:18px; width:100%; max-width:660px;
     max-height:90vh; overflow:auto; box-shadow:0 12px 40px rgba(0,0,0,.2); }
-  .day-row { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
-  .day-row label { flex:0 0 44px; font-size:13px; color:var(--muted); }
-  .day-row input { flex:1; width:auto; }
+  .day-head, .day-row { display:grid; grid-template-columns:46px 1fr 1fr;
+    gap:8px; align-items:center; margin-bottom:6px; }
+  .day-head { font-size:11.5px; color:var(--muted); margin-bottom:5px; }
+  .day-row label { font-size:13px; color:var(--muted); }
+  .day-row input { width:100%; }
   .imp-out { margin-top:12px; font-size:13px; }
   .imp-err { background:var(--nosoft); border-radius:8px; padding:9px 11px; color:#8a2626; max-height:180px; overflow:auto; }
   .imp-ok { background:var(--oksoft); border-radius:8px; padding:9px 11px; color:#0a5b43; }
@@ -315,9 +317,10 @@
         放行/解除限速可填分钟数（0 或留空 = 永久），到期自动恢复限制。
         <b>暂时放行的设备，名称旁会显示实时倒计时</b>（答题解锁同样显示），
         到点自动刷新；永久放行不显示倒计时。</p>
-      <p class="hint">设备名下方的「时段设置」可按周一～周日设定<b>允许答题放行的时间段</b>：
-        时段外不能答题、设备保持断网，放行时长也会自动截到本时段结束。
-        家长手动点「放行」属于临时破例，不受时段限制。</p>
+      <p class="hint">设备名下方的「时段设置」可按周一～周日设定两类时段：
+        <b>可答题时段</b>（答题换上网时间，放行截到时段结束）和
+        <b>免答题 · 自由上网时段</b>（到点自动放行、不用答题，结束自动恢复限制）。
+        两类时段外不能答题、设备保持限制。家长手动点「放行」属于临时破例，不受时段限制。</p>
 
       <h2 style="margin-top:18px">添加受控设备</h2>
       <p class="hint">从路由器设备列表里挑一台加进题库（也可以直接填 MAC，设备不在线也能加）；
@@ -590,15 +593,18 @@
 
 <div id="sch-mask" class="mask" style="display:none">
   <div class="sheet">
-    <h2>答题时段 · <span id="sch-name"></span></h2>
-    <p class="hint">只有设定的时段内才能通过<b>答题</b>放行上网；时段外不能答题，设备会保持断网。
-      某天留空 = 当天不开放；整周留空 = 不限制。
-      格式 <code>18:00-20:00</code>，多个用逗号隔开，支持跨夜 <code>22:00-06:00</code>
-      与全天 <code>00:00-24:00</code>。</p>
+    <h2>上网时段 · <span id="sch-name"></span></h2>
+    <p class="hint">每天可以配<b>两类</b>时段（各自可以写多个，用逗号隔开）：
+      <b>① 可答题时段</b>——允许孩子答题换上网时间，放行时长最多到本时段结束；
+      <b>② 免答题 · 自由上网时段</b>——到点自动放行、不用答题，时段结束自动恢复限制。
+      两类时段外设备保持限制状态；某天留空 = 当天不开放；整周留空 = 不限制。
+      格式 <code>18:00-20:00</code>，支持跨夜 <code>22:00-06:00</code> 与全天 <code>00:00-24:00</code>。</p>
     <label class="chk"><input type="checkbox" id="sch-enabled"> 启用这台设备的时段限制</label>
+    <p class="hint" style="margin-bottom:4px">快捷填入「可答题时段」那一列（下面每行左边是
+      可答题、右边是免答题自由上网）：</p>
     <div class="row" style="align-items:center">
       <input type="text" id="sch-batch" value="18:00-20:00" style="flex:1 1 150px;width:auto"
-             aria-label="批量填入的时间段">
+             aria-label="批量填入的可答题时段">
       <button class="mini" data-preset="all">每天</button>
       <button class="mini" data-preset="workday">工作日</button>
       <button class="mini" data-preset="weekend">周末</button>
@@ -1050,11 +1056,22 @@
 
   // ---------- 设备答题时段 ----------
 
+  // 时段规则里每个窗口是 [开始, 结束] 或 [开始, 结束, 'free']；
+  // 拆成「可答题」和「免答题」两组文本，分别填到两列输入框里。
   function schedText(rule) {
-    if (!rule || !rule.days) return [];
-    return rule.days.map(function (wins) {
-      return (wins || []).map(function (w) { return w[0] + '-' + w[1]; }).join(', ');
-    });
+    var out = {quiz: [], free: []};
+    if (!rule || !rule.days) return out;
+    for (var i = 0; i < 7; i++) {
+      var wins = (rule.days || [])[i] || [];
+      var quiz = [], free = [];
+      wins.forEach(function (w) {
+        var txt = w[0] + '-' + w[1];
+        if (w[2] === 'free') free.push(txt); else quiz.push(txt);
+      });
+      out.quiz[i] = quiz.join(', ');
+      out.free[i] = free.join(', ');
+    }
+    return out;
   }
 
   function renderScheduleLine(td, d) {
@@ -1063,7 +1080,10 @@
     var st = (schedInfo[d.mac] || {}).status || {};
     var tag = document.createElement('span');
     tag.className = 'sch-tag' + (st.limited ? (st.allowed ? ' ok' : ' no') : '');
-    tag.textContent = st.limited ? (st.allowed ? '可答题' : '禁止答题') : '未设时段';
+    // 三种状态：自由上网（免答题）/ 可答题 / 禁止答题
+    tag.textContent = st.limited
+      ? (st.free ? '自由上网' : (st.allowed ? '可答题' : '禁止答题'))
+      : '未设时段';
     line.appendChild(tag);
     var btn = document.createElement('button');
     btn.className = 'link';
@@ -1092,14 +1112,24 @@
     el('sch-enabled').checked = !!(rule && rule.enabled);
     var texts = schedText(rule);
     var box = el('sch-days'); box.innerHTML = '';
+    var head = document.createElement('div');
+    head.className = 'day-head';
+    head.innerHTML = '<span></span><span>可答题时段（答题换上网）</span>' +
+      '<span>免答题 · 自由上网时段</span>';
+    box.appendChild(head);
     WEEK.forEach(function (name, i) {
       var row = document.createElement('div'); row.className = 'day-row';
       var lb = document.createElement('label'); lb.textContent = name;
-      var inp = document.createElement('input');
-      inp.type = 'text'; inp.id = 'sch-day-' + i;
-      inp.placeholder = '留空 = 当天不开放';
-      inp.value = texts[i] || '';
-      row.appendChild(lb); row.appendChild(inp); box.appendChild(row);
+      var qi = document.createElement('input');
+      qi.type = 'text'; qi.id = 'sch-day-' + i;
+      qi.placeholder = '如 18:00-20:00，多个用逗号隔开；留空 = 不能答题';
+      qi.value = texts.quiz[i] || '';
+      var fi = document.createElement('input');
+      fi.type = 'text'; fi.id = 'sch-free-' + i;
+      fi.placeholder = '如 19:30-20:30，不用答题直接上网；留空 = 无';
+      fi.value = texts.free[i] || '';
+      row.appendChild(lb); row.appendChild(qi); row.appendChild(fi);
+      box.appendChild(row);
     });
     el('sch-err').style.display = 'none';
     el('sch-mask').style.display = 'flex';
@@ -1108,12 +1138,18 @@
   function closeSchedule() { el('sch-mask').style.display = 'none'; }
 
   function collectSchedule() {
+    function split(v) {
+      return v ? v.split(/[,，;；]+/).map(function (x) {
+        return x.trim();
+      }).filter(Boolean) : [];
+    }
     var days = [];
     for (var i = 0; i < 7; i++) {
-      var v = el('sch-day-' + i).value.trim();
-      days.push(v ? v.split(/[,，;；]+/).map(function (x) {
-        return x.trim();
-      }).filter(Boolean) : []);
+      var quiz = split(el('sch-day-' + i).value.trim());
+      var free = split(el('sch-free-' + i).value.trim()).map(function (x) {
+        return 'free:' + x;
+      });
+      days.push(quiz.concat(free));
     }
     return { enabled: el('sch-enabled').checked, days: days };
   }
@@ -1122,8 +1158,10 @@
     var val = el('sch-batch').value.trim();
     var workday = [0, 1, 2, 3, 4], weekend = [5, 6];
     for (var i = 0; i < 7; i++) {
-      if (kind === 'clear') el('sch-day-' + i).value = '';
-      else if (kind === 'all' ||
+      if (kind === 'clear') {
+        el('sch-day-' + i).value = '';
+        el('sch-free-' + i).value = '';
+      } else if (kind === 'all' ||
                (kind === 'workday' && workday.indexOf(i) >= 0) ||
                (kind === 'weekend' && weekend.indexOf(i) >= 0)) {
         el('sch-day-' + i).value = val;
