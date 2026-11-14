@@ -20,6 +20,7 @@ import progress
 import router_adapter
 import schedule
 import store
+import tizhuang
 import updater
 
 COOKIE = "wifigate_admin"
@@ -370,6 +371,12 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
             spec, {"textbook": textbook,
                    "progress_auto": bank.get("progress_auto", True),
                    "term_scope": bank.get("term_scope") or ""})
+        # 3.32.0：附带题庄「已学章节」摘要（元数据免费；网络失败不影响本接口）
+        learned = None
+        try:
+            learned = tizhuang.scope_for_bank(bank, p)
+        except Exception:
+            learned = None
         return 200, {
             "ok": True, "bank_id": bank["id"], "bank_name": bank["name"],
             "region": bank.get("region") or "",
@@ -378,7 +385,62 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
             "term_scope": bank.get("term_scope") or "",
             "progress": p, "lines": plines,
             "textbooks": progress.textbook_options(),
+            "learned": learned,
+            "learned_text": tizhuang.scope_text(learned) if learned else "",
         }, None
+
+    # ---- 3.32.0：题庄在线题库（按已学章节抽题 / 试用额度 / License） ----
+    if path == "/api/admin/tizhuang" and method == "GET":
+        bid = str((query.get("bank") or [""])[0]).strip()
+        bank = st.bank(bid) if bid else st.first_bank()
+        out = {"ok": True, "config": tizhuang.config_view()}
+        try:
+            out["quota"] = tizhuang.quota()
+            out["scope"] = tizhuang.scope_for_bank(bank or {}, progress.current_progress())
+            out["scope_text"] = tizhuang.scope_text(out["scope"])
+            out["subjects"] = [{"name": x["subject"]} for x in out["scope"]["subjects"]]
+        except tizhuang.TzError as exc:
+            out["quota"] = {}
+            out["scope"] = None
+            out["detail"] = str(exc)
+        return 200, out, None
+
+    if path == "/api/admin/tizhuang/config" and method == "POST":
+        data = _body(raw)
+        saved = tizhuang.set_license(data.get("license"))
+        return 200, {"ok": True, "config": tizhuang.config_view(),
+                     "saved": saved}, None
+
+    if path == "/api/admin/tizhuang/preview" and method == "POST":
+        data = _body(raw)
+        bank = st.bank(str(data.get("bank_id") or "")) or st.first_bank()
+        if not bank:
+            return 404, {"ok": False, "detail": "题库不存在"}, None
+        try:
+            res = tizhuang.pull_questions(
+                bank, progress.current_progress(),
+                count=int(data.get("count") or 10),
+                subject=str(data.get("subject") or "").strip() or None)
+        except (tizhuang.TzError, ValueError, TypeError) as exc:
+            return 502, {"ok": False, "detail": str(exc)}, None
+        return 200, {"ok": True, "questions": res["questions"],
+                     "scope": res["scope"], "scope_text": tizhuang.scope_text(res["scope"]),
+                     "quota": res["quota"], "config": tizhuang.config_view()}, None
+
+    if path == "/api/admin/tizhuang/import" and method == "POST":
+        data = _body(raw)
+        bank = st.bank(str(data.get("bank_id") or "")) or st.first_bank()
+        if not bank:
+            return 404, {"ok": False, "detail": "题库不存在"}, None
+        questions = data.get("questions")
+        if not isinstance(questions, list) or not questions:
+            return 400, {"ok": False, "detail": "没有要加入的题目"}, None
+        try:
+            saved = st.apply_questions(bank["id"], questions, mode="append")
+        except (store.StoreError, TypeError, ValueError) as exc:
+            return 400, {"ok": False, "detail": str(exc)}, None
+        return 200, {"ok": True, "added": saved.get("added"),
+                     "total": saved.get("total"), "banks": st.banks()}, None
 
     # ---- AI 出题（3.6.0）：密钥只进 state/ai.json，响应一律打码 ----
     if path == "/api/admin/ai/config" and method == "GET":
@@ -411,6 +473,22 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
             merged = dict(ai_bank.scope_from_bank(bank))
             merged.update(spec)
             spec = merged
+            # 3.32.0：把题庄里「已学章节」交给 prompt，避免出到没学过的内容
+            try:
+                _tz = tizhuang.scope_for_bank(bank, progress.current_progress())
+                _wanted = set(spec.get("subjects") or []) or set(
+                    [spec.get("subject")] if spec.get("subject") else [])
+                _chapters = []
+                for _s in _tz.get("subjects") or []:
+                    if _wanted and _s["subject"] not in _wanted:
+                        continue
+                    _chapters.append("%s：%s" % (
+                        _s["subject"],
+                        "、".join(c["name"] for c in _s["learned"]) or "—"))
+                if _chapters:
+                    spec["scope_chapters"] = _chapters
+            except Exception:
+                pass
             spec.setdefault("avoid", [q["text"] for q in bank["questions"]][:600])
         if "star" not in spec and "difficulty" not in spec and bank:
             # 3.15.0：没指定难度时按这个题库（人）最近正确率自动定星级

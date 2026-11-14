@@ -382,6 +382,11 @@ def build_prompt(spec, mix, variant_text=""):
     if topics:
         reqs.append("优先围绕这些知识点出题：%s；其中至少一半题目必须命中上述知识点"
                     "（薄弱知识点要反复练）。" % "、".join(topics[:8]))
+    scope_chapters = spec.get("scope_chapters") or []
+    if scope_chapters:
+        reqs.insert(1, "【已学范围】只允许出这些已经学过的章节/单元内的题，"
+                        "超出的知识点一律不要出（这是家长明确要求）：%s。"
+                        % "；".join(str(x) for x in scope_chapters[:8]))
     star = spec_star(spec)
     if star:
         lo, hi = max(1, star - 1), min(5, star + 1)

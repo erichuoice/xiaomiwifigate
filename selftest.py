@@ -31,6 +31,7 @@ import progress  # noqa: E402
 import router_adapter  # noqa: E402
 import schedule  # noqa: E402
 import store  # noqa: E402
+import tizhuang  # noqa: E402
 
 HOST = os.environ.get("WIFIGATE_HOST", "http://127.0.0.1:8080")
 SEED = random.randint(1, 250)
@@ -1607,6 +1608,54 @@ def main():
         check("prompt 用管理对象的地区与年级",
               "广东省广州市" in _prompt and "四年级" in _prompt and
               "本地元素" in _prompt and "珠江" in _prompt)
+        # ---- 3.32.0 题庄题库：纯函数（不联网）----
+        check("题庄：广州地区各科教材版本选择",
+              tizhuang.region_key("广东省广州市") == "guangdong" and
+              tizhuang.region_preferred_editions("广东省广州市", 2)[0] == "人教新版" and
+              tizhuang.region_preferred_editions("广东省广州市", 3)[0] == "教科版（广州）" and
+              tizhuang.region_preferred_editions("上海市", 2)[0] == "沪教新版")
+        check("题庄：学期与已学章节推断",
+              tizhuang.semester_of({"term": "第一学期（秋季）"}) == "上" and
+              tizhuang.semester_of({"term": "第二学期（春季）"}) == "下" and
+              [c["name"] for c in tizhuang.learned_chapters(
+                  [{"name": "第%d章" % i} for i in range(1, 11)], 11)] ==
+              ["第%d章" % i for i in range(1, 7)])
+        _tz_item = {"id": 1, "title_html": "下面哪个是偶数？", "question_type": "选择题",
+                    "options": {"A": "3", "B": "4", "C": "5"}, "answer": "B",
+                    "analysis_html": "4 是偶数。", "knowledges": "偶数、奇数",
+                    "difficulty": 2.0}
+        _tz_q = tizhuang.convert_question(_tz_item, "数学", "小学", "三年级")
+        check("题庄：选择题转成我们的单选格式",
+              _tz_q and _tz_q["type"] == "single" and _tz_q["options"] == ["3", "4", "5"] and
+              _tz_q["answer"] == 1 and _tz_q["topic"] == "偶数、奇数" and
+              _tz_q["source"] == "题庄" and _tz_q["id"].startswith("tz"))
+        _tz_judge = tizhuang.convert_question(
+            {"id": 2, "title_html": "1 是质数．（判断对错）", "question_type": "判断题",
+             "options": {}, "answer": "×", "analysis_html": "1 既不是质数也不是合数。"},
+            "数学", "小学", "三年级")
+        check("题庄：判断题转成判断格式",
+              _tz_judge and _tz_judge["type"] == "judge" and
+              _tz_judge["options"] == ["正确", "错误"] and _tz_judge["answer"] == 1)
+        check("题庄：知识点名称去掉「小学语文知识点》」前缀",
+              tizhuang._clean_topic("小学语文知识点》阅读理解###") == "阅读理解" and
+              tizhuang._clean_topic("时、分、秒") == "时、分、秒")
+        check("AI prompt 带「已学章节」硬约束",
+              "【已学范围】" in ai_bank.build_prompt(
+                  {"stage": "小学", "grade": "三年级", "subjects": ["数学"], "count": 3,
+                   "scope_chapters": ["数学：第1章 时、分、秒、第2章 万以内的加法和减法（一）"]},
+                  {"single": 2, "judge": 1}) and
+              "第2章 万以内的加法和减法（一）" in ai_bank.build_prompt(
+                  {"stage": "小学", "grade": "三年级", "subjects": ["数学"], "count": 3,
+                   "scope_chapters": ["数学：第1章 时、分、秒、第2章 万以内的加法和减法（一）"]},
+                  {"single": 2, "judge": 1}))
+        check("题庄：填空题/解答题不硬转",
+              tizhuang.convert_question(
+                  {"id": 3, "title_html": "填空 ____", "question_type": "填空题",
+                   "options": {}, "answer": "5"}, "数学", "小学", "三年级") is None and
+              tizhuang.convert_question(
+                  {"id": 4, "title_html": "解答题", "question_type": "解答题",
+                   "options": {}, "answer": "略"}, "数学", "小学", "三年级") is None)
+
         check("教材按地区自动推断（不再手填）",
               progress.textbook_for_region("广东省广州市").startswith("广州地区常用") and
               "上海教育" in progress.textbook_for_region("上海市") and
@@ -1955,7 +2004,9 @@ def main():
           "AI 出题连接" in admin_html and
           _key_at < _st_end and not (_ai_start < _key_at < _ai_end) and
           "el('ai-goset').onclick" in admin_html and
-          "if (name === 'settings') loadAiConfig()" in admin_html,
+          "if (name === 'settings') {" in admin_html and
+          "loadAiConfig();" in admin_html and
+          "loadTizhuangStatus();" in admin_html,
           "ai-key@%s settings@end%s ai@%s~%s" % (_key_at, _st_end, _ai_start, _ai_end))
     check("AI 出题页提示去系统设置配置 Key",
           "AI 出题连接" in admin_html and "系统设置" in admin_html and
@@ -2256,6 +2307,14 @@ def main():
           "按模式走会漏清" in server_html)
 
     # ---- 3.20.0 导航按「管理对象」组织 ----
+    check("题目页有「从题庄题库导入」，设置页有题庄 License（3.32.0）",
+          all(w in admin_html for w in
+              ("从题庄题库导入", "id=\"tz-preview\"", "id=\"tz-status\"",
+               "id=\"tz-subject\"", "id=\"tz-count\"", "id=\"tz-out\"",
+               "id=\"tz-license\"", "id=\"tz-license-save\"", "id=\"tz-license-clear\"",
+               "function tzPreview(", "function tzImport(", "function loadTizhuangStatus(")) and
+          "loadTizhuangStatus();" in admin_html and
+          "已学章节" in admin_html)
     check("页签按管理对象组织（学生信息/题目/AI出题/学习情况/管理设备）",
           "管理对象" in admin_html and
           all(w in admin_html for w in

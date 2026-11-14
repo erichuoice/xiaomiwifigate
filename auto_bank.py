@@ -27,6 +27,8 @@ from datetime import datetime, timedelta, timezone
 
 import ai_bank
 import learning
+import tizhuang
+import progress
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(BASE, "state")
@@ -515,6 +517,21 @@ def run_once(st, rule, reason="auto", now=None):
         }
         if scope.get("scope"):
             spec["scope"] = scope["scope"]
+        # 3.32.0：自动出题也遵守题庄「已学章节」，避免补进没学过的题
+        try:
+            _tz = tizhuang.scope_for_bank(bank, progress.current_progress())
+            _chapters = []
+            _subs = set(cfg.get("subjects") or [])
+            for _s in _tz.get("subjects") or []:
+                if _subs and _s["subject"] not in _subs:
+                    continue
+                _chapters.append("%s：%s" % (
+                    _s["subject"],
+                    "、".join(c["name"] for c in _s["learned"]) or "—"))
+            if _chapters:
+                spec["scope_chapters"] = _chapters
+        except Exception:
+            pass
         if star:
             spec["star"] = star
         if cfg["mix"]:

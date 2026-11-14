@@ -332,6 +332,24 @@
 
     </div>
 
+      <h2 style="margin-top:22px">从题庄题库导入<span class="count">按已学章节自动筛</span></h2>
+      <p class="hint">题庄（tizhuang.qcscience.cc）是公开的中小学真题库：按「地区 → 教材 → 年级学期 →
+        这学期已学章节」抽题，只抽无图、能自动判分的单选/判断。免费试用 50 题 / 24 小时，
+        注册后每天 150 题；License 在「系统设置 → 题庄题库」里填。</p>
+      <p class="hint" id="tz-status">正在读取题庄状态…</p>
+      <div class="grid2">
+        <div>
+          <label class="fld" for="tz-subject">科目</label>
+          <select id="tz-subject"></select>
+        </div>
+        <div>
+          <label class="fld" for="tz-count">题量（1~20）</label>
+          <input id="tz-count" type="number" min="1" max="20" value="10">
+        </div>
+      </div>
+      <div class="row"><button id="tz-preview">预览（按已学章节抽题）</button></div>
+      <div id="tz-out" style="margin-top:10px"></div>
+
       <h2 style="margin-top:22px">内置题库</h2>
       <p class="hint">内置 134 道小学 + 初中题目（语文/数学/英语/科学/物理/化学/生物/历史/地理）。
         题库名含「小学」或「初中」时，只灌对应学段。</p>
@@ -439,6 +457,19 @@
       <label class="chk"><input type="checkbox" id="upd-auto-apply">
         发现新版本自动安装并重启（约中断服务 3 秒）</label>
       <p class="hint" id="upd-msg" style="margin-top:12px; display:none"></p>
+
+      <h2 style="margin-top:22px">题庄题库</h2>
+      <p class="hint">「从题庄题库导入」用的在线真题库。不填 License 就用匿名试用（50 题 / 24 小时）；
+        免费注册后每天 150 题起。License 只存在路由器 <code>state/tizhuang.json</code>（权限 600），
+        后台只显示后四位。</p>
+      <p class="hint" id="tz-license-hint"></p>
+      <div class="row">
+        <input id="tz-license" type="text" autocomplete="off" spellcheck="false"
+               placeholder="粘贴 License（留空 = 不修改已保存的）" style="flex:1;min-width:220px">
+        <button class="mini" id="tz-license-save">保存</button>
+        <button class="mini ghost" id="tz-license-clear">清除</button>
+      </div>
+      <p class="hint" id="tz-quota-line"></p>
 
       <h2 style="margin-top:22px">答题锁定</h2>
       <p class="hint">孩子连错几轮会被锁定一段时间。解锁后可以立刻重新答题，
@@ -1613,6 +1644,7 @@
 
   var aiConfig = null, aiPreview = [], learnRows = [];
   var lastScopeInfo = null;        // 3.24.0：当前管理对象的出题范围/进度（/api/admin/progress）
+  var tzQuestions = [];            // 3.32.0：题庄预览出来的题目
   var aiMode = 'manual';
 
   function escHtml(s) {
@@ -1707,6 +1739,7 @@
       (who ? '（' + escHtml(who) + '）' : '') +
       '　教学进度：' + escHtml(p.label || '') +
       '；命题范围：' + escHtml(p.scope || '') +
+      (x.learned_text ? '<br><b>已学章节：</b>' + escHtml(x.learned_text) : '') +
       '　<button type="button" class="mini ghost" id="ai-scope-edit">去题库修改</button>';
     var edit = el('ai-scope-edit');
     if (edit) edit.onclick = function () { switchTab('quiz'); };
@@ -1725,6 +1758,7 @@
           box.innerHTML = '<b>教材（按地区推断）：</b>' + escHtml(d.textbook || '') +
             '<br><b>当前进度：</b>' + escHtml(p.label || '') +
             '　<b>命题范围：</b>' + escHtml(p.scope || '') +
+            (d.learned_text ? '<br><b>已学章节（按课本章节推断）：</b>' + escHtml(d.learned_text) : '') +
             '<br><span style="color:var(--muted)">' + escHtml(p.note || '') + '</span>';
         }
       }
@@ -2261,6 +2295,116 @@
 
   // ---------- 交互 ----------
 
+  // ---------- 3.32.0：题庄在线题库（按已学章节抽题） ----------
+
+  function tzQuotaText(q) {
+    if (!q || q.remaining == null) return '题庄额度：未知';
+    if (q.registered) return '题庄额度（注册）：今天还剩 ' + q.remaining + ' 题';
+    return '题庄额度（匿名试用）：今天还剩 ' + q.remaining + ' / ' + (q.limit || 50) + ' 题';
+  }
+
+  function applyTzConfig(c) {
+    var hint = el('tz-license-hint');
+    if (!hint) return;
+    hint.textContent = c && c.has_license
+      ? '当前使用注册 License（' + (c.key_hint || '') + '），每天 150 题起'
+      : '当前未填 License，用匿名试用（50 题 / 24 小时）';
+  }
+
+  function loadTizhuangStatus() {
+    var bid = currentBankId || '';
+    return api('/api/admin/tizhuang' + (bid ? '?bank=' + encodeURIComponent(bid) : ''))
+      .then(function (res) {
+        if (!requireAuth(res)) return;
+        var d = res.data || {};
+        var st = el('tz-status');
+        if (st) {
+          st.innerHTML = (d.detail ? '<span style="color:var(--no)">' + escHtml(d.detail) + '</span><br>' : '') +
+            (d.scope_text ? '<b>已学范围：</b>' + escHtml(d.scope_text) : '') +
+            '<br>' + escHtml(tzQuotaText(d.quota));
+        }
+        var sel = el('tz-subject');
+        if (sel) {
+          var cur = sel.value;
+          fillSel('tz-subject', (d.subjects || []).map(function (x) {
+            return { id: x.name, name: x.name };
+          }), 'id', 'name', cur || '');
+        }
+        applyTzConfig(d.config || {});
+      }).catch(function () {});
+  }
+
+  function renderTzPreview() {
+    var box = el('tz-out');
+    if (!tzQuestions.length) { box.innerHTML = '<p class="hint">没有抽到题目。</p>'; return; }
+    var html = '<p class="hint">共 ' + tzQuestions.length + ' 道（来源：题庄，已按已学章节筛选）：</p>';
+    tzQuestions.forEach(function (q, i) {
+      var opts = (q.options || []).map(function (o, k) {
+        return String.fromCharCode(65 + k) + '. ' + escHtml(String(o).slice(0, 60));
+      }).join('　');
+      html += '<div class="wrong-line"><label class="chk"><input type="checkbox" data-tzi="' +
+        i + '" checked> ' + escHtml(q.text) + '</label><br>' +
+        '<span style="color:var(--muted);font-size:12px">' + escHtml(opts) +
+        '　答案：' + escHtml(tzAnswerText(q)) + '　知识点：' + escHtml(q.topic || '') + '</span></div>';
+    });
+    html += '<div class="row"><button id="tz-import">把勾选的题加入题库</button></div>';
+    box.innerHTML = html;
+    el('tz-import').onclick = tzImport;
+  }
+
+  function tzAnswerText(q) {
+    if (q.type === 'judge') return q.answer === 0 ? '正确' : '错误';
+    if (q.type === 'multi') return (q.answer || []).map(function (i) {
+      return String.fromCharCode(65 + i);
+    }).join(',');
+    return String.fromCharCode(65 + (q.answer || 0));
+  }
+
+  function tzPreview() {
+    var b = el('tz-preview');
+    b.disabled = true; b.textContent = '抽题中…';
+    el('tz-out').innerHTML = '<p class="hint">正在按已学章节抽题（会消耗题庄额度）…</p>';
+    api('/api/admin/tizhuang/preview', {
+      bank_id: currentBankId || '',
+      subject: el('tz-subject').value,
+      count: Math.min(20, Math.max(1, parseInt(el('tz-count').value, 10) || 10))
+    }).then(function (res) {
+      b.disabled = false; b.textContent = '预览（按已学章节抽题）';
+      if (!requireAuth(res)) return;
+      if (!res.data.ok) {
+        el('tz-out').innerHTML = '<p class="hint" style="color:var(--no)">' +
+          escHtml(res.data.detail || '抽题失败') + '</p>';
+        loadTizhuangStatus();
+        return;
+      }
+      tzQuestions = res.data.questions || [];
+      renderTzPreview();
+      loadTizhuangStatus();
+    }).catch(function () {
+      b.disabled = false; b.textContent = '预览（按已学章节抽题）';
+    });
+  }
+
+  function tzImport() {
+    var picked = [];
+    var box = el('tz-out');
+    var boxes = box.querySelectorAll ? box.querySelectorAll('input[data-tzi]') : [];
+    Array.prototype.forEach.call(boxes, function (cb) {
+      if (cb.checked) picked.push(tzQuestions[parseInt(cb.getAttribute('data-tzi'), 10)]);
+    });
+    if (!picked.length) { toast('先勾选要加入的题目'); return; }
+    api('/api/admin/tizhuang/import', {
+      bank_id: currentBankId || '', questions: picked
+    }).then(function (res) {
+      if (!requireAuth(res)) return;
+      if (!res.data.ok) { toast(res.data.detail || '加入失败'); return; }
+      toast('已加入 ' + (res.data.added || 0) + ' 道题');
+      tzQuestions = [];
+      el('tz-out').innerHTML = '';
+      loadState();
+    }).catch(function () { toast('加入请求失败'); });
+  }
+
   function setAiMode(m) {
     aiMode = m === 'auto' ? 'auto' : 'manual';
     el('ai-manual-sec').style.display = aiMode === 'manual' ? 'block' : 'none';
@@ -2284,6 +2428,7 @@
     if (name === 'questions') {
       renderList();
       if (el('qs-bank')) el('qs-bank').textContent = (banks[cur] || {}).name || '';
+      loadTizhuangStatus();
     }
     if (name === 'ai') {
       loadAiConfig();            // 手动/自动合并成一页：两边数据都准备好
@@ -2293,7 +2438,10 @@
     if (name === 'learning') {
       loadLearning(currentBankId || el('learn-sel').value || '');
     }
-    if (name === 'settings') loadAiConfig();   // 3.23.0：AI 连接配置挪到系统设置
+    if (name === 'settings') {
+      loadAiConfig();                          // 3.23.0：AI 连接配置挪到系统设置
+      loadTizhuangStatus();                    // 3.32.0：题庄 License / 额度
+    }
     el('open-settings').className = name === 'settings' ? 'mini' : 'mini ghost';
   }
 
@@ -2313,6 +2461,25 @@
   });
   el('save-bank-settings').onclick = saveBank;
   el('ai-mode-manual').onclick = function () { setAiMode('manual'); };
+  el('tz-preview').onclick = tzPreview;
+  el('tz-license-save').onclick = function () {
+    var v = el('tz-license').value.trim();
+    if (!v) { toast('请粘贴 License'); return; }
+    api('/api/admin/tizhuang/config', { license: v }).then(function (res) {
+      if (!requireAuth(res)) return;
+      if (!res.data.ok) { toast(res.data.detail || '保存失败'); return; }
+      el('tz-license').value = '';
+      toast('已保存题庄 License');
+      loadTizhuangStatus();
+    }).catch(function () {});
+  };
+  el('tz-license-clear').onclick = function () {
+    api('/api/admin/tizhuang/config', { license: '' }).then(function (res) {
+      if (!requireAuth(res)) return;
+      toast('已清除题庄 License，回到匿名试用');
+      loadTizhuangStatus();
+    }).catch(function () {});
+  };
   el('ai-mode-auto').onclick = function () { setAiMode('auto'); };
 
   el('auto-save').onclick = saveAutoBank;
