@@ -2009,7 +2009,9 @@
   var AI_MIX_IDS = ['ai-mix-single', 'ai-mix-multi', 'ai-mix-judge'];
 
   function currentAutoBank() {
-    return el('auto-bank').value || (autoBanks[0] && autoBanks[0].id) || '';
+    // 3.28.0：以顶栏「管理对象」为准，别用隐藏下拉里可能残留的旧值
+    return currentBankId || el('auto-bank').value ||
+      (autoBanks[0] && autoBanks[0].id) || '';
   }
 
   function autoRuleFor(bankId) {
@@ -2145,13 +2147,10 @@
   function renderAutoBank(res) {
     var d = res.data;
     autoData = d; autoOpts = d.options || {}; autoBanks = d.banks || [];
-    var cur = el('auto-bank').value;
+    // 3.28.0：跟着顶栏选中的管理对象走，不要退回到第一条规则所在的题库
+    var cur = currentAutoBank();
     if (!autoBanks.some(function (b) { return b.id === cur; })) {
-      // 没选中过或题库已删除：优先落到第一条已配置规则的题库，否则第一个题库
-      var r0 = (d.rules || [])[0];
-      cur = (r0 && autoBanks.some(function (b) {
-        return b.id === r0.bank_id;
-      })) ? r0.bank_id : ((autoBanks[0] && autoBanks[0].id) || '');
+      cur = (autoBanks[0] && autoBanks[0].id) || '';
     }
     fillSel('auto-bank', autoBanks.map(function (b) {
       return { id: b.id, name: b.name + '（' + b.questions + ' 题）' };
@@ -2274,8 +2273,9 @@
     aiMode = m === 'auto' ? 'auto' : 'manual';
     el('ai-manual-sec').style.display = aiMode === 'manual' ? 'block' : 'none';
     el('ai-auto-sec').style.display = aiMode === 'auto' ? 'block' : 'none';
-    el('ai-mode-manual').className = aiMode === 'manual' ? 'mini' : 'mini ghost';
-    el('ai-mode-auto').className = aiMode === 'auto' ? 'mini' : 'mini ghost';
+    // 选中的那个用实心蓝，未选中用浅色，避免「灰色=选中」的歧义（3.28.0）
+    el('ai-mode-manual').className = aiMode === 'manual' ? '' : 'mini ghost';
+    el('ai-mode-auto').className = aiMode === 'auto' ? '' : 'mini ghost';
     if (aiMode === 'auto') loadAutoBank();
     try { localStorage.setItem('wifigate.ai_mode', aiMode); } catch (e) {}
   }

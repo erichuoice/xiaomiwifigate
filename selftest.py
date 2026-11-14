@@ -2041,6 +2041,9 @@ def main():
           "currentAutoBank()" in admin_html and
           "b.bank_id === _curBank" in admin_html and
           "b.configured" in admin_html)
+    check("自动补题以顶栏管理对象为准，不被隐藏下拉旧值带偏（3.28.0）",
+          "return currentBankId || el('auto-bank').value" in admin_html and
+          "var cur = currentAutoBank();" in admin_html)
     check("运行记录只显示当前管理对象",
           "③ 最近运行记录（当前管理对象）" in admin_html and
           "r.bank_id === _curBank" in admin_html)
