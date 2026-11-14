@@ -364,8 +364,10 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
         if not bank:
             return 404, {"ok": False, "detail": "题库不存在"}, None
         spec = ai_bank.scope_from_bank(bank)
+        # 3.25.0：教材按「地区」自动推断，不再手填
+        textbook = progress.textbook_for_region(spec.get("region"))
         p, textbook, plines = progress.resolve(
-            spec, {"textbook": bank.get("textbook") or "",
+            spec, {"textbook": textbook,
                    "progress_auto": bank.get("progress_auto", True),
                    "term_scope": bank.get("term_scope") or ""})
         return 200, {

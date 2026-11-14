@@ -952,9 +952,11 @@ def main():
           res["bank"]["term_scope"] == "第 1—2 单元（自检范围）",
           str((res.get("bank") or {}).get("detail")))
     code, pr = admin("/api/admin/progress?bank=" + ai_bank_id)
-    check("进度接口按管理对象返回范围",
+    check("进度接口按管理对象返回范围与推断教材",
           code == 200 and (pr.get("progress") or {}).get("scope") ==
-          "第 1—2 单元（自检范围）" and pr.get("region") == "广东省广州市")
+          "第 1—2 单元（自检范围）" and pr.get("region") == "广东省广州市" and
+          "广州地区常用" in (pr.get("textbook") or ""),
+          (pr.get("textbook") or "")[:16])
     code, gen2 = admin("/api/admin/ai/generate", {
         "spec": {"subjects": ["数学"], "count": 2, "mode": "offline"},
         "bank_id": ai_bank_id, "focus_weak": False})
@@ -1602,6 +1604,11 @@ def main():
         check("prompt 用管理对象的地区与年级",
               "广东省广州市" in _prompt and "四年级" in _prompt and
               "本地元素" in _prompt and "珠江" in _prompt)
+        check("教材按地区自动推断（不再手填）",
+              progress.textbook_for_region("广东省广州市").startswith("广州地区常用") and
+              "上海教育" in progress.textbook_for_region("上海市") and
+              "人教版" in progress.textbook_for_region("某某市"),
+              progress.textbook_for_region("广东省广州市")[:16])
 
     # ---- 3.15.0 自适应难度：按最近正确率调星级（目标正确率 ≥90%）----
         d85 = {"history": [{"ok": True}] * 17 + [{"ok": False}] * 3, "diff": 3.0}
@@ -1958,11 +1965,12 @@ def main():
           all(("/api/admin/ai/" + w) in admin_html for w in
               ("config", "test", "generate", "apply")) and
           "/api/admin/learning" in admin_html)
-    check("出题范围（地区/学段年级/教材/进度）在管理对象上",
+    check("出题范围只在管理对象上填地区/学段/年级，教材与进度自动推断（3.25.0）",
           all(w in admin_html for w in
-              ("bank-region", "bank-stage", "bank-grade", "bank-textbook",
-               "bank-prog-auto", "bank-scope", "bank-progress")) and
+              ("bank-region", "bank-stage", "bank-grade", "bank-progress")) and
           "/api/admin/progress?bank=" in admin_html and
+          "bank-textbook" not in admin_html and
+          "bank-prog-auto" not in admin_html and "bank-scope" not in admin_html and
           "ai-stage" not in admin_html and "ai-grade" not in admin_html and
           "ai-textbook" not in admin_html)
     check("答题页显示知识点与本轮重点", "q.topic" in index_html and
@@ -2238,10 +2246,10 @@ def main():
           "按模式走会漏清" in server_html)
 
     # ---- 3.20.0 导航按「管理对象」组织 ----
-    check("页签按管理对象组织（题库/AI出题/学习情况/管理设备）",
+    check("页签按管理对象组织（题库/题目/AI出题/学习情况/管理设备）",
           "管理对象" in admin_html and
           all(w in admin_html for w in
-              ("tabbtn-quiz", "tabbtn-ai",
+              ("tabbtn-quiz", "tabbtn-questions", "tabbtn-ai",
                "tabbtn-learning", "tabbtn-devices")) and
           "tabbtn-auto" not in admin_html and
           "学习情况" in admin_html and "管理设备" in admin_html and
@@ -2288,12 +2296,18 @@ def main():
           "管理对象</div>" not in admin_html,
           "hidebank 出现 %s 次" % admin_html.count("hidebank"))
 
-    check("导入并入题库页（且在题库卡片内部）、系统设置收到右上角",
+    _qs_end = _card_end(admin_html, '<div id="tab-questions"')
+    check("题目单独一页：题目/导入/内置题库都在「题目」卡片内（3.25.0）",
+          'id="tabbtn-questions"' in admin_html and
+          'id="tab-questions"' in admin_html and
+          "function switchTab(" in admin_html and
+          "name === 'questions'" in admin_html and
+          _qs_end > admin_html.index('id="imp-text"') and
+          _qs_end > admin_html.index('id="builtin-append"') and
+          _quiz_end < admin_html.index('id="imp-text"') and
           'id="open-settings"' in admin_html and
-          "switchTab('settings')" in admin_html and
-          _quiz_end > admin_html.index('id="imp-text"') and
-          admin_html.index('id="imp-text"') < admin_html.index('id="tab-devices"'),
-          "题库卡片结束@%s，导入@%s" % (_quiz_end, admin_html.index('id="imp-text"')))
+          "switchTab('settings')" in admin_html,
+          "题目卡片结束@%s，导入@%s" % (_qs_end, admin_html.index('id="imp-text"')))
 
     # ---- 3.19.0 错题本下载 ----
     check("学情页有错题本下载入口",

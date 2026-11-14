@@ -30,6 +30,24 @@ TEXTBOOKS = [
 
 DEFAULT_TEXTBOOK = TEXTBOOKS[0]["value"]
 
+# 地区 → 常用教材（3.25.0：不再让家长填教材版本，按地区自动推）
+REGION_TEXTBOOK = [
+    (("广州", "广东", "深圳"), "gz"),
+    (("上海",), "hujiao"),
+    (("北京", "天津", "河北"), "renjiao"),
+]
+
+
+def textbook_for_region(region):
+    """按地区推一个常用教材版本（只作 prompt 参考，不声称精确对应学校）。"""
+    text = str(region or "")
+    for keys, tid in REGION_TEXTBOOK:
+        if any(k in text for k in keys):
+            for t in TEXTBOOKS:
+                if t["id"] == tid:
+                    return t["value"]
+    return TEXTBOOKS[1]["value"]      # 其它地区默认人教版（全科目）
+
 # 学期大致长度（教学周），只用于把日期换算成「进度阶段」
 TERM_WEEKS = 20
 AUTUMN_START = (9, 1)       # 秋春季开学日按广州校历惯例估算

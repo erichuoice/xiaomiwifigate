@@ -304,7 +304,6 @@ def scope_from_bank(bank):
         "region": str(bank.get("region") or "").strip(),
         "stage": str(bank.get("stage") or "").strip(),
         "grade": str(bank.get("grade") or "").strip(),
-        "textbook": str(bank.get("textbook") or "").strip(),
     }
     if bank.get("progress_auto") is False and str(bank.get("term_scope") or "").strip():
         out["scope"] = str(bank["term_scope"]).strip()
@@ -918,6 +917,11 @@ def generate(spec, force_offline=False):
     cfg = load_config()
     # 3.24.0：教材与「手动教学进度」优先用管理对象（题库）上的设置；
     # 题库没填时回落到全局 AI 配置（老数据行为不变）
+    # 3.25.0：教材不再手填，按管理对象的「地区」自动推断
+    if not str(spec.get("textbook") or "").strip():
+        region = str(spec.get("region") or "").strip()
+        if region:
+            spec["textbook"] = progress.textbook_for_region(region)
     if not str(spec.get("textbook") or "").strip():
         spec["textbook"] = cfg["textbook"]
     if (not str(spec.get("scope") or "").strip() and
