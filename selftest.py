@@ -26,6 +26,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 import ai_bank  # noqa: E402
 import auto_bank  # noqa: E402
+import importer  # noqa: E402
 import learning  # noqa: E402
 import progress  # noqa: E402
 import router_adapter  # noqa: E402
@@ -1636,6 +1637,53 @@ def main():
         check("题庄：判断题转成判断格式",
               _tz_judge and _tz_judge["type"] == "judge" and
               _tz_judge["options"] == ["正确", "错误"] and _tz_judge["answer"] == 1)
+        # 重复导入时补章节：模拟同一道题第二次导入
+        _old_rt2 = store.RUNTIME_PATH
+        try:
+            store.RUNTIME_PATH = os.path.join(tmp, "rt-chapter.json")
+            with open(store.RUNTIME_PATH, "w", encoding="utf-8") as f:
+                json.dump({"version": 3, "banks": [{
+                    "id": "bank_ch", "name": "补章节", "enabled": True, "devices": [],
+                    "tiers": [{"questions": 1, "minutes": 30}],
+                    "questions": [{"id": "q1", "type": "single", "text": "同一道题",
+                                   "options": ["1", "2"], "answer": 0, "explain": "",
+                                   "stage": "", "grade": "", "subject": "", "star": 2,
+                                   "topic": "", "chapter": "", "source": ""}],
+                }], "settings": {}, "schedules": {}}, f, ensure_ascii=False)
+            _st = store.Store()
+            _res2 = _st.apply_questions("bank_ch", [{
+                "text": "同一道题", "type": "single", "options": ["1", "2"], "answer": 0,
+                "topic": "加法", "chapter": "第1章 时、分、秒"}])
+            _q2 = _st.bank("bank_ch")["questions"][0]
+            check("重复导入同一道题会把缺失的章节补上",
+                  _res2["added"] == 0 and _q2["chapter"] == "第1章 时、分、秒" and
+                  _q2["topic"] == "加法")
+        finally:
+            store.RUNTIME_PATH = _old_rt2
+        check("题庄：抽题时记录章节，供判断超纲",
+              tizhuang.convert_question(
+                  {"id": 7, "title_html": "下面哪个数是偶数？", "question_type": "选择题",
+                   "options": {"A": "3", "B": "4"}, "answer": "B"},
+                  "数学", "小学", "三年级", chapter="第1章 时、分、秒")["chapter"] ==
+              "第1章 时、分、秒")
+        _chq = store.validate_question(
+            {"text": "1+1=?", "type": "single", "options": ["2", "3"],
+             "answer": 0, "chapter": "第1章 时、分、秒", "topic": "加法"})
+        check("题目模型保存「章节」字段，CSV 可用「章节」列",
+              _chq["chapter"] == "第1章 时、分、秒" and
+              importer.HEADER_ALIAS.get("章节") == "chapter")
+        _aiq = ai_bank.normalize_ai_questions(
+            [{"text": "下面哪个数能被 3 整除？", "type": "single",
+              "options": ["1", "2", "3"], "answer": 2,
+              "topic": "整除", "chapter": "第2章 因数与倍数", "star": 2, "explain": "3 能被 3 整除"}],
+            {"stage": "小学", "grade": "五年级", "subjects": ["数学"]})
+        check("AI 题目保留章节字段",
+              len(_aiq) == 1 and _aiq[0]["chapter"] == "第2章 因数与倍数")
+        check("已学范围要求 AI 写 chapter",
+              "chapter 字段" in ai_bank.build_prompt(
+                  {"stage": "小学", "grade": "三年级", "subjects": ["数学"], "count": 3,
+                   "scope_chapters": ["数学：第1章 时、分、秒"]},
+                  {"single": 2, "judge": 1}))
         check("题庄：知识点名称去掉「小学语文知识点》」前缀",
               tizhuang._clean_topic("小学语文知识点》阅读理解###") == "阅读理解" and
               tizhuang._clean_topic("时、分、秒") == "时、分、秒")
@@ -2307,6 +2355,14 @@ def main():
           "按模式走会漏清" in server_html)
 
     # ---- 3.20.0 导航按「管理对象」组织 ----
+    check("题目卡片显示知识点/章节并标已学未学（3.33.0）",
+          "function qScopeTag(" in admin_html and
+          "function qScopeBits(" in admin_html and
+          "function learnedChapterMap(" in admin_html and
+          "function topicLabel(" in admin_html and
+          "已学" in admin_html and "未学" in admin_html and
+          "知识点（主要考点）" in admin_html and
+          "loadBankProgress(currentBankId);" in admin_html)
     check("题目页有「从题庄题库导入」，设置页有题庄 License（3.32.0）",
           all(w in admin_html for w in
               ("从题庄题库导入", "id=\"tz-preview\"", "id=\"tz-status\"",

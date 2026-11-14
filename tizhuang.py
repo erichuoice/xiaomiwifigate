@@ -459,7 +459,7 @@ def _clean_topic(text):
     return re.sub(r"^[#\s]+", "", part)[:24]
 
 
-def convert_question(item, subject_name, stage, grade_name):
+def convert_question(item, subject_name, stage, grade_name, chapter=""):
     """题庄题目 → 我们的题目格式（单选/多选/判断）。不支持的题型返回 None。"""
     qtype = str(item.get("question_type") or "")
     text = _strip(item.get("title_html") or item.get("title"))
@@ -478,7 +478,8 @@ def convert_question(item, subject_name, stage, grade_name):
         "id": "tz" + str(item.get("id") or ""),
         "stage": stage, "grade": grade_name, "subject": subject_name,
         "text": text[:400], "explain": explain[:400],
-        "star": star, "topic": topic, "source": "题庄",
+        "star": star, "topic": topic, "chapter": str(chapter or "")[:40],
+        "source": "题庄",
     }
     if qtype == "判断题":
         low = answer.lower().replace(" ", "")
@@ -554,7 +555,8 @@ def pull_questions(bank, progress=None, count=10, subject=None, want_types=None)
                     remaining = int(res["quota_remaining_today"])
                 for item in items:
                     conv = convert_question(item, subj["subject"], scope["stage"],
-                                            scope.get("grade_name") or scope["grade"])
+                                            scope.get("grade_name") or scope["grade"],
+                                            chapter=chap["name"])
                     if not conv or conv["text"] in used_ids:
                         continue
                     used_ids.add(conv["text"])

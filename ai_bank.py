@@ -387,6 +387,8 @@ def build_prompt(spec, mix, variant_text=""):
         reqs.insert(1, "【已学范围】只允许出这些已经学过的章节/单元内的题，"
                         "超出的知识点一律不要出（这是家长明确要求）：%s。"
                         % "；".join(str(x) for x in scope_chapters[:8]))
+        reqs.append("答完后请再单独给出 chapter 字段：写这道题所属的章节名，"
+                    "必须从上面的【已学范围】里原样照抄一个，不要自己编章节。")
     star = spec_star(spec)
     if star:
         lo, hi = max(1, star - 1), min(5, star + 1)
@@ -586,7 +588,9 @@ def normalize_ai_questions(raw, spec, source="ai"):
             "type": qtype, "text": str(item.get("text") or "").strip()[:400],
             "options": opts, "answer": answer,
             "explain": str(item.get("explain") or "").strip()[:400],
-            "topic": topic, "star": item.get("star", 2),
+            "topic": topic,
+            "chapter": str(item.get("chapter") or "").strip()[:40],   # 3.33.0
+            "star": item.get("star", 2),
             "stage": str(item.get("stage") or stage),
             "grade": str(item.get("grade") or grade),
             "subject": _subject_of(item.get("subject")),

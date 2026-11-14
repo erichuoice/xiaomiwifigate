@@ -27,6 +27,7 @@ HEADER_ALIAS = {
     "分析": "explain", "点评": "explain",
     "star": "star", "难度": "star", "星级": "star", "难度星级": "star",
     "options": "options", "选项": "options", "选项列表": "options",
+    "chapter": "chapter", "章节": "chapter", "考点章节": "chapter", "单元": "chapter",
 }
 
 TRUE_WORDS = {"对", "正确", "√", "t", "true", "y", "yes", "是"}

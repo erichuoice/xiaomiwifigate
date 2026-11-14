@@ -276,6 +276,9 @@
     <div id="tab-questions" class="card" style="display:none">
       <h2>题目<span id="qcount" class="count"></span></h2>
       <p class="hint">当前管理对象：<b id="qs-bank"></b>（在顶栏切换；题目、导入、内置题库都只作用于这个人）</p>
+      <p class="hint">每道题下面会显示<b>知识点（主要考点）</b>和<b>章节</b>；从题庄导入的题还会标
+        <span class="pill ok">已学</span> / <span class="pill no">未学</span>
+        （未学 = 超出这学期已学章节，可能超纲），方便你判断要不要删掉。</p>
       <div class="filters">
         <select id="f-stage"><option value="">全部学段</option></select>
         <select id="f-subject"><option value="">全部科目</option></select>
@@ -953,6 +956,64 @@
     wrap.appendChild(box);
   }
 
+  // ---------- 3.33.0：题目卡片显示「知识点 / 章节」，并标出已学 / 未学 ----------
+
+  function learnedChapterMap() {
+    var out = {};
+    var sc = (lastScopeInfo && lastScopeInfo.learned) || {};
+    (sc.subjects || []).forEach(function (s) {
+      out[s.subject] = {
+        learned: (s.learned || []).map(function (c) { return c.name; }),
+        all: (s.chapters || []).map(function (c) { return c.name; })
+      };
+    });
+    return out;
+  }
+
+  // 返回 {cls, text}：题庄题有章节，和当前管理对象的「已学章节」对比
+  function qScopeTag(q) {
+    if (!q || !q.chapter) return null;
+    var map = learnedChapterMap();
+    var key = q.subject || '';
+    var bucket = map[key] || null;
+    if (!bucket) {
+      Object.keys(map).forEach(function (k) {
+        if (!bucket && key && (k.indexOf(key) >= 0 || key.indexOf(k) >= 0)) bucket = map[k];
+      });
+    }
+    if (!bucket) return { cls: 'pill', text: '章节未标注' };
+    if (bucket.learned.indexOf(q.chapter) >= 0) return { cls: 'pill ok', text: '已学' };
+    if (bucket.all.indexOf(q.chapter) >= 0) return { cls: 'pill no', text: '未学' };
+    return { cls: 'pill no', text: '超出本学期' };
+  }
+
+  function topicLabel(topic) {
+    // 题庄旧题的知识点可能带「小学语文知识点》阅读理解###」前缀，显示时取最后一段
+    var t = String(topic || '').split('###')[0];
+    if (t.indexOf('》') >= 0) {
+      var parts = t.split('》').filter(function (x) { return x.trim(); });
+      t = parts.length ? parts[parts.length - 1] : t;
+    }
+    return t.trim();
+  }
+
+  function qScopeBits(q) {
+    var html = '';
+    if (q && q.topic) {
+      html += '<span class="pill">' + escHtml(topicLabel(q.topic)) + '</span>';
+    }
+    if (q && q.chapter) {
+      html += '<span class="pill">' + escHtml(q.chapter) + '</span>';
+    }
+    var tag = qScopeTag(q);
+    if (tag) {
+      html += '<span class="' + tag.cls + '">' + escHtml(tag.text) + '</span>';
+    } else if (q && q.source === '题庄' && !q.chapter) {
+      html += '<span class="pill">章节未标注</span>';
+    }
+    return html ? '　' + html : '';
+  }
+
   function renderList() {
     var list = filtered();
     var pages = Math.max(1, Math.ceil(list.length / PAGE));
@@ -972,9 +1033,9 @@
       brief.textContent = q.text || '（未填写题干）';
       var meta = document.createElement('div'); meta.className = 'qmeta';
       var typeCn = { single: '单选', multi: '多选', judge: '判断' }[q.type] || '单选';
-      meta.textContent = [typeCn, q.stage || '未分学段', q.grade, q.subject,
+      meta.innerHTML = escHtml([typeCn, q.stage || '未分学段', q.grade, q.subject,
         q.star ? '★' + q.star : ''].filter(Boolean).join(' · ') +
-        (q.id ? ' · ' + q.id : ' · 保存后分配 ID');
+        (q.id ? ' · ' + q.id : ' · 保存后分配 ID')) + qScopeBits(q);
       brief.appendChild(meta);
       var ops = document.createElement('div'); ops.style.flex = '0 0 auto';
       var edit = document.createElement('button');
@@ -1856,6 +1917,7 @@
       var html = '<div class="qh"><input type="checkbox" class="ai-pick" data-i="' + i +
         '" checked><div class="qbody"><span class="pill">' + escHtml(kind) + '</span>' +
         (q.topic ? '<span class="pill ok">' + escHtml(q.topic) + '</span>' : '') +
+        (q.chapter ? '<span class="pill">' + escHtml(q.chapter) + '</span>' : '') +
         (q.grade ? '<span class="pill">' + escHtml(q.grade) + '</span>' : '') +
         '<div>' + escHtml(q.text) + '</div>' +
         '<div class="opts">' + escHtml((q.options || []).join(' / ')) + '</div>' +
@@ -2345,7 +2407,7 @@
       html += '<div class="wrong-line"><label class="chk"><input type="checkbox" data-tzi="' +
         i + '" checked> ' + escHtml(q.text) + '</label><br>' +
         '<span style="color:var(--muted);font-size:12px">' + escHtml(opts) +
-        '　答案：' + escHtml(tzAnswerText(q)) + '　知识点：' + escHtml(q.topic || '') + '</span></div>';
+        '　答案：' + escHtml(tzAnswerText(q)) + '　</span>' + qScopeBits(q) + '</div>';
     });
     html += '<div class="row"><button id="tz-import">把勾选的题加入题库</button></div>';
     box.innerHTML = html;
@@ -2426,6 +2488,7 @@
     if (name === 'devices') refreshDevices();
     if (name === 'quiz') syncImportBank();
     if (name === 'questions') {
+      loadBankProgress(currentBankId);   // 3.33.0：刷新「已学章节」，题卡上的标记要用
       renderList();
       if (el('qs-bank')) el('qs-bank').textContent = (banks[cur] || {}).name || '';
       loadTizhuangStatus();

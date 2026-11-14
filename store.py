@@ -167,6 +167,8 @@ def validate_question(q, index=1, used=None):
         "star": star,
         # 3.6.0：知识点用于弱项分析与错题变式；source 标记题目来源
         "topic": str(q.get("topic") or q.get("知识点") or "").strip()[:24],
+        # 3.33.0：章节（主要考点所在章节），方便家长判断是否超纲
+        "chapter": str(q.get("chapter") or q.get("章节") or "").strip()[:40],
         "source": str(q.get("source") or q.get("来源") or "").strip()[:16],
     }
 
@@ -946,8 +948,16 @@ class Store:
                 seen_text = {q["text"] for q in current}
                 seen_id = {q["id"] for q in current}
                 merged, added = list(current), 0
+                by_text = {q["text"]: q for q in current}
                 for q in clean:
                     if q["text"] in seen_text:
+                        # 3.33.0：同一道题再导入时，把之前缺的「章节 / 知识点」补上，
+                        # 方便后台显示考点与「是否已学」（不覆盖答案、解析等已有内容）
+                        old = by_text.get(q["text"])
+                        if old is not None:
+                            for field in ("chapter", "topic"):
+                                if not old.get(field) and q.get(field):
+                                    old[field] = q[field]
                         continue
                     if q["id"] in seen_id:
                         q["id"] = _mk_id(q["text"], seen_id)
