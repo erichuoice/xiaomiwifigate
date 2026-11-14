@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""自动补充新题（3.8.0）：题库里「没做过」的题少于阈值时自动生成补足。
+"""自动补充新题（3.10.0：每个题库可以设置不同的自动出题要求）。
 
-3.7.0 是按时间表定时出题；3.8.0 按用户要求改为按剩余新题数触发：
+3.8.0 按「没做过的题少于阈值」触发；3.10.0 升级为多规则：
+- ``state/auto_bank.json`` 里保存一个规则列表，每个题库一条规则，
+  阈值、冷却、学段年级、科目、题型配比、最多保留自动题等都各配各的。
+- 守护线程逐库检查：哪个题库的新题少于它自己的阈值就单独补哪个，
+  互不影响（例：小学库补四年级数学，初中库补八年级物理英语）。
+- 旧版单份配置文件（平铺 dict）首次读取时自动包成一条规则，无缝升级。
+
+设计约束（沿用 3.8.0/3.9.0）：
 - 「做过」= 这道题曾被任何设备答过（学情 history 里出现过它的 id）。
-- 「没做过的题」（新题）少于阈值（默认 30）时，自动生成一批新题直接入库，
-  把新题缺口补到阈值；生成仍会避开题库已有题干，不会重复。
-- 冷却：两次自动执行至少间隔 cooldown_minutes（默认 30 分钟），
+- 冷却：每个题库独立计时，两次自动执行至少间隔 cooldown_minutes，
   防止生成失败时每 30 秒空转轰炸一次接口。
-
-设计约束（沿用 3.7.0）：
 - 配置与运行记录只写 ``state/auto_bank.json``（权限 600），不进 GitHub、
   不进题库导入导出；``config.json`` / ``runtime.json`` 都不改。
 - 触发由 server.py 的守护线程负责；本模块不 import server，避免循环依赖。
-- 自动触发和后台「立即试跑」共用一把非阻塞锁，同一时刻只跑一次。
+- 所有规则共用一把非阻塞执行锁，同一时刻只生成一批，不会并发写题库。
 """
 
 import copy
@@ -32,16 +35,19 @@ PATH = os.path.join(STATE, "auto_bank.json")
 # 中国全境统一 UTC+8、无夏令时，固定偏移比依赖 tzdata 更稳（alpine 镜像里没有）
 TZ = timezone(timedelta(hours=8))
 MAX_RUNS = 20
+MERGED_RUNS = 30          # 状态卡里合并展示的最近运行记录条数
 AUTO_PREFIX = "auto-"
 MODES = ("auto", "offline", "ai")
+DOC_VERSION = 2
 
+# 单条规则的默认值（每个题库一条，未设置的题库用这份兜底）
 DEFAULTS = {
-    # 默认开启：升级后无需人工点任何开关，题不够就自动补（后台可随时关闭）
+    # 默认开启：在后台选中某个题库保存后即生效，无需再点别的开关
     "enabled": True,
     "threshold": 30,           # 没做过的题少于多少道时触发
     "cooldown_minutes": 30,   # 两次自动执行的最小间隔（分钟）
     "count": 30,               # 每次最多生成 1~30 道
-    "bank_id": "",             # 空 = 第一个题库
+    "bank_id": "",             # 空 = 第一个题库（保存时会落成具体 id）
     "stage": "小学",
     "grade": "四年级",
     "subject": "数学",           # 兼容旧配置：单科目字符串
@@ -52,7 +58,7 @@ DEFAULTS = {
     "device_mac": "",           # 非空 = 针对这台设备的弱项与错题出题
     "max_auto": 60,             # 该题库最多保留多少道「自动题」，0 = 不限
     "last_run": 0,
-    "next_run": 0,              # 3.8.0：= 下次允许自动执行的时间（冷却结束时刻）
+    "next_run": 0,              # = 下次允许自动执行的时间（冷却结束时刻）
     "runs": [],
 }
 
@@ -61,7 +67,7 @@ class AutoBankError(Exception):
     pass
 
 
-_run_lock = threading.Lock()      # 单次执行互斥
+_run_lock = threading.Lock()      # 单次执行互斥（所有规则共用）
 _file_lock = threading.Lock()     # 配置文件读写
 
 
@@ -106,7 +112,7 @@ def _int(value, low, high, label, default=0):
 
 
 def normalize(raw, base=None):
-    """把任意表单/文件内容收敛成一份安全配置。"""
+    """把任意表单/文件内容收敛成一条安全规则。"""
     src = dict(DEFAULTS)
     if base:
         src.update({k: v for k, v in base.items() if k in DEFAULTS})
@@ -157,11 +163,11 @@ def normalize(raw, base=None):
 
 # ---------------------------------------------------------------- 读写
 
-def _write(cfg):
+def _write(doc):
     os.makedirs(STATE, exist_ok=True)
     tmp = PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+        json.dump(doc, f, ensure_ascii=False, indent=2)
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, PATH)
@@ -171,7 +177,8 @@ def _write(cfg):
         pass
 
 
-def load():
+def _read_doc():
+    """读原始文档；旧版（3.9.0 及以前）的单份平铺配置自动包成一条规则。"""
     with _file_lock:
         raw = {}
         if os.path.exists(PATH):
@@ -180,42 +187,152 @@ def load():
                     raw = json.load(f)
             except (OSError, ValueError):
                 raw = {}
-        try:
-            cfg = normalize(raw)
-        except AutoBankError:
-            cfg = copy.deepcopy(DEFAULTS)
-        return cfg
+        if not isinstance(raw, dict):
+            raw = {}
+        if isinstance(raw.get("rules"), list):
+            return {"version": DOC_VERSION, "rules": raw["rules"]}
+        # 旧格式：整个文件就是一份配置 → 迁移成规则列表（保留原有开关与计时）
+        return {"version": DOC_VERSION, "rules": [raw] if raw else []}
 
 
-def _save_cfg(cfg):
+def _save_doc(doc):
     with _file_lock:
-        _write(cfg)
+        _write({"version": DOC_VERSION, "rules": doc.get("rules") or []})
 
 
-def save(patch, now=None):
-    """保存后台表单。阈值/冷却/开关变了才重排冷却，改题量等不动计时。"""
-    cfg = load()
-    clean = normalize(patch, cfg)
-    clean["last_run"] = cfg["last_run"]
-    clean["runs"] = cfg["runs"]
+def first_bank_id(st):
+    try:
+        return str((st.first_bank() or {}).get("id") or "")
+    except Exception:
+        return ""
+
+
+def resolve_bank_id(st, bank_id):
+    """空题库 id = 第一个题库；返回具体 id，找不到时报错。"""
+    bank_id = str(bank_id or "").strip()
+    if not bank_id:
+        bank_id = first_bank_id(st)
+    if not bank_id or not st.bank(bank_id):
+        raise AutoBankError("目标题库不存在，请重新选择一个题库")
+    return bank_id
+
+
+def load_all(st=None):
+    """读出所有规则并归一化。
+
+    - 旧格式文件自动迁移（_read_doc 已处理）；
+    - bank_id 为空（=第一个题库）的规则落成具体 id 并写回，之后全程用具体 id，
+      避免同一题库出现两条规则；
+    - 同一个 bank_id 只保留一条（后写的优先）。
+    """
+    doc = _read_doc()
+    rules, changed, seen = [], False, {}
+    for raw in doc.get("rules") or []:
+        if not isinstance(raw, dict):
+            changed = True
+            continue
+        try:
+            rule = normalize(raw)
+        except AutoBankError:
+            changed = True
+            continue
+        if not rule["bank_id"] and st is not None:
+            first = first_bank_id(st)
+            if first:
+                rule["bank_id"] = first
+        if rule["bank_id"] in seen:
+            changed = True            # 同库重复：只留一条
+        seen[rule["bank_id"]] = rule
+    rules = list(seen.values())
+    if st is not None:
+        for r in rules:
+            if not str(r.get("bank_id") or "").strip():
+                changed = True
+    if changed or [r["bank_id"] for r in rules] != \
+            [str((x or {}).get("bank_id") or "") for x in doc.get("rules") or []]:
+        _save_doc({"version": DOC_VERSION, "rules": rules})
+    return rules
+
+
+def load_rule(st, bank_id):
+    """取某个题库的规则；没设置过返回 None。"""
+    want = str(bank_id or "").strip()
+    for r in load_all(st):
+        if r["bank_id"] == want:
+            return r
+    return None
+
+
+def save_rule(patch, st=None, now=None):
+    """保存（新增或覆盖）某个题库的规则。
+
+    阈值/冷却/开关变了才重排冷却，改题量等不动计时；last_run/runs 沿用旧值。
+    """
     now = float(now if now is not None else time.time())
-    rule_changed = any(clean[k] != cfg[k] for k in
-                       ("enabled", "threshold", "cooldown_minutes"))
+    body = dict(patch) if isinstance(patch, dict) else {}
+    if st is not None:
+        body["bank_id"] = resolve_bank_id(st, body.get("bank_id"))
+    bank_id = str(body.get("bank_id") or "").strip()
+    if not bank_id:
+        raise AutoBankError("请先选择题库")
+    doc = _read_doc()
+    first = first_bank_id(st) if st is not None else ""
+    rules = []
+    for raw in doc.get("rules") or []:
+        if not isinstance(raw, dict):
+            continue
+        rid = str(raw.get("bank_id") or "").strip()
+        if not rid and first:        # 旧版空题库 id = 第一个题库
+            raw = dict(raw, bank_id=first)
+            rid = first
+        if rid:
+            rules.append(raw)
+    old = None
+    for raw in rules:
+        if str(raw.get("bank_id") or "") == bank_id:
+            old = raw
+            break
+    clean = normalize(body, old)
+    clean["bank_id"] = bank_id
+    if old:
+        clean["last_run"] = float(old.get("last_run") or 0)
+        runs = old.get("runs") if isinstance(old.get("runs"), list) else []
+        clean["runs"] = [r for r in runs if isinstance(r, dict)][:MAX_RUNS]
+    # 冷却编排（与 3.8.0 相同）
     if not clean["enabled"]:
         clean["next_run"] = 0.0
-    elif rule_changed or not cfg["next_run"]:
+    elif old is None or not float(old.get("next_run") or 0) or any(
+            clean[k] != old.get(k) for k in
+            ("enabled", "threshold", "cooldown_minutes")):
         clean["next_run"] = cooldown_until(clean, now)
     else:
-        clean["next_run"] = cfg["next_run"]
-    _save_cfg(clean)
+        clean["next_run"] = float(old.get("next_run") or 0)
+    rules = [r for r in rules if str(r.get("bank_id") or "") != bank_id]
+    rules.append(clean)
+    _save_doc({"version": DOC_VERSION, "rules": rules})
     return clean
 
 
-def clear_runs():
-    cfg = load()
-    cfg["runs"] = []
-    _save_cfg(cfg)
-    return cfg
+def remove_rule(bank_id):
+    """删除某个题库的自动出题规则（已入库的题不受影响）。"""
+    bank_id = str(bank_id or "").strip()
+    if not bank_id:
+        raise AutoBankError("请先选择题库")
+    doc = _read_doc()
+    rules = [r for r in doc.get("rules") or []
+             if str((r or {}).get("bank_id") or "").strip() != bank_id]
+    _save_doc({"version": DOC_VERSION, "rules": rules})
+
+
+def clear_runs(bank_id=None):
+    """清空运行记录；给 bank_id 时只清这个题库的。"""
+    bank_id = str(bank_id or "").strip()
+    doc = _read_doc()
+    rules = [r if isinstance(r, dict) else {} for r in doc.get("rules") or []]
+    for r in rules:
+        if not bank_id or str(r.get("bank_id") or "") == bank_id:
+            r["runs"] = []
+    _save_doc({"version": DOC_VERSION, "rules": rules})
 
 
 def cooldown_until(cfg, now=None):
@@ -236,7 +353,7 @@ def fresh_questions(bank, done=None):
 
 def fresh_count(st, cfg, done=None):
     """目标题库里「没做过」的题数。"""
-    bank_id = cfg["bank_id"] or (st.first_bank() or {}).get("id", "")
+    bank_id = cfg["bank_id"] or first_bank_id(st)
     bank = st.bank(bank_id) if bank_id else None
     if not bank:
         return 0
@@ -244,7 +361,7 @@ def fresh_count(st, cfg, done=None):
 
 
 def due(st, cfg, now=None):
-    """满足两个条件才算到点：新题少于阈值，且冷却已结束。"""
+    """满足两个条件才算到点：新题少于该库阈值，且该库冷却已结束。"""
     now = float(now if now is not None else time.time())
     if not cfg.get("enabled"):
         return False
@@ -253,51 +370,81 @@ def due(st, cfg, now=None):
     return now >= cfg.get("next_run", 0)
 
 
+def _bank_status(st, bank, rule, done, now):
+    """单个题库的状态行。"""
+    fresh = len(fresh_questions(bank, done))
+    auto_count = sum(1 for q in bank["questions"]
+                     if str(q.get("source") or "").startswith(AUTO_PREFIX))
+    threshold = rule["threshold"] if rule else 0
+    if not rule:
+        state_text = "未设置"
+        next_text = "未设置：在下方选中该题库并保存即可启用"
+        cooldown_until_text = cooldown_relative = "—"
+        last_run_text = "—"
+        subjects = []
+    elif not rule["enabled"]:
+        state_text = "已设置，未启用"
+        next_text = "未启用"
+        cooldown_until_text = cooldown_relative = "—"
+        last_run_text = fmt_ts(rule["last_run"])
+        subjects = rule["subjects"]
+    else:
+        state_text = "已启用"
+        if fresh < rule["threshold"]:
+            next_text = "缺 %d 道，%s" % (
+                rule["threshold"] - fresh,
+                "冷却中（%s）" % fmt_ts(rule["next_run"])
+                if now < rule["next_run"] else "等待守护线程执行")
+        else:
+            next_text = "新题充足，答到低于阈值就会触发"
+        cooldown_until_text = fmt_ts(rule["next_run"])
+        cooldown_relative = relative(rule["next_run"], now)
+        last_run_text = fmt_ts(rule["last_run"])
+        subjects = rule["subjects"]
+    return {
+        "bank_id": bank["id"],
+        "bank_name": bank["name"],
+        "bank_total": len(bank["questions"]),
+        "auto_questions": auto_count,
+        "configured": bool(rule),
+        "enabled": bool(rule and rule["enabled"]),
+        "state_text": state_text,
+        "fresh": fresh,
+        "threshold": threshold,
+        "need": max(0, threshold - fresh) if rule else 0,
+        "cooldown_minutes": rule["cooldown_minutes"] if rule else 0,
+        "cooldown_until": rule["next_run"] if (rule and rule["enabled"]) else 0,
+        "cooldown_until_text": cooldown_until_text,
+        "cooldown_relative": cooldown_relative,
+        "next_text": next_text,
+        "last_run_text": last_run_text,
+        "subjects": subjects,
+        "runs": (rule or {}).get("runs") or [],
+    }
+
+
 def status(st, now=None):
-    """后台状态卡：新题数/阈值、冷却、题库里的自动题数、是否已配 Key。"""
+    """后台状态卡：每个题库一行状态 + 合并的最近运行记录。"""
     now = float(now if now is not None else time.time())
-    cfg = load()
-    bank_id = cfg["bank_id"] or (st.first_bank() or {}).get("id", "")
-    bank = st.bank(bank_id) if bank_id else None
-    auto_count = 0
-    if bank:
-        auto_count = sum(1 for q in bank["questions"]
-                         if str(q.get("source") or "").startswith(AUTO_PREFIX))
+    rules = {r["bank_id"]: r for r in load_all(st)}
+    done = learning.done_qids()
+    banks = [b for b in st.banks() if isinstance(b, dict)]
+    rows = [_bank_status(st, b, rules.get(b["id"]), done, now) for b in banks]
+    merged = []
+    for r in rules.values():
+        merged.extend((r.get("runs") or [])[:MERGED_RUNS])
+    merged.sort(key=lambda r: float(r.get("at") or 0), reverse=True)
     try:
         has_key = bool(ai_bank.public_config().get("has_key"))
     except Exception:
         has_key = False
-    if cfg["enabled"]:
-        if fresh_count(st, cfg) < cfg["threshold"]:
-            next_text = "满足触发条件，%s" % (
-                "冷却中（%s）" % fmt_ts(cfg["next_run"])
-                if now < cfg["next_run"] else "等待守护线程执行")
-        else:
-            next_text = "不满足（新题足够），一旦答题消耗到低于阈值就会触发"
-    else:
-        next_text = "未启用"
     return {
         "server_now": now,
         "now_text": fmt_ts(now),
         "running": _run_lock.locked(),
-        "enabled": cfg["enabled"],
-        "fresh": fresh_count(st, cfg),
-        "threshold": cfg["threshold"],
-        "need": max(0, cfg["threshold"] - fresh_count(st, cfg)),
-        "cooldown_minutes": cfg["cooldown_minutes"],
-        "cooldown_until": cfg["next_run"] if cfg["enabled"] else 0,
-        "cooldown_until_text": fmt_ts(cfg["next_run"]) if cfg["enabled"] else "—",
-        "cooldown_relative": relative(cfg["next_run"], now) if cfg["enabled"] else "—",
-        "next_text": next_text,
-        "last_run": cfg["last_run"],
-        "last_run_text": fmt_ts(cfg["last_run"]),
-        "bank_id": bank_id,
-        "bank_name": bank["name"] if bank else "（题库不存在）",
-        "bank_total": len(bank["questions"]) if bank else 0,
-        "auto_questions": auto_count,
-        "subjects": cfg["subjects"],
         "has_key": has_key,
-        "runs": cfg["runs"],
+        "banks": rows,
+        "runs": merged[:MERGED_RUNS],
     }
 
 
@@ -313,29 +460,31 @@ def _mark(qs, source):
     return out
 
 
-def run_once(st, reason="auto", now=None):
-    """生成一批新题并入库；无论成败都进入冷却并落一条记录。
+def run_once(st, rule, reason="auto", now=None):
+    """按某条规则生成一批新题并入库到它指定的题库。
 
-    自动触发（reason=auto）时只补缺口：缺 8 道就生成 8 道，避免题库猛涨；
+    无论成败都进入该库自己的冷却并落一条记录。
+    自动触发（reason=auto）时只补缺口：缺 8 道就生成 8 道；
     手动试跑（reason=manual）按表单题量出满一批。
     """
     if not _run_lock.acquire(blocking=False):
         raise AutoBankError("上一次自动出题还在执行，请稍候再试")
     now = float(now if now is not None else time.time())
     t0 = time.time()
+    bank_id = str(rule.get("bank_id") or "").strip() or first_bank_id(st)
     rec = {
-        "at": now, "at_text": fmt_ts(now), "reason": reason,
+        "at": now, "at_text": fmt_ts(now), "reason": reason, "bank_id": bank_id,
         "ok": False, "generated": 0, "added": 0, "skipped": 0,
         "total": 0, "pruned": 0, "fresh": 0, "source": "", "model": "",
         "bank_name": "", "latency": 0, "detail": "",
     }
-    cfg = load()
     try:
-        bank_id = cfg["bank_id"] or (st.first_bank() or {}).get("id", "")
         bank = st.bank(bank_id) if bank_id else None
         if not bank:
             raise AutoBankError("目标题库不存在，请在设置里重新选择一个题库")
         rec["bank_name"] = bank["name"]
+        cfg = dict(rule)
+        cfg["bank_id"] = bank_id
 
         count = cfg["count"]
         if reason != "manual":
@@ -385,17 +534,31 @@ def run_once(st, reason="auto", now=None):
     except Exception as exc:  # 出题失败不能影响答题/放行主流程
         rec["detail"] = str(exc)
         try:
-            rec["fresh"] = fresh_count(st, cfg)
+            rec["fresh"] = fresh_count(st, {"bank_id": bank_id})
         except Exception:
             pass
     finally:
         rec["latency"] = round(time.time() - t0, 1)
         try:
-            latest = load()
-            latest["last_run"] = now
-            latest["next_run"] = cooldown_until(latest, now) if latest["enabled"] else 0.0
-            latest["runs"] = ([rec] + latest["runs"])[:MAX_RUNS]
-            _save_cfg(latest)
+            doc = _read_doc()
+            for raw in doc.get("rules") or []:
+                if not isinstance(raw, dict):
+                    continue
+                rid = str(raw.get("bank_id") or "").strip()
+                if rid == bank_id or (not rid and
+                                      bank_id == first_bank_id(st)):
+                    try:
+                        latest = normalize(raw)
+                    except AutoBankError:
+                        continue
+                    latest["last_run"] = now
+                    latest["next_run"] = (cooldown_until(latest, now)
+                                          if latest["enabled"] else 0.0)
+                    latest["runs"] = ([rec] + latest["runs"])[:MAX_RUNS]
+                    raw.clear()
+                    raw.update(latest)
+                    break
+            _save_doc(doc)
         except Exception:
             pass
         _run_lock.release()

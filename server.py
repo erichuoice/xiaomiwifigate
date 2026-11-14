@@ -510,17 +510,20 @@ def update_worker():
 
 
 def auto_bank_worker():
-    """无人值守补题：题库里「没做过」的题少于阈值时自动生成一批并入库。
+    """无人值守补题：每个题库一条规则，哪库「没做过」的题少于它自己的阈值
+    就自动给哪库生成一批新题并入库。
 
-    配置在 state/auto_bank.json；每 30 秒检查一次，冷却期内不重复触发，
-    生成失败也进入冷却，单次执行与后台「立即试跑」共用锁，不会并发写题库。
+    配置在 state/auto_bank.json（3.10.0 起每库一条规则）；每 30 秒检查一次，
+    各库冷却独立计时，生成失败也进入冷却，单次执行与后台「立即试跑」
+    共用锁，不会并发写题库。
     """
     time.sleep(AUTO_BANK_FIRST_DELAY)
     while True:
         try:
-            cfg = auto_bank.load()
-            if auto_bank.due(STORE, cfg):
-                rec = auto_bank.run_once(STORE, "auto")
+            for rule in auto_bank.load_all(STORE):
+                if not auto_bank.due(STORE, rule):
+                    continue
+                rec = auto_bank.run_once(STORE, rule, "auto")
                 if rec.get("ok"):
                     log("AUTO-BANK %s 补充新题：生成 %s 道，入库 %s 道（重复 %s），"
                         "淘汰旧题 %s 道，未做过 %s/%s 道，用时 %ss"

@@ -364,10 +364,11 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
         learning.clear(mac)
         return 200, {"ok": True}, None
 
-    # ---- 自动补充新题（3.8.0：未做过的题少于阈值时触发）----
+    # ---- 自动补充新题（3.10.0：每个题库可以设置不同的自动出题要求）----
     if path.startswith("/api/admin/auto-bank"):
         def payload():
-            return {"ok": True, "config": auto_bank.load(),
+            return {"ok": True,
+                    "rules": auto_bank.load_all(st),
                     "status": auto_bank.status(st),
                     "options": {"stages": ai_bank.STAGES,
                                 "grades": ai_bank.GRADES,
@@ -381,22 +382,35 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
 
         if path == "/api/admin/auto-bank" and method == "POST":
             try:
-                auto_bank.save(_body(raw))
+                auto_bank.save_rule(_body(raw), st=st)
             except auto_bank.AutoBankError as exc:
                 return 400, {"ok": False, "detail": str(exc)}, None
             return 200, payload(), None
 
         if path == "/api/admin/auto-bank/run" and method == "POST":
             try:
-                rec = auto_bank.run_once(st, "manual")
+                bank_id = auto_bank.resolve_bank_id(st, _body(raw).get("bank_id"))
+                rule = auto_bank.load_rule(st, bank_id)
+                if rule is None:
+                    raise auto_bank.AutoBankError(
+                        "该题库还没保存过自动出题设置，请先点「保存自动出题设置」")
+                rec = auto_bank.run_once(st, rule, "manual")
             except auto_bank.AutoBankError as exc:
                 return 409, {"ok": False, "detail": str(exc)}, None
             return 200, {"ok": rec.get("ok", False), "run": rec,
                          "status": auto_bank.status(st),
                          "detail": rec.get("detail")}, None
 
+        if path == "/api/admin/auto-bank/remove" and method == "POST":
+            try:
+                auto_bank.remove_rule(
+                    auto_bank.resolve_bank_id(st, _body(raw).get("bank_id")))
+            except auto_bank.AutoBankError as exc:
+                return 400, {"ok": False, "detail": str(exc)}, None
+            return 200, payload(), None
+
         if path == "/api/admin/auto-bank/clear" and method == "POST":
-            auto_bank.clear_runs()
+            auto_bank.clear_runs(_body(raw).get("bank_id"))
             return 200, payload(), None
 
     return 404, {"ok": False, "detail": "接口不存在"}, None

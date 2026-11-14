@@ -667,17 +667,32 @@ def main():
     code, res = admin("/api/admin/learning/clear", {})
     check("清空学情缺少 MAC 被拒绝", code == 400)
 
-    # ---- 3.8.0 自动补题接口（全程离线，不联网、不消耗 Key）----
+    # ---- 3.10.0 自动补题接口：每个题库一套规则（全程离线，不联网、不消耗 Key）----
+    st_banks = cur_state.get("banks") or []
+    if len(st_banks) < 2:            # 只有一套题库时临时造一套，验证完由还原清理
+        seed_q = dict((st_banks[0].get("questions") or [{}])[0])
+        seed_q["id"] = "junior_seed"
+        code, res = admin("/api/admin/bank",
+                          {"name": "自检第二题库", "questions": [seed_q]})
+        junior_bank_id = (res.get("bank") or {}).get("id", "")
+    else:
+        junior_bank_id = st_banks[1]["id"]
+
     code, res = admin("/api/admin/auto-bank")
     ab_status = res.get("status") or {}
-    check("自动出题接口返回配置/状态/题库/选项",
+    check("自动出题接口返回规则列表/状态/题库/选项",
           code == 200 and res.get("ok") is True and
-          all(k in res for k in ("config", "status", "banks", "options")) and
+          all(k in res for k in ("rules", "status", "banks", "options")) and
           bool((res.get("options") or {}).get("stages")))
-    check("状态卡含未做过的题数/阈值/冷却与自动题统计",
-          all(k in ab_status for k in
-              ("fresh", "threshold", "need", "cooldown_minutes",
-               "last_run_text", "auto_questions", "has_key")))
+    check("状态卡按题库分行：每个题库都有未做过/阈值/下次触发",
+          isinstance(ab_status.get("banks"), list) and
+          len(ab_status["banks"]) >= 2 and
+          all(all(k in row for k in
+                  ("bank_id", "bank_name", "fresh", "threshold", "next_text",
+                   "state_text", "subjects", "auto_questions", "configured"))
+              for row in ab_status["banks"]))
+    check("状态卡含合并运行记录与 Key 状态",
+          isinstance(ab_status.get("runs"), list) and "has_key" in ab_status)
     code, res = admin("/api/admin/auto-bank", {"threshold": 2})
     check("非法触发阈值被后台拒绝",
           code == 400 and "阈值" in (res.get("detail") or ""))
@@ -695,18 +710,43 @@ def main():
         "subjects": ["数学", "英语"], "topics": "",
         "mix": {"single": 1, "multi": 1, "judge": 1},
     })
-    check("保存自动出题设置（保持关闭，避免自检期间被定时触发）",
-          code == 200 and (res.get("config") or {}).get("count") == 3 and
-          (res.get("config") or {}).get("max_auto") == 5 and
-          (res.get("config") or {}).get("enabled") is False)
+    p_rule = next((r for r in res.get("rules") or []
+                   if r["bank_id"] == ai_bank_id), {})
+    check("保存小学库的自动出题规则（保持关闭，避免自检期间被触发）",
+          code == 200 and p_rule.get("count") == 3 and
+          p_rule.get("max_auto") == 5 and p_rule.get("enabled") is False)
     check("自动出题科目多选可保存并回读",
-          (res.get("config") or {}).get("subjects") == ["数学", "英语"] and
-          (res.get("status") or {}).get("subjects") == ["数学", "英语"],
-          str((res.get("config") or {}).get("subjects")))
+          p_rule.get("subjects") == ["数学", "英语"],
+          str(p_rule.get("subjects")))
+
+    code, res = admin("/api/admin/auto-bank", {
+        "enabled": False, "threshold": 20, "cooldown_minutes": 10,
+        "count": 5, "mode": "offline", "max_auto": 10,
+        "bank_id": junior_bank_id, "stage": "初中", "grade": "八年级",
+        "subjects": ["物理", "英语"], "topics": "浮力",
+    })
+    j_rule = next((r for r in res.get("rules") or []
+                   if r["bank_id"] == junior_bank_id), {})
+    p_rule2 = next((r for r in res.get("rules") or []
+                    if r["bank_id"] == ai_bank_id), {})
+    check("初中库可以保存另一套不同的要求（阈值/学段/科目/知识点）",
+          code == 200 and j_rule.get("threshold") == 20 and
+          j_rule.get("stage") == "初中" and j_rule.get("grade") == "八年级" and
+          j_rule.get("subjects") == ["物理", "英语"] and
+          j_rule.get("topics") == "浮力")
+    check("保存初中库规则不影响小学库已存的规则",
+          p_rule2.get("count") == 3 and p_rule2.get("threshold") == 30 and
+          p_rule2.get("subjects") == ["数学", "英语"])
+    code, res = admin("/api/admin/auto-bank")
+    rows = {r["bank_id"]: r for r in (res.get("status") or {}).get("banks") or []}
+    check("状态表里两库各自的阈值/科目一目了然",
+          rows.get(junior_bank_id, {}).get("threshold") == 20 and
+          rows.get(ai_bank_id, {}).get("threshold") == 30 and
+          rows.get(junior_bank_id, {}).get("subjects") == ["物理", "英语"])
 
     added_total, run_ok = 0, True
     for _i in range(3):
-        code, res = admin("/api/admin/auto-bank/run", {})
+        code, res = admin("/api/admin/auto-bank/run", {"bank_id": ai_bank_id})
         run = res.get("run") or {}
         run_ok = run_ok and code == 200 and bool(run.get("ok"))
         added_total += int(run.get("added") or 0)
@@ -727,17 +767,27 @@ def main():
           "人工题 %s → %s" % (manual_before, manual_after))
 
     code, res = admin("/api/admin/auto-bank")
-    ab_runs = (res.get("config") or {}).get("runs") or []
-    check("每次执行都留下可追溯的运行记录",
+    ab_runs = (res.get("status") or {}).get("runs") or []
+    check("每次执行都留下可追溯的运行记录（含所属题库）",
           len(ab_runs) >= 3 and
           all(r.get("reason") == "manual" and r.get("at_text") and
-              "added" in r for r in ab_runs[:3]), "%s 条" % len(ab_runs))
-    check("运行记录最多保留 20 条", len(ab_runs) <= 20)
+              r.get("bank_name") and "added" in r for r in ab_runs[:3]),
+          "%s 条" % len(ab_runs))
+    check("合并运行记录最多保留 30 条", len(ab_runs) <= 30)
     code, res = admin("/api/admin/auto-bank/clear", {})
     check("可清空运行记录", code == 200 and
-          (res.get("config") or {}).get("runs") == [])
-    # 自检结束前明确关闭，避免残留一个开启的定时任务
-    admin("/api/admin/auto-bank", {"enabled": False})
+          ((res.get("status") or {}).get("runs") == []))
+    code, res = admin("/api/admin/auto-bank/remove",
+                      {"bank_id": junior_bank_id})
+    check("删除初中库规则后只剩小学库一条",
+          code == 200 and [r["bank_id"] for r in res.get("rules") or []] ==
+          [ai_bank_id])
+    code, res = admin("/api/admin/auto-bank/run", {"bank_id": junior_bank_id})
+    check("规则已删除的题库试跑被明确提示先保存",
+          code == 409 and "保存" in (res.get("detail") or ""),
+          (res.get("detail") or "")[:40])
+    # 自检结束前明确关闭，避免残留一个开启的规则
+    admin("/api/admin/auto-bank", {"enabled": False, "bank_id": ai_bank_id})
 
     # ---- 还原 ----
     code, res = admin("/api/admin/backup/import", {"data": orig_backup})
@@ -1043,7 +1093,7 @@ def main():
             {"weak": [{"topic": "分数"}], "wrong": []})
         check("按设备弱项生成专项题", len(dev_gen["questions"]) == 6)
 
-        # ---- 3.8.0 自动补题：阈值触发与冷却的纯逻辑 ----
+        # ---- 3.10.0 自动补题：多题库规则、阈值触发与冷却的纯逻辑 ----
         from datetime import datetime
         ab_now = datetime(2026, 11, 14, 11, 0,
                           tzinfo=auto_bank.TZ).timestamp()
@@ -1069,8 +1119,8 @@ def main():
               auto_bank.normalize({"subject": "语文"})["subjects"] == ["语文"] and
               auto_bank.normalize({"subjects": ["语文", "语文"]})["subjects"] == ["语文"])
 
-        # 守护线程的核心路径：新题少于阈值 → due → run_once(auto) 补缺口
-        # → 进入冷却并留痕。临时 runtime + 临时学情，不碰真实数据。
+        # 守护线程的核心路径：两套题库两套规则，各补各的、互不影响。
+        # 临时 runtime + 临时学情，不碰真实数据。
         old_rt = store.RUNTIME_PATH
         try:
             store.RUNTIME_PATH = os.path.join(tmp, "runtime.json")
@@ -1079,66 +1129,141 @@ def main():
                      "text": "原始题%d" % i, "options": ["A", "B"],
                      "answer": 0, "explain": "", "stage": "小学",
                      "subject": "数学", "star": 1} for i in range(20)]
+            seed_j = [{"id": "j%02d" % i, "type": "single",
+                       "text": "初中题%d" % i, "options": ["A", "B"],
+                       "answer": 0, "explain": "", "stage": "初中",
+                       "subject": "物理", "star": 2} for i in range(15)]
             with open(store.RUNTIME_PATH, "w", encoding="utf-8") as f:
                 json.dump({
                     "version": 3,
-                    "banks": [{"id": "bank_test", "name": "自动自检题库",
-                               "enabled": True, "devices": [],
-                               "tiers": [{"questions": 1, "minutes": 30}],
-                               "questions": seed}],
+                    "banks": [
+                        {"id": "bank_test", "name": "自动自检题库",
+                         "enabled": True, "devices": [],
+                         "tiers": [{"questions": 1, "minutes": 30}],
+                         "questions": seed},
+                        {"id": "bank_junior", "name": "自检初中库",
+                         "enabled": True, "devices": [],
+                         "tiers": [{"questions": 1, "minutes": 30}],
+                         "questions": seed_j},
+                    ],
                     "settings": {}, "schedules": {},
                 }, f, ensure_ascii=False)
             fake_st = store.Store()
-            auto_bank.save({
+
+            # 旧版（3.9.0 及以前）单份配置文件 → 首次读取自动迁移成一条规则
+            with open(auto_bank.PATH, "w", encoding="utf-8") as f:
+                json.dump({"enabled": True, "threshold": 25,
+                           "cooldown_minutes": 20, "subjects": ["语文"]}, f)
+            migrated = auto_bank.load_all(fake_st)
+            check("旧版单份配置自动迁移为规则列表并解析到第一个题库",
+                  len(migrated) == 1 and migrated[0]["threshold"] == 25 and
+                  migrated[0]["subjects"] == ["语文"] and
+                  migrated[0]["bank_id"] == "bank_test")
+
+            auto_bank.save_rule({
                 "enabled": True, "threshold": 30, "cooldown_minutes": 30,
                 "count": 30, "mode": "offline", "max_auto": 100,
                 "bank_id": "bank_test", "stage": "小学", "grade": "四年级",
-                "subject": "数学",
-            }, ab_now)
-            ab_cfg = auto_bank.load()
+                "subjects": ["数学"],
+            }, fake_st, ab_now)
+            auto_bank.save_rule({
+                "enabled": True, "threshold": 8, "cooldown_minutes": 60,
+                "count": 5, "mode": "offline", "max_auto": 50,
+                "bank_id": "bank_junior", "stage": "初中", "grade": "八年级",
+                "subjects": ["物理", "英语"],
+            }, fake_st, ab_now)
+            rules = {r["bank_id"]: r for r in auto_bank.load_all(fake_st)}
+            check("两个题库各存一条独立规则",
+                  len(rules) == 2 and rules["bank_test"]["threshold"] == 30 and
+                  rules["bank_junior"]["threshold"] == 8 and
+                  rules["bank_junior"]["subjects"] == ["物理", "英语"],
+                  str({k: r["threshold"] for k, r in rules.items()}))
+
+            rule1 = auto_bank.load_rule(fake_st, "bank_test")
             check("没人答过题时整库都是新题",
-                  auto_bank.fresh_count(fake_st, ab_cfg) == 20)
+                  auto_bank.fresh_count(fake_st, rule1) == 20)
             check("保存设置后先进入冷却，缺题也不会立刻触发",
-                  auto_bank.fresh_count(fake_st, ab_cfg) < ab_cfg["threshold"]
-                  and not auto_bank.due(fake_st, ab_cfg, ab_now))
+                  auto_bank.fresh_count(fake_st, rule1) < rule1["threshold"]
+                  and not auto_bank.due(fake_st, rule1, ab_now))
             for q in seed[:18]:            # 孩子答掉 18 道，只剩 2 道新题
                 learning.record_answer(M2, q, True)
             check("答过的题不再算新题",
-                  auto_bank.fresh_count(fake_st, ab_cfg) == 2)
-            ab_cfg["next_run"] = ab_now - 1        # 冷却已结束
-            auto_bank._save_cfg(ab_cfg)
+                  auto_bank.fresh_count(fake_st, rule1) == 2)
+            rule2 = auto_bank.load_rule(fake_st, "bank_junior")
+            check("初中库新题充足（阈值 8）不触发，与小学库互不影响",
+                  not auto_bank.due(fake_st, rule2, ab_now))
+
+            rule1["next_run"] = ab_now - 1        # 冷却已结束
+            auto_bank._save_doc({"version": 2,
+                                 "rules": [rule1, rules["bank_junior"]]})
+            rule1 = auto_bank.load_rule(fake_st, "bank_test")
             check("新题低于阈值且冷却结束，对守护线程可见",
-                  auto_bank.due(fake_st, auto_bank.load(), ab_now))
-            rec = auto_bank.run_once(fake_st, "auto", ab_now)
+                  auto_bank.due(fake_st, rule1, ab_now))
+            rec = auto_bank.run_once(fake_st, rule1, "auto", ab_now)
             check("守护线程自动补题入库，全程无需人工操作",
                   rec["ok"] and rec["reason"] == "auto" and rec["added"] >= 1,
                   "生成 %s，入库 %s" % (rec["generated"], rec["added"]))
             check("只补缺口：缺 28 道就生成 28 道",
                   rec["generated"] == 28, "生成 %s 道" % rec["generated"])
-            ab_after = auto_bank.load()
+            after = auto_bank.load_rule(fake_st, "bank_test")
             check("执行后进入冷却并留下自动触发记录",
-                  ab_after["next_run"] - ab_now == 30 * 60 and
-                  bool(ab_after["runs"]) and
-                  ab_after["runs"][0]["reason"] == "auto")
+                  after["next_run"] - ab_now == 30 * 60 and
+                  bool(after["runs"]) and
+                  after["runs"][0]["reason"] == "auto")
             check("补完后新题回到不低于阈值",
-                  auto_bank.fresh_count(fake_st, ab_after) >= 30,
-                  "新题 %s 道" % auto_bank.fresh_count(fake_st, ab_after))
+                  auto_bank.fresh_count(fake_st, after) >= 30,
+                  "新题 %s 道" % auto_bank.fresh_count(fake_st, after))
             check("冷却期内即使缺题也不触发",
-                  not auto_bank.due(fake_st, ab_after, ab_now + 60))
+                  not auto_bank.due(fake_st, after, ab_now + 60))
             check("冷却结束但新题充足也不触发",
-                  not auto_bank.due(fake_st, ab_after, ab_now + 3600))
+                  not auto_bank.due(fake_st, after, ab_now + 3600))
             check("题库里出现自动来源的新题",
                   any(str(q.get("source") or "").startswith("auto-")
                       for q in fake_st.bank("bank_test")["questions"]))
+            check("只写目标题库，另一个题库纹丝不动",
+                  len(fake_st.bank("bank_junior")["questions"]) == 15)
+            ab_status = auto_bank.status(fake_st, ab_now)
+            check("状态卡按题库分行，两库阈值各是各的",
+                  {b["bank_id"]: b["threshold"]
+                   for b in ab_status["banks"]} ==
+                  {"bank_test": 30, "bank_junior": 8})
+            check("运行记录合并展示且带题库名",
+                  len(ab_status["runs"]) >= 1 and
+                  bool(ab_status["runs"][0]["bank_name"]))
             for q in seed[18:]:           # 又答掉剩下的 2 道原始题
                 learning.record_answer(M2, q, True)
             check("缺题但冷却未结束，仍不触发",
-                  auto_bank.fresh_count(fake_st, auto_bank.load()) <
-                  auto_bank.load()["threshold"] and
-                  not auto_bank.due(fake_st, auto_bank.load(), ab_now + 60))
+                  auto_bank.fresh_count(fake_st, after) < after["threshold"]
+                  and not auto_bank.due(fake_st, after, ab_now + 60))
             later2 = ab_now + 31 * 60
             check("冷却结束后缺题状态会再次触发",
-                  auto_bank.due(fake_st, auto_bank.load(), later2))
+                  auto_bank.due(
+                      fake_st, auto_bank.load_rule(fake_st, "bank_test"), later2))
+
+            # 初中库也走一遍：答空 → 冷却结束 → 按它自己的科目出题
+            for q in seed_j:
+                learning.record_answer(M2, q, True)
+            jr = auto_bank.load_rule(fake_st, "bank_junior")
+            check("初中库答空后低于它自己的阈值，但仍在冷却期内",
+                  auto_bank.fresh_count(fake_st, jr) == 0 and
+                  not auto_bank.due(fake_st, jr, ab_now))
+            jr["next_run"] = ab_now - 1
+            auto_bank._save_doc({"version": 2, "rules":
+                                 [auto_bank.load_rule(fake_st, "bank_test"), jr]})
+            jr = auto_bank.load_rule(fake_st, "bank_junior")
+            check("初中库冷却结束后也会触发",
+                  auto_bank.due(fake_st, jr, ab_now))
+            rec2 = auto_bank.run_once(fake_st, jr, "auto", ab_now)
+            junior_added = [q for q in fake_st.bank("bank_junior")["questions"]
+                            if str(q.get("source") or "").startswith("auto-")]
+            check("初中库按它自己的规则补题（科目对、量受它自己的上限约束）",
+                  rec2["ok"] and rec2["generated"] == 5 and
+                  len(junior_added) == 5 and
+                  all(q.get("subject") in ("物理", "英语") for q in junior_added),
+                  "生成 %s 道" % rec2["generated"])
+            check("初中库执行后进入它自己的冷却（60 分钟）",
+                  auto_bank.load_rule(fake_st, "bank_junior")["next_run"] -
+                  ab_now == 60 * 60)
         finally:
             store.RUNTIME_PATH = old_rt
     finally:
@@ -1173,32 +1298,44 @@ def main():
     check("AI 预览题目正文强制可见",
           bool(re.search(r"\.qprev\s+\.qbody\s*\{[^}]*display\s*:\s*block", admin_html)))
 
-    # ---- 3.8.0 自动补题（阈值触发）----
+    # ---- 3.10.0 自动补题（每库一套规则的阈值触发）----
     with open(os.path.join(BASE, "server.py"), encoding="utf-8") as f:
         server_html = f.read()
     with open(os.path.join(BASE, "Dockerfile"), encoding="utf-8") as f:
         dockerfile = f.read()
-    check("服务端守护线程按阈值触发自动补题",
+    check("服务端守护线程逐库检查、逐库补题",
           "def auto_bank_worker" in server_html and
           "target=auto_bank_worker" in server_html and
-          "auto_bank.due(STORE" in server_html and
-          'run_once(STORE, "auto")' in server_html)
+          "for rule in auto_bank.load_all(STORE)" in server_html and
+          "auto_bank.due(STORE, rule)" in server_html and
+          'run_once(STORE, rule, "auto")' in server_html)
     check("新模块已纳入镜像", "auto_bank.py" in dockerfile)
-    check("后台有「自动出题」页签与阈值/冷却设置项",
+    check("后台有「自动出题」页签与阈值/冷却/按库设置项",
           all(w in admin_html for w in
               ("tabbtn-auto", "tab-auto", "auto-enabled", "auto-threshold",
                "auto-cooldown", "auto-count", "auto-bank",
-               "auto-mode", "auto-max", "auto-run", "auto-runs")) and
+               "auto-mode", "auto-max", "auto-run", "auto-runs",
+               "auto-remove")) and
           "auto-frequency" not in admin_html and "auto-time" not in admin_html)
-    check("后台调用自动出题配置/试跑/清空接口",
+    check("后台调用自动出题配置/试跑/删除/清空接口",
           all(w in admin_html for w in
               ("/api/admin/auto-bank/run", "/api/admin/auto-bank/clear",
-               "saveAutoBank", "runAutoBank", "refreshAutoStatus")))
+               "/api/admin/auto-bank/remove",
+               "saveAutoBank", "runAutoBank", "removeAutoRule",
+               "refreshAutoStatus")))
     ab_refresh = re.search(r"function refreshAutoStatus\(\)[\s\S]*?\n  }",
                            admin_html)
     check("自动出题定时刷状态不覆盖正在编辑的表单",
           bool(ab_refresh) and "renderAutoBank" not in ab_refresh.group(0) and
           "renderAutoStatus" in ab_refresh.group(0))
+    check("题库下拉切换时重新装填该库的表单",
+          "renderAutoRuleForm" in admin_html and
+          "el('auto-bank').onchange" in admin_html and
+          "bank_id: currentAutoBank()" in admin_html)
+    check("状态卡按题库分行汇总（每库一行）",
+          "<th>题库</th><th>自动出题</th>" in admin_html and
+          "b.configured" in admin_html and
+          "该题库" in admin_html)
 
     # ---- 3.9.0 出题科目多选 ----
     check("科目改成多选控件（不再是单选下拉）",

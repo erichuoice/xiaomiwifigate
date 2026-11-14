@@ -411,17 +411,21 @@
       <p class="hint">预览题按题干去重，入库后保存立即生效；答案只存在服务端，答题页看不到。</p>
     </div>
 
-    <!-- 自动补充新题（3.8.0：未做过的题少于阈值时自动触发）-->
+    <!-- 自动补充新题（3.10.0：每个题库可以设置不同的自动出题要求）-->
     <div id="tab-auto" class="card" style="display:none">
       <h2>自动出题</h2>
-      <p class="hint">开启后由路由器上的服务自动盯着题库：<b>当「还没做过」的题目少于阈值时</b>，
-        自动生成一批新题并<b>直接入库</b>补足，不需要任何人点「生成预览 / 入库」。
-        生成时会避开题库里已有的题干；教材版本、广州本地化和当前教学进度沿用「AI 出题」页的设置；
-        没配 Key 或接口失败时自动改用离线模板。刚执行完（无论成败）会先冷却一段时间再检查，不会反复轰炸。</p>
+      <p class="hint">开启后由路由器上的服务自动盯着题库：<b>当某个题库里「还没做过」
+        的题目少于该题库设置的阈值时</b>，自动生成一批新题并<b>直接入库</b>补足，
+        不需要任何人点「生成预览 / 入库」。<b>每个题库可以设置一套不同的要求</b>：
+        例如小学库补四年级数学、初中库补八年级物理英语，阈值、冷却、题型也各配各的，
+        互不影响。生成时会避开该题库已有的题干；没配 Key 或接口失败时自动改用离线模板。</p>
       <div id="auto-status" class="ai-note">正在读取状态…</div>
 
-      <h3>① 什么时候执行</h3>
-      <label class="chk"><input type="checkbox" id="auto-enabled"> 启用自动出题（保存后立即生效）</label>
+      <h3>① 选择题库并设置它的执行条件</h3>
+      <label class="fld" for="auto-bank">题库（选中哪个题库，下面的设置就是给它的）</label>
+      <select id="auto-bank"></select>
+      <p class="hint">没设置过的题库选中后会显示默认值，点「保存自动出题设置」即可启用。</p>
+      <label class="chk"><input type="checkbox" id="auto-enabled"> 启用这个题库的自动出题（保存后立即生效）</label>
       <div class="grid2">
         <div>
           <label class="fld" for="auto-threshold">触发阈值：未做过的题少于多少道（5~500）</label>
@@ -435,7 +439,7 @@
       <p class="hint">「做过」= 这道题被孩子答过（学情有记录）。题一被答掉新题就会减少；
         少于阈值时服务自动补一批（缺多少补多少，每次最多 30 道），全程不需要人工操作。</p>
 
-      <h3>② 每次出什么样的题</h3>
+      <h3>② 每次出什么样的题（同样只对上面选中的题库生效）</h3>
       <div class="grid3">
         <div>
           <label class="fld" for="auto-stage">学段</label><select id="auto-stage"></select>
@@ -446,9 +450,6 @@
         <div>
           <label class="fld" for="auto-count">每次最多生成（1~30）</label>
           <input id="auto-count" type="number" min="1" max="30" value="30">
-        </div>
-        <div>
-          <label class="fld" for="auto-bank">入到哪个题库</label><select id="auto-bank"></select>
         </div>
         <div>
           <label class="fld" for="auto-mode">出题方式</label>
@@ -476,15 +477,16 @@
         <input id="auto-mix-multi" type="number" min="0" max="30" placeholder="多选">
         <input id="auto-mix-judge" type="number" min="0" max="30" placeholder="判断">
       </div>
-      <p class="hint">超过上限时只删最旧的「自动题」，内置题和你在预览页手动入库的题都不会被动到。</p>
+      <p class="hint">超过上限时只删该题库最旧的「自动题」，内置题和你在预览页手动入库的题都不会被动到。</p>
       <div class="row">
         <button id="auto-save">保存自动出题设置</button>
         <button class="mini ghost" id="auto-fill">用「AI 出题」③ 当前参数填入</button>
         <button class="mini ghost" id="auto-run">立即试跑一次</button>
+        <button class="mini danger" id="auto-remove">删除该题库的规则</button>
       </div>
       <p class="hint" id="auto-note" style="margin-top:10px"></p>
 
-      <h3>③ 最近运行记录</h3>
+      <h3>③ 最近运行记录（所有题库合并）</h3>
       <div id="auto-runs"><p class="hint">还没有运行记录。</p></div>
       <div class="row">
         <button class="mini ghost" id="auto-refresh">刷新状态</button>
@@ -1570,11 +1572,33 @@
     }).catch(function () { toast('读取学情失败'); });
   }
 
-  // ---------- 自动补充新题（3.8.0：新题少于阈值时自动触发）----------
+  // ---------- 自动补充新题（3.10.0：每个题库一套规则）----------
 
-  var autoCfg = null, autoOpts = null, autoBanks = [], autoBusy = false;
+  var autoData = null, autoOpts = null, autoBanks = [], autoBusy = false;
   var AUTO_MIX_IDS = ['auto-mix-single', 'auto-mix-multi', 'auto-mix-judge'];
   var AI_MIX_IDS = ['ai-mix-single', 'ai-mix-multi', 'ai-mix-judge'];
+
+  function currentAutoBank() {
+    return el('auto-bank').value || (autoBanks[0] && autoBanks[0].id) || '';
+  }
+
+  function autoRuleFor(bankId) {
+    var rules = (autoData && autoData.rules) || [];
+    for (var i = 0; i < rules.length; i++) {
+      if (rules[i].bank_id === bankId) return rules[i];
+    }
+    return null;
+  }
+
+  // 没设置过的题库：按题库名猜个学段，其余用默认值（保存即启用）
+  function autoDefaultsFor(bank) {
+    var name = (bank && bank.name) || '';
+    var stage = name.indexOf('初中') >= 0 ? '初中'
+      : (name.indexOf('高中') >= 0 ? '高中' : '小学');
+    return { enabled: true, threshold: 30, cooldown_minutes: 30, count: 30,
+             stage: stage, grade: '', subjects: ['数学'], topics: '',
+             mode: 'auto', device_mac: '', max_auto: 60, mix: {} };
+  }
 
   function autoMixForm() {
     var mix = {};
@@ -1592,7 +1616,7 @@
       threshold: parseInt(el('auto-threshold').value, 10) || 30,
       cooldown_minutes: parseInt(el('auto-cooldown').value, 10) || 30,
       count: parseInt(el('auto-count').value, 10) || 30,
-      bank_id: el('auto-bank').value,
+      bank_id: currentAutoBank(),
       stage: el('auto-stage').value,
       grade: el('auto-grade').value,
       subjects: subs,
@@ -1607,46 +1631,48 @@
 
   function renderAutoStatus(s) {
     if (!s) return;
-    var on = autoCfg && autoCfg.enabled;
-    var freshLine;
-    if (!on) {
-      freshLine = '<b>当前状态：</b>未启用';
-    } else if (!s.bank_id) {
-      freshLine = '<b>当前状态：</b>已启用 · 目标题库不存在，请在下方重新选择';
-    } else {
-      freshLine = '<b>当前状态：</b>已启用　·　未做过的题 <b>' + (s.fresh || 0) +
-        '</b> 道（阈值 ' + (s.threshold || 0) + '）';
-      if (s.running) freshLine += '　·　正在生成题目…';
-      if ((s.fresh || 0) < (s.threshold || 0)) freshLine +=
-        '　·　<span style="color:#b45309">缺 ' + (s.need || 0) + ' 道，' +
-        escHtml(s.next_text || '等待执行') + '</span>';
-    }
-    el('auto-status').innerHTML = [
-      freshLine,
-      '<b>冷却间隔：</b>' + (s.cooldown_minutes || 30) + ' 分钟' +
-        (on && (s.cooldown_until || 0) > 0
-          ? '　·　上次执行后至 ' + escHtml(s.cooldown_until_text || '—') +
-            '（' + escHtml(s.cooldown_relative || '—') + '）'
-          : ''),
-      '<b>上次执行：</b>' + escHtml(s.last_run_text || '—'),
-      '<b>目标题库：</b>' + escHtml(s.bank_name || '—') + ' · 共 ' +
-        (s.bank_total || 0) + ' 道，其中自动题 ' + (s.auto_questions || 0) + ' 道',
-      '<b>出题科目：</b>' + escHtml((s.subjects || []).join('、') || '—'),
-      '<b>AI Key：</b>' + (s.has_key ? '已配置' : '未配置（将用离线模板出题）')
-    ].join('<br>');
+    var banks = s.banks || [];
+    var html = '<table><thead><tr><th>题库</th><th>自动出题</th>' +
+      '<th>未做过 / 阈值</th><th>下次触发</th><th>上次执行</th>' +
+      '<th>出题科目</th></tr></thead><tbody>';
+    banks.forEach(function (b) {
+      var cur = b.bank_id === currentAutoBank();
+      var stateHtml = !b.configured
+        ? '<span class="pill no">未设置</span>'
+        : (b.enabled ? '<span class="pill ok">已启用</span>'
+                     : '<span class="pill no">未启用</span>');
+      var freshHtml = b.configured
+        ? '<b>' + (b.fresh || 0) + '</b> / ' + (b.threshold || 0)
+        : (b.fresh || 0) + ' / —';
+      if (b.configured && b.enabled && (b.fresh || 0) < (b.threshold || 0)) {
+        freshHtml += '（缺 ' + (b.need || 0) + '）';
+      }
+      html += '<tr' + (cur ? ' style="font-weight:bold"' : '') + '><td>' +
+        escHtml(b.bank_name || '') + '（' + (b.bank_total || 0) + ' 题，' +
+        '自动题 ' + (b.auto_questions || 0) + '）</td><td>' + stateHtml +
+        '</td><td>' + freshHtml + '</td><td>' + escHtml(b.next_text || '—') +
+        '</td><td>' + escHtml(b.last_run_text || '—') + '</td><td>' +
+        escHtml((b.subjects || []).join('、') || '—') + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    var head = (s.running ? '　·　<span style="color:#b45309">正在生成题目…</span>' : '') +
+      '<b>AI Key：</b>' + (s.has_key ? '已配置' : '未配置（将用离线模板出题）') +
+      '　·　<b>各题库独立计时、互不影响。</b>';
+    el('auto-status').innerHTML = head + html;
   }
 
   function renderAutoRuns(runs) {
     var box = el('auto-runs');
     if (!runs || !runs.length) {
-      box.innerHTML = '<p class="hint">还没有运行记录。启用并保存后，新题不足时会自动记一条；' +
-        '也可以点「立即试跑一次」验证。</p>';
+      box.innerHTML = '<p class="hint">还没有运行记录。启用并保存后，哪个题库新题不足' +
+        '就会自动记一条；也可以选中题库点「立即试跑一次」验证。</p>';
       return;
     }
-    var html = '<table><thead><tr><th>时间</th><th>触发</th><th>结果</th>' +
-      '<th>生成 / 入库</th><th>说明</th></tr></thead><tbody>';
+    var html = '<table><thead><tr><th>时间</th><th>题库</th><th>触发</th>' +
+      '<th>结果</th><th>生成 / 入库</th><th>说明</th></tr></thead><tbody>';
     runs.forEach(function (r) {
       html += '<tr><td class="mono">' + escHtml(r.at_text || '') + '</td>' +
+        '<td>' + escHtml(r.bank_name || '') + '</td>' +
         '<td>' + (r.reason === 'manual' ? '手动试跑' : '自动触发') + '</td>' +
         '<td>' + (r.ok ? '<span class="pill ok">成功</span>'
                        : '<span class="pill no">失败</span>') + '</td>' +
@@ -1657,33 +1683,50 @@
     box.innerHTML = html + '</tbody></table>';
   }
 
+  // 把某条规则（或默认值）填进表单；bankId 缺省 = 当前选中的题库
+  function renderAutoRuleForm(bankId) {
+    bankId = bankId || currentAutoBank();
+    var bank = null;
+    autoBanks.forEach(function (b) { if (b.id === bankId) bank = b; });
+    var cfg = autoRuleFor(bankId) || autoDefaultsFor(bank);
+    el('auto-enabled').checked = !!cfg.enabled;
+    el('auto-threshold').value = cfg.threshold;
+    el('auto-cooldown').value = cfg.cooldown_minutes;
+    el('auto-count').value = cfg.count;
+    el('auto-mode').value = cfg.mode;
+    el('auto-max').value = cfg.max_auto;
+    el('auto-topics').value = cfg.topics || '';
+    ['single', 'multi', 'judge'].forEach(function (k, i) {
+      el(AUTO_MIX_IDS[i]).value = (cfg.mix && cfg.mix[k] !== undefined)
+        ? cfg.mix[k] : '';
+    });
+    fillSel('auto-stage', (autoOpts && autoOpts.stages) ||
+            ['小学', '初中', '高中'], null, null, cfg.stage);
+    fillSel('auto-grade', [''].concat((autoOpts && autoOpts.grades) || []),
+            null, null, cfg.grade);
+    subjectChips('auto-subject', (autoOpts && autoOpts.subjects) || [],
+                 (cfg.subjects && cfg.subjects.length)
+                   ? cfg.subjects : [cfg.subject || '数学']);
+    return fillDeviceSelect('auto-device', cfg.device_mac || '');
+  }
+
   function renderAutoBank(res) {
     var d = res.data;
-    autoCfg = d.config; autoOpts = d.options || {}; autoBanks = d.banks || [];
-    el('auto-enabled').checked = !!autoCfg.enabled;
-    el('auto-threshold').value = autoCfg.threshold;
-    el('auto-cooldown').value = autoCfg.cooldown_minutes;
-    el('auto-count').value = autoCfg.count;
-    el('auto-mode').value = autoCfg.mode;
-    el('auto-max').value = autoCfg.max_auto;
-    el('auto-topics').value = autoCfg.topics || '';
-    ['single', 'multi', 'judge'].forEach(function (k, i) {
-      el(AUTO_MIX_IDS[i]).value = (autoCfg.mix && autoCfg.mix[k] !== undefined)
-        ? autoCfg.mix[k] : '';
-    });
-    fillSel('auto-stage', autoOpts.stages || ['小学', '初中', '高中'],
-            null, null, autoCfg.stage);
-    fillSel('auto-grade', [''].concat(autoOpts.grades || []),
-            null, null, autoCfg.grade);
-    var autoSubs = (autoCfg.subjects && autoCfg.subjects.length)
-      ? autoCfg.subjects : [autoCfg.subject || '数学'];
-    subjectChips('auto-subject', autoOpts.subjects || [], autoSubs);
+    autoData = d; autoOpts = d.options || {}; autoBanks = d.banks || [];
+    var cur = el('auto-bank').value;
+    if (!autoBanks.some(function (b) { return b.id === cur; })) {
+      // 没选中过或题库已删除：优先落到第一条已配置规则的题库，否则第一个题库
+      var r0 = (d.rules || [])[0];
+      cur = (r0 && autoBanks.some(function (b) {
+        return b.id === r0.bank_id;
+      })) ? r0.bank_id : ((autoBanks[0] && autoBanks[0].id) || '');
+    }
     fillSel('auto-bank', autoBanks.map(function (b) {
       return { id: b.id, name: b.name + '（' + b.questions + ' 题）' };
-    }), 'id', 'name', autoCfg.bank_id || (autoBanks[0] && autoBanks[0].id));
+    }), 'id', 'name', cur);
+    renderAutoRuleForm(cur);
     renderAutoStatus(d.status);
     renderAutoRuns(d.status && d.status.runs);
-    return fillDeviceSelect('auto-device', autoCfg.device_mac || '');
   }
 
   function loadAutoBank() {
@@ -1698,6 +1741,8 @@
     // 只刷状态与记录，不重填表单，避免覆盖正在编辑的内容
     return api('/api/admin/auto-bank').then(function (res) {
       if (!requireAuth(res) || !res.data.ok) return;
+      autoData = res.data;
+      autoBanks = res.data.banks || [];
       renderAutoStatus(res.data.status);
       renderAutoRuns(res.data.status && res.data.status.runs);
     }).catch(function () {});
@@ -1711,22 +1756,24 @@
       if (!requireAuth(res)) return;
       if (!res.data.ok) { toast(res.data.detail || '保存失败'); return; }
       renderAutoBank(res);
-      toast(res.data.config.enabled
-        ? '已保存：未做过的题少于 ' + res.data.status.threshold +
-          ' 道时自动补题'
-        : '已保存（当前未启用）');
+      var bankName = (autoBanks.filter(function (x) {
+        return x.id === currentAutoBank();
+      })[0] || {}).name || '';
+      toast('已保存「' + bankName + '」的自动出题要求：未做过的题少于 ' +
+        autoForm().threshold + ' 道时自动补题');
     }).catch(function () { b.disabled = false; toast('保存失败'); });
   }
 
   function runAutoBank() {
     if (autoBusy) return;
+    if (!subjectPick('auto-subject').length) { toast('请至少勾选一个科目'); return; }
     autoBusy = true;
     var b = el('auto-run'); b.disabled = true; b.textContent = '正在出题…';
     el('auto-note').textContent =
-      '正在保存当前设置并生成一批新题（最多约 90 秒），生成后会直接入库，请稍候…';
+      '正在保存当前题库的设置并生成一批新题（最多约 90 秒），生成后会直接入库，请稍候…';
     // 先保存：所见即所得，避免试跑用的还是旧参数
     api('/api/admin/auto-bank', autoForm()).then(function () {
-      return api('/api/admin/auto-bank/run', {});
+      return api('/api/admin/auto-bank/run', { bank_id: currentAutoBank() });
     }).then(function (res) {
       autoBusy = false; b.disabled = false; b.textContent = '立即试跑一次';
       if (!requireAuth(res)) return;
@@ -1753,7 +1800,6 @@
         (autoOpts && autoOpts.subjects) || (aiConfig && aiConfig.subjects) || [],
         subjectPick('ai-subject'));
       el('auto-count').value = el('ai-count').value;
-      el('auto-bank').value = el('ai-bank').value;
       el('auto-topics').value = el('ai-topics').value;
       ['single', 'multi', 'judge'].forEach(function (k, i) {
         el(AUTO_MIX_IDS[i]).value = el(AI_MIX_IDS[i]).value;
@@ -1761,6 +1807,21 @@
       el('auto-device').value = el('ai-device').value;
       toast('已填入，记得点「保存自动出题设置」');
     }).catch(function () { toast('读取 AI 出题参数失败'); });
+  }
+
+  function removeAutoRule() {
+    var bankName = (autoBanks.filter(function (b) {
+      return b.id === currentAutoBank();
+    })[0] || {}).name || '';
+    if (!confirm('删除「' + bankName + '」的自动出题规则？\n' +
+                 '该题库已生成的题目不受影响，只是以后不再自动补题。')) return;
+    api('/api/admin/auto-bank/remove',
+        { bank_id: currentAutoBank() }).then(function (res) {
+      if (!requireAuth(res)) return;
+      if (!res.data.ok) { toast(res.data.detail || '删除失败'); return; }
+      toast('已删除「' + bankName + '」的自动出题规则');
+      renderAutoBank(res);
+    }).catch(function () { toast('删除失败'); });
   }
 
   function clearAutoRuns() {
@@ -1805,8 +1866,10 @@
   el('auto-save').onclick = saveAutoBank;
   el('auto-run').onclick = runAutoBank;
   el('auto-fill').onclick = autoFillFromAi;
+  el('auto-remove').onclick = removeAutoRule;
   el('auto-refresh').onclick = loadAutoBank;
   el('auto-clear').onclick = clearAutoRuns;
+  el('auto-bank').onchange = function () { renderAutoRuleForm(); };
 
   el('ai-save').onclick = function () { saveAiConfig(); };
   el('ai-test').onclick = testAi;
