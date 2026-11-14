@@ -454,8 +454,9 @@
           <select id="ai-bank"></select>
         </div>
         <div>
-          <label class="fld" for="ai-device">针对弱项（可选）</label>
-          <select id="ai-device"></select>
+          <label class="fld">出题依据</label>
+          <label class="chk" style="margin-top:6px"><input type="checkbox" id="ai-focus" checked>
+            按该题库（人）的弱项 / 错题出题</label>
         </div>
       </div>
       <label class="fld">科目（可多选，可同时出多个科目）</label>
@@ -533,7 +534,9 @@
           </select>
         </div>
         <div>
-          <label class="fld" for="auto-device">针对弱项（可选）</label><select id="auto-device"></select>
+          <label class="fld">出题依据</label>
+          <label class="chk" style="margin-top:6px"><input type="checkbox" id="auto-focus" checked>
+            按该题库（人）的弱项 / 错题出题</label>
         </div>
         <div>
           <label class="fld" for="auto-max">最多保留自动题（0 = 不限）</label>
@@ -570,20 +573,22 @@
     <!-- 学情 -->
     <div id="tab-learning" class="card" style="display:none">
       <h2>学情与错题本</h2>
-      <p class="hint">AI 出题的难度会<b>按最近正确率自动调</b>：每答 5 题看最近 20 题，
+      <p class="hint"><b>学情是按「人」算的，一个人 = 一套题库</b>：同一套题库下不管用 iPad、
+        手机、电视还是家长代答，错题本、正确率、弱项都记在同一个人身上，不按设备分开。</p>
+      <p class="hint">AI 出题的难度会<b>按这个人的最近正确率自动调</b>：每答 5 题看最近 20 题，
         低于 90% 就把出题难度降半星、高于 96% 升 0.25 星，目标是让孩子稳定答对九成以上
         （卡片里的「出题难度」= 当前出几星题）。</p>
       <p class="hint">每答一道题自动记录：错题按 2 小时 / 1 天 / 3 天 / 7 天 / 15 天间隔安排重做，
         轮到时会插入原题或同知识点的类似题；掌握度偏低的知识点会被多抽到（但一轮最多占一半）。</p>
       <div id="learn-cards"></div>
 
-      <h3>设备明细</h3>
-      <label class="fld" for="learn-sel">选择设备</label>
+      <h3>明细</h3>
+      <label class="fld" for="learn-sel">选择题库（人）</label>
       <select id="learn-sel"></select>
       <div id="learn-detail" style="margin-top:12px"></div>
       <div class="row">
         <button class="mini ghost" id="learn-refresh">刷新</button>
-        <button class="mini danger" id="learn-clear">清空这台设备的学情</button>
+        <button class="mini danger" id="learn-clear">清空这个人的学情</button>
       </div>
     </div>
   </div>
@@ -1557,8 +1562,6 @@
     }).catch(function () {});
   }
 
-  function fillAiDevices() { return fillDeviceSelect('ai-device'); }
-
   function renderAiConfig() {
     var c = aiConfig;
     if (!c) return;
@@ -1591,7 +1594,6 @@
       if (!res.data.ok) { toast(res.data.detail || '读取 AI 配置失败'); return; }
       aiConfig = res.data.config;
       renderAiConfig();
-      fillAiDevices();
     }).catch(function () { toast('读取 AI 配置失败'); });
   }
 
@@ -1698,10 +1700,9 @@
     var b = el('ai-gen');
     b.disabled = true; b.textContent = '生成中…';
     el('ai-result-note').textContent = '正在保存设置并调用 AI（最多约 90 秒），请稍候…';
-    var mac = el('ai-device').value;
     var body = {
       spec: aiSpec(mode), bank_id: el('ai-bank').value,
-      device_mac: mac, focus_weak: !!mac
+      focus_weak: el('ai-focus').checked
     };
     // 先静默保存：刚改的教材/进度/新 Key 立即生效，所见即所得
     saveAiConfig(null, true).then(function () {
@@ -1763,8 +1764,11 @@
       d.className = 'learncard';
       var acc = r.accuracy === null || r.accuracy === undefined
         ? '—' : Math.round(r.accuracy * 100) + '%';
-      d.innerHTML = '<div class="ln">' + escHtml(r.name || '设备') +
-        ' <span style="color:var(--muted);font-weight:400;font-size:12px">' + escHtml(r.mac) + '</span></div>' +
+      var sub = r.devices
+        ? '（' + r.devices + ' 台设备在用）' : '（未关联设备）';
+      d.innerHTML = '<div class="ln">' + escHtml(r.name || '题库') +
+        ' <span style="color:var(--muted);font-weight:400;font-size:12px">' +
+        escHtml(sub) + '</span></div>' +
         '<div style="margin-top:6px">' +
         '<span class="stat">正确率<b>' + acc + '</b></span>' +
         '<span class="stat">近期正确率<b>' + (r.recent_accuracy == null ? '—'
@@ -1780,15 +1784,15 @@
     });
     var cur = el('learn-sel').value;
     fillSel('learn-sel', learnRows.map(function (r) {
-      return { mac: r.mac, name: (r.name || r.mac) + ' · ' + r.mac };
-    }), 'mac', 'name', cur || learnRows[0].mac);
+      return { bank_id: r.bank_id, name: r.name || r.bank_id };
+    }), 'bank_id', 'name', cur || learnRows[0].bank_id);
     renderLearnDetail(detail || null);
   }
 
   function renderLearnDetail(a) {
     var box = el('learn-detail');
     if (!a || !a.total) {
-      box.innerHTML = '<p class="hint">这台设备还没有答题记录。</p>'; return;
+      box.innerHTML = '<p class="hint">这个题库还没有答题记录。</p>'; return;
     }
     var html = '<div class="stat">正确率<b>' +
       (a.accuracy === null ? '—' : Math.round(a.accuracy * 100) + '%') + '</b></div>' +
@@ -1815,15 +1819,15 @@
     box.innerHTML = html;
   }
 
-  function loadLearning(mac) {
-    var path = '/api/admin/learning' + (mac ? '?mac=' + encodeURIComponent(mac) : '');
+  function loadLearning(bankId) {
+    var path = '/api/admin/learning' + (bankId ? '?bank=' + encodeURIComponent(bankId) : '');
     return api(path).then(function (res) {
       if (!requireAuth(res)) return;
       if (!res.data.ok) { toast(res.data.detail || '读取学情失败'); return; }
-      var rows = res.data.devices || [];
+      var rows = res.data.banks || [];
       renderLearning(rows, res.data.detail);
-      // 首次进入没带 mac：补拉一次第一台设备的明细
-      if (!mac && rows.length) return loadLearning(rows[0].mac);
+      // 首次进入没带题库：补拉一次第一个题库的明细
+      if (!bankId && rows.length) return loadLearning(rows[0].bank_id);
     }).catch(function () { toast('读取学情失败'); });
   }
 
@@ -1878,7 +1882,8 @@
       subject: subs[0] || '',
       topics: el('auto-topics').value,
       mode: el('auto-mode').value,
-      device_mac: el('auto-device').value,
+      focus_weak: el('auto-focus').checked,
+      device_mac: '',
       max_auto: parseInt(el('auto-max').value, 10) || 0,
       mix: autoMixForm()
     };
@@ -1962,7 +1967,7 @@
     subjectChips('auto-subject', (autoOpts && autoOpts.subjects) || [],
                  (cfg.subjects && cfg.subjects.length)
                    ? cfg.subjects : [cfg.subject || '数学']);
-    return fillDeviceSelect('auto-device', cfg.device_mac || '');
+    el('auto-focus').checked = cfg.focus_weak !== false;
   }
 
   function renderAutoBank(res) {
@@ -2059,7 +2064,7 @@
       ['single', 'multi', 'judge'].forEach(function (k, i) {
         el(AUTO_MIX_IDS[i]).value = el(AI_MIX_IDS[i]).value;
       });
-      el('auto-device').value = el('ai-device').value;
+      el('auto-focus').checked = el('ai-focus').checked;
       toast('已填入，记得点「保存自动出题设置」');
     }).catch(function () { toast('读取 AI 出题参数失败'); });
   }
@@ -2149,13 +2154,14 @@
   el('learn-refresh').onclick = function () { loadLearning(el('learn-sel').value || ''); };
   el('learn-sel').onchange = function () { loadLearning(el('learn-sel').value || ''); };
   el('learn-clear').onclick = function () {
-    var mac = el('learn-sel').value;
-    if (!mac) { toast('请先选择设备'); return; }
-    if (!confirm('清空这台设备的全部学情、错题与弱项记录？题库和上网时间不受影响。')) return;
-    api('/api/admin/learning/clear', { mac: mac }).then(function (res) {
+    var bid = el('learn-sel').value;
+    if (!bid) { toast('请先选择题库'); return; }
+    if (!confirm('清空这个题库（这个人）的全部学情、错题与弱项记录？' +
+                 '题库本身和上网时间不受影响。')) return;
+    api('/api/admin/learning/clear', { bank_id: bid }).then(function (res) {
       if (!requireAuth(res)) return;
       toast('已清空');
-      loadLearning(mac);
+      loadLearning(bid);
     });
   };
 

@@ -935,15 +935,19 @@ def main():
           "新增 %s 道" % res.get("added"))
 
     code, res = admin("/api/admin/learning")
-    check("学情接口返回设备汇总列表",
-          code == 200 and isinstance(res.get("devices"), list))
-    code, res = admin("/api/admin/learning?mac=" + (mac or "02:00:00:00:00:77"))
+    check("学情接口按题库汇总（3.18.0 起按人，不按设备）",
+          code == 200 and isinstance(res.get("banks"), list) and
+          all(b.get("bank_id") for b in res["banks"]))
+    _lb = (res.get("banks") or [{}])[0].get("bank_id") or ""
+    code, res = admin("/api/admin/learning?bank=" + _lb)
     detail = res.get("detail") or {}
     check("学情明细含正确率/弱项/错题字段",
-          code == 200 and all(k in detail for k in
-                              ("accuracy", "weak", "wrong", "due_count")))
-    code, res = admin("/api/admin/learning/clear", {"mac": "02:00:00:00:00:77"})
-    check("清空指定设备学情接口可用", code == 200 and res.get("ok") is True)
+          code == 200 and detail.get("learner") == _lb and
+          all(k in detail for k in
+              ("accuracy", "weak", "wrong", "due_count")))
+    code, res = admin("/api/admin/learning/clear", {"bank_id": _lb})
+    check("清空指定题库（人）学情接口可用",
+          code == 200 and res.get("ok") is True)
     code, res = admin("/api/admin/learning/clear", {})
     check("清空学情缺少 MAC 被拒绝", code == 400)
 
@@ -1157,6 +1161,18 @@ def main():
     code, res = admin("/api/admin/schedule", {"mac": sch_mac})
     check("缺少规则内容时明确报错", code == 400)
     admin("/api/admin/bank/assign", {"mac": sch_mac, "bank_id": ""})
+
+    # ---- 3.18.0 学情按题库（人）而不是设备 ----
+    code, res = admin("/api/admin/learning")
+    _lbanks = res.get("banks") or []
+    check("学情列表按题库返回（不再按设备）",
+          code == 200 and _lbanks and all(b.get("bank_id") for b in _lbanks),
+          "%s 个题库" % len(_lbanks))
+    code, res = admin("/api/admin/learning?bank=" + first_bank_id)
+    check("学情明细按题库查询",
+          code == 200 and isinstance(res.get("detail"), dict) and
+          res["detail"].get("learner") == first_bank_id,
+          str((res.get("detail") or {}).get("learner")))
 
     code, res = admin("/api/admin/logout", {})
     code2, res2 = admin("/api/admin/state")
@@ -1444,6 +1460,59 @@ def main():
 
         check("清空学情后无残留设备",
               learning.clear(M) and learning.all_devices() == [])
+        check("清空按题库（人）也能清",
+              learning.clear("bank_x") is False)
+
+        # ---- 3.18.0 学情按「人」（题库）而不是设备 ----
+        _mtmp = tempfile.mkdtemp()
+        _old_state, _old_path = learning.STATE, learning.PATH
+        try:
+            learning.STATE = _mtmp
+            learning.PATH = os.path.join(_mtmp, "learning.json")
+            with open(learning.PATH, "w", encoding="utf-8") as f:
+                json.dump({"version": 1, "devices": {
+                    "aa:bb:cc:dd:ee:01": {
+                        "history": [
+                            {"qid": "qa", "ok": True, "ts": 1, "topic": "分数",
+                             "subject": "数学"},
+                            {"qid": "qb", "ok": False, "ts": 2, "topic": "分数",
+                             "subject": "数学"}],
+                        "wrong": [{"qid": "qb", "count": 1, "last_wrong": 2,
+                                   "due_at": 0, "review_ok": 0, "text": "Q",
+                                   "topic": "分数", "subject": "数学"}],
+                        "topics": {"分数": {"right": 1, "wrong": 1, "ema": 0.5,
+                                            "last": 2}},
+                        "rounds": {"total": 1, "perfect": 0, "last": 2},
+                    },
+                    "aa:bb:cc:dd:ee:02": {
+                        "history": [{"qid": "qc", "ok": True, "ts": 3,
+                                     "topic": "小数", "subject": "数学"}],
+                        "wrong": [],
+                        "topics": {"小数": {"right": 1, "wrong": 0,
+                                            "ema": 0.85, "last": 3}},
+                        "rounds": {"total": 1, "perfect": 1, "last": 3},
+                    },
+                }}, f)
+            _moved = learning.migrate_bank_keys({
+                "aa:bb:cc:dd:ee:01": "bank_a",
+                "aa:bb:cc:dd:ee:02": "bank_a",
+            })
+            _a = learning.ability("bank_a")
+            check("同一题库下多台设备的学情迁移合并成一个人",
+                  _moved and _a["total"] == 3 and _a["wrong_count"] == 1 and
+                  _a["rounds"] == 2 and
+                  {t["topic"] for t in _a["topics"]} == {"分数", "小数"},
+                  str({k: _a[k] for k in ("total", "wrong_count", "rounds")}))
+            check("迁移只做一次", learning.migrate_bank_keys({}) is False)
+            check("「做过」按人统计，别的题库互不影响",
+                  learning.done_qids("bank_a") == {"qa", "qb", "qc"} and
+                  learning.done_qids("bank_b") == set() and
+                  learning.done_qids() >= {"qa", "qb", "qc"})
+            check("按人取目标难度（bank_target_star）",
+                  learning.bank_target_star("bank_a") >= 1 and
+                  learning.bank_target_star("bank_none") == 0)
+        finally:
+            learning.STATE, learning.PATH = _old_state, _old_path
         dev_gen = ai_bank.generate_for_device(
             {"count": 6, "mode": "offline", "subject": "数学"},
             {"weak": [{"topic": "分数"}], "wrong": []})
@@ -1644,9 +1713,14 @@ def main():
                   auto_bank.fresh_count(fake_st, rule1) < rule1["threshold"]
                   and not auto_bank.due(fake_st, rule1, ab_now))
             for q in seed[:18]:            # 孩子答掉 18 道，只剩 2 道新题
-                learning.record_answer(M2, q, True)
+                learning.record_answer("bank_test", q, True)
             check("答过的题不再算新题",
                   auto_bank.fresh_count(fake_st, rule1) == 2)
+            for q in seed[:3]:             # 别的题库（人）做过的题不算数
+                learning.record_answer("bank_other", q, True)
+            check("别的题库做过的题不算这个题库的「新题」",
+                  auto_bank.fresh_count(fake_st, rule1) == 2)
+            learning.clear("bank_other")
             rule2 = auto_bank.load_rule(fake_st, "bank_junior")
             check("初中库新题充足（阈值 8）不触发，与小学库互不影响",
                   not auto_bank.due(fake_st, rule2, ab_now))
@@ -1689,13 +1763,13 @@ def main():
                   len(ab_status["runs"]) >= 1 and
                   bool(ab_status["runs"][0]["bank_name"]))
             for q in seed[18:]:           # 又答掉剩下的 2 道原始题
-                learning.record_answer(M2, q, True)
+                learning.record_answer("bank_test", q, True)
             # 3.14.4 起一次自动触发就出满 30 道，新题会超过阈值；再多答几道
             # 自动题把「未做过」压到阈值以下，才验证得到「冷却拦住」。
             auto_new = [q for q in fake_st.bank("bank_test")["questions"]
                         if str(q.get("source") or "").startswith("auto-")][:5]
             for q in auto_new:
-                learning.record_answer(M2, q, True)
+                learning.record_answer("bank_test", q, True)
             check("缺题但冷却未结束，仍不触发",
                   auto_bank.fresh_count(fake_st, after) < after["threshold"]
                   and not auto_bank.due(fake_st, after, ab_now + 60))
@@ -1706,7 +1780,7 @@ def main():
 
             # 初中库也走一遍：答空 → 冷却结束 → 按它自己的科目出题
             for q in seed_j:
-                learning.record_answer(M2, q, True)
+                learning.record_answer("bank_junior", q, True)
             jr = auto_bank.load_rule(fake_st, "bank_junior")
             check("初中库答空后低于它自己的阈值，但仍在冷却期内",
                   auto_bank.fresh_count(fake_st, jr) == 0 and
@@ -2038,6 +2112,21 @@ def main():
     check("手动解除限速不看题库模式直接清零（3.14.1 修复）",
           "清残留限速" in server_html and
           "按模式走会漏清" in server_html)
+
+    # ---- 3.18.0 学情按题库（人）：界面与服务端 ----
+    check("学情页按题库（人）展示",
+          "选择题库（人）" in admin_html and
+          "学情是按「人」算的" in admin_html and
+          "'?bank='" in admin_html and
+          "bank_id: bid" in admin_html and
+          "learn-sel" in admin_html)
+    check("AI/自动出题按题库弱项出题（不再选设备）",
+          'id="ai-focus"' in admin_html and 'id="auto-focus"' in admin_html and
+          "ai-device" not in admin_html and "auto-device" not in admin_html)
+    check("服务端学情按题库（人）记账",
+          'learning.record_answer(sess["bank_id"]' in server_html and
+          'learning.pick_questions(pool, bank["id"], n)' in server_html and
+          "learning.migrate_bank_keys(" in server_html)
 
     for _p, _raw in extra_paths.items():
         try:

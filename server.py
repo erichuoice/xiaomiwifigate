@@ -229,14 +229,14 @@ def start_round(ip, mac, bank, tier_index):
     n = max(1, min(int(tier["questions"]), len(pool)))
     # 智能组卷（3.13.0 四层优先级）：错题 40% → 新题 40% → 毕业错题 10% → 已会题 10%
     try:
-        questions = learning.pick_questions(pool, mac, n)
+        questions = learning.pick_questions(pool, bank["id"], n)
         if not questions:
             questions = random.sample(pool, n)
     except Exception as exc:
         log("PICK-FAIL mac=%s err=%s（回退随机组卷）" % (mac, exc))
         questions = random.sample(pool, n)
     try:
-        focus = learning.weak_topics_for(mac, 3)
+        focus = learning.weak_topics_for(bank["id"], 3)
     except Exception:
         focus = []
     sess = {
@@ -1273,7 +1273,7 @@ class Handler(BaseHTTPRequestHandler):
                         want = min(add_n, len(pool))
                         try:
                             extra = learning.pick_questions(
-                                pool, sess["mac"], want)
+                                pool, sess["bank_id"], want)
                         except Exception:
                             extra = []
                         if not extra:
@@ -1301,11 +1301,12 @@ class Handler(BaseHTTPRequestHandler):
         # 学情：逐题记入错题本 / 知识点掌握度，一轮结束记轮次。
         # 记录失败绝不能影响判卷与放行。
         try:
-            learning.record_answer(sess["mac"], q, ok)
+            # 3.18.0：学情按「人」记（题库 id），同一题库下换设备/代答都算同一个人
+            learning.record_answer(sess["bank_id"], q, ok)
             if idx >= total:
-                learning.record_round(sess["mac"], passed)
+                learning.record_round(sess["bank_id"], passed)
         except Exception as exc:
-            log("LEARNING-FAIL mac=%s err=%s" % (sess["mac"], exc))
+            log("LEARNING-FAIL bank=%s err=%s" % (sess["bank_id"], exc))
 
         feedback = {
             "ok": True,
@@ -1409,6 +1410,15 @@ def main():
     # 监听端口/地址的取值集中在 Store 里处理（支持 WIFIGATE_PORT / WIFIGATE_BIND
     # 环境变量覆盖，见 store.py），这里只管用。
     cfg = STORE.snapshot()["server"]
+    # 3.18.0：学情从「按设备 MAC」迁移到「按题库（人）」——同一套题库的
+    # 多台设备合并成一个人；只需要成功一次，之后直接跳过。
+    try:
+        mapping = {mac: b["id"] for b in STORE.banks() for mac in b["devices"]}
+        if learning.migrate_bank_keys(mapping):
+            log("学情已迁移为「按题库（人）」：%s 个学习者"
+                % len(learning.all_learners()))
+    except Exception as exc:
+        log("学情迁移失败（不影响使用）：%s" % exc)
     threading.Thread(target=reblock_worker, daemon=True).start()
     threading.Thread(target=update_worker, daemon=True).start()
     threading.Thread(target=auto_bank_worker, daemon=True).start()

@@ -55,7 +55,8 @@ DEFAULTS = {
     "topics": "",
     "mode": "auto",             # auto=优先 AI 失败降级 / offline / ai=不降级
     "mix": {},                  # 空 = 自动按比例分配三种题型
-    "device_mac": "",           # 非空 = 针对这台设备的弱项与错题出题
+    "device_mac": "",           # 旧字段（3.18.0 起不用，学情按题库算）
+    "focus_weak": True,         # 按这个题库（人）的弱项与错题出题
     "max_auto": 60,             # 该题库最多保留多少道「自动题」，0 = 不限
     "last_run": 0,
     "next_run": 0,              # = 下次允许自动执行的时间（冷却结束时刻）
@@ -144,6 +145,7 @@ def normalize(raw, base=None):
         raise AutoBankError("未知的出题方式")
     out["mode"] = mode
     out["device_mac"] = str(src.get("device_mac") or "").strip().lower()[:24]
+    out["focus_weak"] = bool(src.get("focus_weak", True))
     mix = {}
     raw_mix = src.get("mix") if isinstance(src.get("mix"), dict) else {}
     for k in ("single", "multi", "judge"):
@@ -352,11 +354,13 @@ def fresh_questions(bank, done=None):
 
 
 def fresh_count(st, cfg, done=None):
-    """目标题库里「没做过」的题数。"""
+    """目标题库里「没做过」的题数（3.18.0：只看这个题库/这个人做过的）。"""
     bank_id = cfg["bank_id"] or first_bank_id(st)
     bank = st.bank(bank_id) if bank_id else None
     if not bank:
         return 0
+    if done is None:
+        done = learning.done_qids(bank_id)
     return len(fresh_questions(bank, done))
 
 
@@ -428,9 +432,10 @@ def status(st, now=None):
     """后台状态卡：每个题库一行状态 + 合并的最近运行记录。"""
     now = float(now if now is not None else time.time())
     rules = {r["bank_id"]: r for r in load_all(st)}
-    done = learning.done_qids()
     banks = [b for b in st.banks() if isinstance(b, dict)]
-    rows = [_bank_status(st, b, rules.get(b["id"]), done, now) for b in banks]
+    # 3.18.0：每个题库（人）各算各的「做过」，不要把别的题库做过的题算进来
+    rows = [_bank_status(st, b, rules.get(b["id"]),
+                         learning.done_qids(b["id"]), now) for b in banks]
     merged = []
     for r in rules.values():
         merged.extend((r.get("runs") or [])[:MERGED_RUNS])
@@ -495,7 +500,8 @@ def run_once(st, rule, reason="auto", now=None):
                                     % (fresh, cfg["threshold"]))
 
         # 3.15.0：题目难度按孩子最近正确率自适应（正确率 <90% → 降星）
-        star = learning.bank_target_star(bank.get("devices") or [])
+        # 3.18.0：学情按题库（人），直接取这个题库的学情
+        star = learning.bank_target_star(bank["id"])
         spec = {
             "stage": cfg["stage"], "grade": cfg["grade"],
             "subject": cfg["subject"], "subjects": cfg["subjects"], "count": count,
@@ -513,9 +519,10 @@ def run_once(st, rule, reason="auto", now=None):
                                for k, v in cfg["mix"].items()}
             else:
                 spec["mix"] = cfg["mix"]
-        if cfg["device_mac"]:
+        # 3.18.0：按这个题库（人）的弱项与错题出题，不再选设备
+        if cfg.get("focus_weak", True) and learning.done_qids(bank["id"]):
             result = ai_bank.generate_for_device(
-                spec, learning.ability(cfg["device_mac"]))
+                spec, learning.ability(bank["id"]))
         else:
             result = ai_bank.generate(spec)
 

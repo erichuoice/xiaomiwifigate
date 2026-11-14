@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """学情模型：错题本、知识点掌握度、弱项识别与智能组卷。
 
+3.18.0 起学情按「人」记录：一个人 = 一套题库（bank_id），不再按设备 MAC 区分。
+同一套题库下不管孩子用 iPad、手机、电视还是家长代答，学情都算同一个人。
 数据落在 state/learning.json（不入库、不随代码更新覆盖）：
-  devices[mac] = {
+  learners[bank_id] = {
     history: 最近若干次逐题作答记录,
     wrong:   错题本（含题目快照、知识点、复习到期时间）,
     topics:  每个知识点的对错次数与 EWMA 掌握度,
     rounds:  答题轮次统计,
+    diff:    目标难度（按最近正确率自动调整）,
   }
+旧版文件（devices[mac]）会在服务启动时按「设备→题库」自动合并迁移。
 
 组卷不再是纯随机（3.13.0 起按四层优先级取题）：
   1) 错题（答错过、还没答对过的）优先，占约 40%——复习到期的先出
@@ -133,35 +137,51 @@ def _empty_device():
             "rounds": {"total": 0, "perfect": 0, "last": 0}}
 
 
-def _load():
+def _read_raw():
     if not os.path.exists(PATH):
-        return {"version": 1, "devices": {}}
+        return {}
     try:
         with open(PATH, encoding="utf-8") as f:
             data = json.load(f)
-        if not isinstance(data, dict) or not isinstance(data.get("devices"), dict):
-            raise ValueError
-        return data
+        return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
-        return {"version": 1, "devices": {}}
+        return {}
+
+
+def _load():
+    """读出学情：统一成 {"version": 2, "learners": {...}}。
+
+    旧文件是 {"devices": {mac: {...}}}，这里先按 MAC 原样读进来（key 仍是 mac），
+    真正的「MAC→题库」合并由 migrate() 在服务启动时做一次。
+    """
+    raw = _read_raw()
+    rows = raw.get("learners")
+    if not isinstance(rows, dict):
+        rows = raw.get("devices")            # 旧格式
+    if not isinstance(rows, dict):
+        rows = {}
+    return {"version": 2, "learners": rows}
 
 
 def _save(data):
     os.makedirs(STATE, exist_ok=True)
+    out = {"version": 2, "learners": data.get("learners") or {}}
     tmp = PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(out, f, ensure_ascii=False, indent=2)
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, PATH)
 
 
-def _dev(data, mac, create=True):
-    mac = (mac or "").lower()
-    dev = data["devices"].get(mac)
+def _dev(data, who, create=True):
+    """取/建某个学习者（= 题库）的学情记录。"""
+    who = str(who or "").strip().lower()
+    rows = data.setdefault("learners", {})
+    dev = rows.get(who)
     if not dev and create:
         dev = _empty_device()
-        data["devices"][mac] = dev
+        rows[who] = dev
     if dev:
         dev.setdefault("history", [])
         dev.setdefault("wrong", [])
@@ -172,16 +192,19 @@ def _dev(data, mac, create=True):
 
 # ---------------------------------------------------------------- 记录
 
-def record_answer(mac, q, ok, ts=None):
-    """每答一题记一次：知识点掌握度、历史、错题本与复习排期。"""
-    mac = (mac or "").lower()
-    if not mac:
+def record_answer(who, q, ok, ts=None):
+    """每答一题记一次：知识点掌握度、历史、错题本与复习排期。
+
+    who = 学习者（3.18.0 起 = 题库 id，一个人一套题库，不按设备区分）。
+    """
+    who = str(who or "").strip().lower()
+    if not who:
         return
     ts = float(ts or time.time())
     topic = topic_of(q)
     with _lock:
         data = _load()
-        dev = _dev(data, mac)
+        dev = _dev(data, who)
         # 知识点：计数 + EWMA 掌握度（近期表现权重更高）
         rec = dev["topics"].get(topic) or {"right": 0, "wrong": 0, "ema": 0.5, "last": 0}
         rec["right" if ok else "wrong"] = int(rec.get("right" if ok else "wrong", 0)) + 1
@@ -229,6 +252,76 @@ def record_answer(mac, q, ok, ts=None):
             else:
                 item["due_at"] = int(ts + REVIEW_AFTER[min(item["count"], len(REVIEW_AFTER) - 1)])
         _save(data)
+
+
+def _merge_dev(a, b):
+    """把两份学情合并成一份（迁移：同一套题库下多台设备 → 一个人）。"""
+    a, b = (a or {}), (b or {})
+    hist = list(a.get("history") or []) + list(b.get("history") or [])
+    hist.sort(key=lambda h: int(h.get("ts") or 0))
+    hist = hist[-HISTORY_LIMIT:]
+
+    wrong = {}
+    for src in (a.get("wrong") or [], b.get("wrong") or []):
+        for item in src:
+            qid = str(item.get("qid") or "")
+            cur = wrong.get(qid)
+            if not cur:
+                wrong[qid] = dict(item)
+                continue
+            cur["count"] = int(cur.get("count", 0)) + int(item.get("count", 0))
+            if int(item.get("last_wrong", 0)) >= int(cur.get("last_wrong", 0)):
+                for k in ("last_wrong", "due_at", "review_ok", "text", "options",
+                          "answer", "explain", "topic", "subject", "type"):
+                    if k in item:
+                        cur[k] = item[k]
+    wrong_list = sorted(wrong.values(), key=lambda w: w.get("last_wrong", 0),
+                        reverse=True)[:WRONG_LIMIT]
+
+    topics = {}
+    for src in (a.get("topics") or {}, b.get("topics") or {}):
+        for t, r in src.items():
+            cur = topics.get(t)
+            if not cur:
+                topics[t] = dict(r)
+                continue
+            n1 = int(cur.get("right", 0)) + int(cur.get("wrong", 0))
+            n2 = int(r.get("right", 0)) + int(r.get("wrong", 0))
+            cur["right"] = int(cur.get("right", 0)) + int(r.get("right", 0))
+            cur["wrong"] = int(cur.get("wrong", 0)) + int(r.get("wrong", 0))
+            if n1 + n2:
+                cur["ema"] = round((float(cur.get("ema", 0.5)) * n1 +
+                                    float(r.get("ema", 0.5)) * n2) / (n1 + n2), 4)
+            cur["last"] = max(int(cur.get("last", 0)), int(r.get("last", 0)))
+
+    rounds = {"total": 0, "perfect": 0, "last": 0}
+    for src in (a.get("rounds") or {}, b.get("rounds") or {}):
+        rounds["total"] += int(src.get("total", 0))
+        rounds["perfect"] += int(src.get("perfect", 0))
+        rounds["last"] = max(rounds["last"], int(src.get("last", 0)))
+    return {"history": hist, "wrong": wrong_list, "topics": topics,
+            "rounds": rounds}
+
+
+def migrate_bank_keys(mapping=None):
+    """旧版「按设备 MAC」的学情 → 3.18.0「按题库（人）」的学情。
+
+    mapping: {mac: bank_id}，由调用方从题库的设备归属里取。
+    不在 mapping 里的 MAC 保持原样（数据不丢）。返回是否有改动。
+    """
+    mapping = {str(k).strip().lower(): str(v).strip().lower()
+               for k, v in (mapping or {}).items()}
+    raw = _read_raw()
+    if raw.get("version") == 2 and isinstance(raw.get("learners"), dict):
+        return False
+    old = raw.get("devices") or raw.get("learners") or {}
+    merged = {}
+    for key, dev in old.items():
+        target = mapping.get(str(key).strip().lower()) or str(key)
+        merged[target] = _merge_dev(merged.get(target), dev)
+    with _lock:
+        _save({"learners": merged})
+    return True
 
 
 def recent_accuracy(dev, n=ACC_WINDOW):
@@ -296,37 +389,28 @@ def adjust_difficulty(dev):
     return round(max(DIFF_MIN, min(DIFF_MAX, cur)), 2)
 
 
-def target_star(mac):
-    """供出题用：这台设备当前应该出几星题（1~5）。"""
+def target_star(who):
+    """供出题用：这个学习者（题库）当前应该出几星题（1~5）。"""
     with _lock:
-        dev = _dev(_load(), mac, create=False)
+        dev = _dev(_load(), who, create=False)
     return difficulty_of(dev)[1]
 
 
-def bank_target_star(macs):
-    """一套题库（或一组设备）该出几星题：取有答题记录设备的平均目标难度。
-
-    没有答题记录时返回 0（表示不指定，用默认难度）。
-    多台设备（例如兄弟姐妹共用一套题）时按平均值，尽量照顾到所有人。
-    """
-    stars = []
-    for mac in macs or []:
-        a = ability(mac)
-        if a.get("total"):
-            stars.append(int(a.get("target_star") or 0))
-    stars = [x for x in stars if x]
-    if not stars:
+def bank_target_star(bank_id):
+    """一套题库（= 一个人）该出几星题；没有答题记录返回 0（用默认难度）。"""
+    a = ability(bank_id)
+    if not a.get("total"):
         return 0
-    return max(1, min(5, int(round(sum(stars) / float(len(stars))))))
+    return int(a.get("target_star") or 0) or 0
 
 
-def record_round(mac, all_ok, ts=None):
-    mac = (mac or "").lower()
-    if not mac:
+def record_round(who, all_ok, ts=None):
+    who = str(who or "").strip().lower()
+    if not who:
         return
     with _lock:
         data = _load()
-        dev = _dev(data, mac)
+        dev = _dev(data, who)
         r = dev["rounds"]
         r["total"] = int(r.get("total", 0)) + 1
         r["perfect"] = int(r.get("perfect", 0)) + (1 if all_ok else 0)
@@ -334,32 +418,44 @@ def record_round(mac, all_ok, ts=None):
         _save(data)
 
 
-def clear(mac):
-    """清空某台设备的学情（不影响题库和放行记录）。"""
+def clear(who):
+    """清空某个学习者（题库/人）的学情（不影响题库和放行记录）。"""
+    key = str(who or "").strip().lower()
     with _lock:
         data = _load()
-        if (mac or "").lower() in data["devices"]:
-            data["devices"].pop((mac or "").lower())
+        if key in (data.get("learners") or {}):
+            data["learners"].pop(key, None)
             _save(data)
             return True
     return False
 
 
-def all_devices():
+def all_learners():
+    """所有有学情记录的学习者（正常情况下 = 题库 id）。"""
     with _lock:
-        return sorted(_load()["devices"].keys())
+        return sorted(_load()["learners"].keys())
 
 
-def done_qids():
-    """所有设备「做过」的题目 id 集合（history + 错题本）。
+def all_devices():
+    """兼容旧名（现在 key 是题库/人，不是设备 MAC）。"""
+    return all_learners()
 
-    供自动出题判断题库里还剩多少没做过的新题；
-    history 每台设备最多记最近 400 条，足够覆盖日常使用。
+
+def done_qids(learner=None):
+    """「做过」的题目 id 集合（history + 错题本）。
+
+    传 learner（题库 id）时只算这个人做过的——3.18.0 起自动出题按题库统计
+    「新题」，别把别的题库孩子做过的题算成做过。
+    不传则返回全部学习者的并集。
     """
     with _lock:
         data = _load()
+    rows = data.get("learners") or {}
+    if learner is not None:
+        key = str(learner or "").strip().lower()
+        rows = {key: rows.get(key)} if key in rows else {}
     done = set()
-    for dev in (data.get("devices") or {}).values():
+    for dev in rows.values():
         for h in dev.get("history") or []:
             qid = str(h.get("qid") or "").strip()
             if qid:
@@ -391,18 +487,18 @@ def weak_topics(dev, limit=6):
     return out[:limit]
 
 
-def weak_topics_for(mac, limit=3):
-    """供组卷使用：返回该设备当前最薄弱的知识点名称列表。"""
+def weak_topics_for(who, limit=3):
+    """供组卷使用：返回该学习者（题库）当前最薄弱的知识点名称列表。"""
     with _lock:
-        dev = _dev(_load(), mac, create=False)
+        dev = _dev(_load(), who, create=False)
     return [w["topic"] for w in weak_topics(dev, limit)]
 
 
-def ability(mac, now=None):
-    """后台「学情」页用的汇总。"""
+def ability(who, now=None):
+    """后台「学情」页用的汇总（who = 题库 id / 人）。"""
     now = float(now or time.time())
     with _lock:
-        dev = dict(_dev(_load(), mac, create=False))
+        dev = dict(_dev(_load(), who, create=False))
     hist = dev.get("history") or []
     correct = sum(1 for h in hist if h.get("ok"))
     wrong = dev.get("wrong") or []
@@ -418,7 +514,7 @@ def ability(mac, now=None):
     topics.sort(key=lambda x: (x["mastery"], -x["samples"]))
     diff, star = difficulty_of(dev)
     return {
-        "mac": (mac or "").lower(),
+        "learner": str(who or "").strip().lower(),
         "total": len(hist), "correct": correct,
         "accuracy": round(correct / len(hist), 3) if hist else None,
         "difficulty": diff,
@@ -443,9 +539,9 @@ def ability(mac, now=None):
     }
 
 
-def summary(mac, now=None):
+def summary(who, now=None):
     """答题页/接口用的精简版：不暴露完整错题明细。"""
-    a = ability(mac, now)
+    a = ability(who, now)
     return {
         "total": a["total"], "accuracy": a["accuracy"],
         "difficulty": a["difficulty"], "target_star": a["target_star"],
@@ -595,7 +691,7 @@ def _weak_order(qs, weak, target=0):
     return lst
 
 
-def pick_questions(pool, mac, n, now=None):
+def pick_questions(pool, who, n, now=None):
     """智能组卷（3.13.0 四层优先级）：
 
     ① 错题 40% —— 答错过、还没答对过的错题优先消化，复习到期的排最前
@@ -613,7 +709,7 @@ def pick_questions(pool, mac, n, now=None):
     now = float(now or time.time())
     try:
         with _lock:
-            dev = dict(_dev(_load(), mac, create=False))
+            dev = dict(_dev(_load(), who, create=False))
     except Exception:
         dev = _empty_device()
     weak = {w["topic"]: w for w in weak_topics(dev)}

@@ -318,15 +318,17 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
         bank = st.bank(bid) if bid else st.first_bank()
         if bank:
             spec.setdefault("avoid", [q["text"] for q in bank["questions"]][:600])
-        mac = str(data.get("device_mac") or "").strip().lower()
-        if "star" not in spec and "difficulty" not in spec:
-            # 3.15.0：没指定难度时按该题库设备最近正确率自动定星级
-            star = learning.bank_target_star((bank or {}).get("devices") or [])
+        if "star" not in spec and "difficulty" not in spec and bank:
+            # 3.15.0：没指定难度时按这个题库（人）最近正确率自动定星级
+            star = learning.bank_target_star(bank["id"])
             if star:
                 spec["star"] = star
+        # 3.18.0：学情按题库（人）算，不再选设备
+        focus = bool(data.get("focus_weak", True)) and bank is not None
         try:
-            if mac and data.get("focus_weak", True):
-                result = ai_bank.generate_for_device(spec, learning.ability(mac))
+            if focus:
+                result = ai_bank.generate_for_device(spec,
+                                                     learning.ability(bank["id"]))
             else:
                 result = ai_bank.generate(spec)
         except (ai_bank.AIError, TypeError, ValueError) as exc:
@@ -345,24 +347,16 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
             return 400, {"ok": False, "detail": str(exc)}, None
         return 200, dict(saved, ok=True, banks=st.banks()), None
 
-    # ---- 学情：错题本 / 弱项 / 复习进度 ----
+    # ---- 学情：错题本 / 弱项 / 复习进度（3.18.0 起按题库=人，不按设备）----
     if path == "/api/admin/learning" and method == "GET":
-        mac = str((query.get("mac") or [""])[0]).strip().lower()
-        owner = {}
-        for b in st.banks():
-            for m in b["devices"]:
-                owner[m.lower()] = {"bank_id": b["id"], "bank_name": b["name"]}
-        try:
-            names = adapter.names_by_mac()
-        except Exception:
-            names = {}
+        which = str((query.get("bank") or [""])[0] or
+                    (query.get("mac") or [""])[0] or "").strip().lower()
         rows = []
-        for m in sorted(set(owner) | set(learning.all_devices())):
-            a = learning.ability(m)
+        for b in st.banks():
+            a = learning.ability(b["id"])
             rows.append({
-                "mac": m,
-                "name": names.get(m) or owner.get(m, {}).get("bank_name") or "（未命名设备）",
-                "bank_id": owner.get(m, {}).get("bank_id", ""),
+                "bank_id": b["id"], "name": b["name"],
+                "devices": len(b["devices"]),
                 "total": a["total"], "accuracy": a["accuracy"],
                 "difficulty": a["difficulty"], "target_star": a["target_star"],
                 "recent_accuracy": a["recent_accuracy"],
@@ -370,14 +364,29 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
                 "wrong_count": a["wrong_count"], "due_count": a["due_count"],
                 "weak": [w["topic"] for w in a["weak"][:3]],
             })
-        return 200, {"ok": True, "devices": rows,
-                     "detail": learning.ability(mac) if mac else None}, None
+        known = {b["id"] for b in st.banks()}
+        for who in learning.all_learners():
+            if who in known:
+                continue
+            a = learning.ability(who)
+            rows.append({
+                "bank_id": who, "name": who + "（未对应题库）", "devices": 0,
+                "total": a["total"], "accuracy": a["accuracy"],
+                "difficulty": a["difficulty"], "target_star": a["target_star"],
+                "recent_accuracy": a["recent_accuracy"],
+                "rounds": a["rounds"], "last": a["last"],
+                "wrong_count": a["wrong_count"], "due_count": a["due_count"],
+                "weak": [w["topic"] for w in a["weak"][:3]],
+            })
+        return 200, {"ok": True, "banks": rows,
+                     "detail": learning.ability(which) if which else None}, None
 
     if path == "/api/admin/learning/clear" and method == "POST":
-        mac = str(_body(raw).get("mac") or "").strip().lower()
-        if not mac:
-            return 400, {"ok": False, "detail": "请指定设备 MAC"}, None
-        learning.clear(mac)
+        data = _body(raw)
+        who = str(data.get("bank_id") or data.get("mac") or "").strip().lower()
+        if not who:
+            return 400, {"ok": False, "detail": "请指定要清空的题库"}, None
+        learning.clear(who)
         return 200, {"ok": True}, None
 
     # ---- 自动补充新题（3.10.0：每个题库可以设置不同的自动出题要求）----
