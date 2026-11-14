@@ -168,6 +168,7 @@
       <span class="objswitch">
         <label for="obj-sel">管理对象</label>
         <select id="obj-sel"></select>
+        <button class="mini ghost" id="add-student" title="新建一个学生（管理对象）">+ 新建学生</button>
       </span>
       <span style="display:flex;gap:8px">
         <button class="mini ghost" id="open-settings">系统设置</button>
@@ -175,7 +176,7 @@
       </span>
     </div>
     <div class="tabs">
-      <button id="tabbtn-quiz" data-tab="quiz">题库</button>
+      <button id="tabbtn-quiz" data-tab="quiz">学生信息</button>
       <button id="tabbtn-questions" data-tab="questions" class="off">题目</button>
       <button id="tabbtn-ai" data-tab="ai" class="off">AI 出题</button>
       <button id="tabbtn-learning" data-tab="learning" class="off">学习情况</button>
@@ -184,18 +185,17 @@
 
     <!-- 题库 -->
     <div id="tab-quiz" class="card">
-      <h2>题库</h2>
+      <h2>学生信息</h2>
       <div class="bankbar">
         <select id="bank-sel" class="hidebank"></select>
-        <button class="mini ghost" id="bank-new">+ 新建题库</button>
-        <button class="mini danger" id="bank-del">删除</button>
+        <button class="mini danger" id="bank-del">删除这个学生</button>
       </div>
 
-      <label class="fld" for="bank-name">题库名称</label>
-      <input id="bank-name" type="text" maxlength="24" placeholder="例如：小学低年级 / 姐姐的题">
+      <label class="fld" for="bank-name">学生姓名</label>
+      <input id="bank-name" type="text" maxlength="24" placeholder="例如：沈旻敬 / 沈裕童">
 
       <h2 style="margin-top:20px">出题范围<span class="count">AI 出题 / 自动补题都按这个范围</span></h2>
-      <p class="hint">这个管理对象（孩子）在哪儿、几年级就够了：教材按地区自动推断，
+      <p class="hint">这个学生在哪儿、几年级就够了：教材按地区自动推断，
         教学进度按当前日期自动算，不用填。</p>
       <div class="grid3">
         <div>
@@ -212,7 +212,7 @@
         </div>
       </div>
       <p class="hint" id="bank-progress" style="margin-top:8px"></p>
-      <div class="row" style="margin-top:10px"><button id="save-bank-settings">保存管理对象</button></div>
+      <div class="row" style="margin-top:10px"><button id="save-bank-settings">保存学生信息</button></div>
 
       <label class="fld">奖励档位：答对几道题 → 换多少分钟（分钟填 0 = 一直放行）</label>
       <div id="tier-list"></div>
@@ -797,8 +797,8 @@
     var box = el('bank-dev');
     var n = (b.devices || []).length;
     box.innerHTML = n
-      ? '本题库管辖 <b>' + n + '</b> 台设备，在「设备」页可以改归属。'
-      : '本题库还没有设备：去「设备」页把要管控的设备分配给这套题。';
+      ? '这个学生名下有 <b>' + n + '</b> 台设备，在「管理设备」页可以改归属。'
+      : '这个学生还没有设备：去「管理设备」页把要管控的设备加给他。';
   }
 
   function numInput(value, min, max, onchange) {
@@ -2363,9 +2363,10 @@
     var b = banks.filter(function (x) { return x.id === el('bank-sel').value; })[0];
     if (b) { openSet = {}; pickBank(banks.indexOf(b)); }
   };
-  el('bank-new').onclick = function () {
-    var name = prompt('新题库名称（例如：妹妹的题 / 小学低年级）',
-      '新题库 ' + (banks.length + 1));
+  // 3.30.0：新建学生（= 新建一个管理对象/题库），建完自动切过去
+  el('add-student').onclick = function () {
+    var name = prompt('新学生姓名（会作为管理对象名称）',
+      '学生 ' + (banks.length + 1));
     if (!name) return;
     api('/api/admin/bank', {
       name: name,
@@ -2379,16 +2380,18 @@
       if (!requireAuth(res)) return;
       if (!res.data.ok) { toast(res.data.detail || '新建失败'); return; }
       curId = res.data.bank.id;
-      toast('已新建题库，接着补充题目和档位');
+      currentBankId = res.data.bank.id;
+      try { localStorage.setItem('wifigate.current_bank', currentBankId); } catch (e) {}
+      toast('已新建学生「' + (res.data.bank.name || name) + '」，接着补题目和档位');
       loadState();
     });
   };
   el('bank-del').onclick = function () {
     var b = banks[cur];
     if (!b) return;
-    if (banks.length <= 1) { toast('至少要保留一个题库'); return; }
-    if (!confirm('确定删除题库「' + b.name + '」？其中 ' + (b.questions || []).length +
-      ' 道题会一并删除，管辖的设备会变成不受控。')) return;
+    if (banks.length <= 1) { toast('至少要保留一个学生'); return; }
+    if (!confirm('确定删除学生「' + b.name + '」？其中 ' + (b.questions || []).length +
+      ' 道题会一并删除，名下设备会变成不受控。')) return;
     api('/api/admin/bank/delete', { id: b.id }).then(function (res) {
       if (!requireAuth(res)) return;
       if (!res.data.ok) { toast(res.data.detail || '删除失败'); return; }

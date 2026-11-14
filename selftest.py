@@ -2256,14 +2256,17 @@ def main():
           "按模式走会漏清" in server_html)
 
     # ---- 3.20.0 导航按「管理对象」组织 ----
-    check("页签按管理对象组织（题库/题目/AI出题/学习情况/管理设备）",
+    check("页签按管理对象组织（学生信息/题目/AI出题/学习情况/管理设备）",
           "管理对象" in admin_html and
           all(w in admin_html for w in
               ("tabbtn-quiz", "tabbtn-questions", "tabbtn-ai",
                "tabbtn-learning", "tabbtn-devices")) and
           "tabbtn-auto" not in admin_html and
           "学习情况" in admin_html and "管理设备" in admin_html and
-          ">题库<" in admin_html and
+          ">学生信息<" in admin_html and
+          'id="add-student"' in admin_html and
+          "新建学生" in admin_html and
+          "bank-new" not in admin_html and
           "tabbtn-import" not in admin_html and 'id="tab-import"' not in admin_html)
     def _card_end(html, start_marker):
         """返回 start_marker 那个 <div> 的闭合位置（做 div 深度扫描）。"""
