@@ -2266,6 +2266,8 @@ def main():
           ">学生信息<" in admin_html and
           'id="add-student"' in admin_html and
           "新建学生" in admin_html and
+          'id="bank-del"' in admin_html and "删除学生" in admin_html and
+          admin_html.index('id="bank-del"') < admin_html.index('<div id="tab-quiz"') and
           "bank-new" not in admin_html and
           "tabbtn-import" not in admin_html and 'id="tab-import"' not in admin_html)
     def _card_end(html, start_marker):

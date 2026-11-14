@@ -169,6 +169,7 @@
         <label for="obj-sel">管理对象</label>
         <select id="obj-sel"></select>
         <button class="mini ghost" id="add-student" title="新建一个学生（管理对象）">+ 新建学生</button>
+        <button class="mini danger" id="bank-del" title="删除当前选中的学生">删除学生</button>
       </span>
       <span style="display:flex;gap:8px">
         <button class="mini ghost" id="open-settings">系统设置</button>
@@ -186,10 +187,7 @@
     <!-- 题库 -->
     <div id="tab-quiz" class="card">
       <h2>学生信息</h2>
-      <div class="bankbar">
-        <select id="bank-sel" class="hidebank"></select>
-        <button class="mini danger" id="bank-del">删除这个学生</button>
-      </div>
+      <select id="bank-sel" class="hidebank"></select>
 
       <label class="fld" for="bank-name">学生姓名</label>
       <input id="bank-name" type="text" maxlength="24" placeholder="例如：沈旻敬 / 沈裕童">
