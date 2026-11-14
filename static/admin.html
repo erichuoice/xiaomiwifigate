@@ -24,8 +24,8 @@
     margin-bottom:10px; flex-wrap:wrap; }
   .badge { font-size:12.5px; padding:4px 10px; border-radius:20px; background:var(--soft); color:var(--accent); }
   .badge.mock { background:var(--warn-bg); color:#8a5a00; }
-  .tabs { display:flex; gap:6px; margin-bottom:12px; }
-  .tabs button { flex:1; padding:10px 4px; }
+  .tabs { display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap; }
+  .tabs button { flex:1 1 92px; padding:10px 4px; }
   .tabs button.off { background:#e9edf2; color:var(--text); }
   button { border:0; border-radius:9px; padding:10px 15px; font-size:14px; font-weight:600;
     color:#fff; background:var(--accent); cursor:pointer; font-family:inherit; }
@@ -107,6 +107,29 @@
   code { background:#e6e9ed; padding:1px 5px; border-radius:4px; font-size:12px; }
   .foot { color:var(--muted); font-size:12px; margin-top:16px; line-height:1.8; }
   a { color:var(--accent); }
+  /* 3.6.0：AI 出题 / 学情 */
+  .grid2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:2px 12px; }
+  .grid3 { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:2px 12px; }
+  @media (max-width:620px) { .grid2,.grid3 { grid-template-columns:1fr; } }
+  h3 { font-size:14.5px; font-weight:600; margin:20px 0 10px; }
+  .ai-note { background:var(--warn-bg); border:1px solid var(--warn-line); border-radius:10px;
+    padding:9px 12px; font-size:13px; line-height:1.7; }
+  .qprev { border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:8px; }
+  .qprev .qh { display:flex; gap:8px; align-items:flex-start; font-size:14px; }
+  .qprev .qh input { margin-top:5px; flex:none; }
+  .qprev .qbody { flex:1; }
+  .qprev .opts { color:var(--muted); font-size:12.5px; margin-top:3px; }
+  .qprev .meta { color:var(--ok); font-size:12.5px; margin-top:4px; }
+  .pill { display:inline-block; font-size:11.5px; padding:1px 7px; border-radius:9px;
+    background:var(--soft); color:var(--accent); margin-right:4px; white-space:nowrap; }
+  .pill.no { background:var(--nosoft); color:var(--no); }
+  .pill.ok { background:var(--oksoft); color:var(--ok); }
+  .stat { display:inline-block; min-width:96px; margin:0 12px 8px 0; font-size:13px; }
+  .stat b { display:block; font-size:19px; font-weight:600; }
+  .learncard { border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:9px; }
+  .learncard .ln { font-size:14px; font-weight:600; }
+  .wrong-line { font-size:12.5px; color:#444; border-left:2px solid var(--line);
+    padding:3px 0 3px 9px; margin:5px 0; }
 </style>
 </head>
 <body>
@@ -129,6 +152,8 @@
     </div>
     <div class="tabs">
       <button id="tabbtn-quiz" data-tab="quiz">题库</button>
+      <button id="tabbtn-ai" data-tab="ai" class="off">AI 出题</button>
+      <button id="tabbtn-learning" data-tab="learning" class="off">学情</button>
       <button id="tabbtn-import" data-tab="import" class="off">导入</button>
       <button id="tabbtn-devices" data-tab="devices" class="off">设备</button>
       <button id="tabbtn-settings" data-tab="settings" class="off">设置</button>
@@ -271,6 +296,126 @@
       <div class="foot">
         管理密码改这儿改不了：编辑 <code>config.json</code> 的 <code>server.admin_password</code> 后重启容器。<br>
         本页改动写入 <code>state/runtime.json</code>，即时生效、容器重建不丢。
+      </div>
+    </div>
+
+    <!-- AI 出题 -->
+    <div id="tab-ai" class="card" style="display:none">
+      <h2>AI 出题</h2>
+      <div class="ai-note" id="ai-progress">正在读取当前教学进度…</div>
+
+      <h3>① 连接 AI（在这里填写 API Key）</h3>
+      <div class="grid2">
+        <div>
+          <label class="fld" for="ai-provider">服务商</label>
+          <select id="ai-provider"></select>
+        </div>
+        <div>
+          <label class="fld" for="ai-key">API Key</label>
+          <input id="ai-key" type="password" autocomplete="new-password"
+                 spellcheck="false" placeholder="sk-…（留空 = 不修改已保存的 Key）">
+        </div>
+        <div>
+          <label class="fld" for="ai-base">接口地址</label>
+          <input id="ai-base" type="text" spellcheck="false" placeholder="https://api.deepseek.com/v1">
+        </div>
+        <div>
+          <label class="fld" for="ai-model">模型</label>
+          <input id="ai-model" type="text" spellcheck="false" placeholder="deepseek-chat">
+        </div>
+      </div>
+      <p class="hint" id="ai-keyhint" style="margin-top:8px"></p>
+      <div class="row">
+        <button id="ai-save">保存连接设置</button>
+        <button class="mini ghost" id="ai-test">测试连接</button>
+        <button class="mini danger" id="ai-clear">清除 Key</button>
+      </div>
+      <p class="hint">Key 只写入路由器的 <code>state/ai.json</code>（权限 600，已被 <code>.gitignore</code> 排除），
+        后台只显示 <code>sk-****后四位</code>；不会写进日志、备份导出或 GitHub。
+        不填 Key 也能用「离线模板」出题，只是题目变化少。</p>
+
+      <h3>② 教学进度与教材（广州）</h3>
+      <div class="grid2">
+        <div>
+          <label class="fld" for="ai-textbook">教材版本</label>
+          <select id="ai-textbook"></select>
+        </div>
+        <div>
+          <label class="fld" for="ai-prog-auto">进度方式</label>
+          <select id="ai-prog-auto">
+            <option value="1">按当前日期自动推断</option>
+            <option value="0">手动指定范围</option>
+          </select>
+        </div>
+      </div>
+      <label class="fld" for="ai-scope">教学进度范围（选「手动指定」时生效）</label>
+      <input id="ai-scope" type="text" placeholder="例如：第 1—3 单元（分数加减、周长）">
+      <p class="hint" id="ai-progress-note"></p>
+
+      <h3>③ 出一批新题</h3>
+      <div class="grid3">
+        <div>
+          <label class="fld" for="ai-stage">学段</label>
+          <select id="ai-stage"></select>
+        </div>
+        <div>
+          <label class="fld" for="ai-grade">年级</label>
+          <select id="ai-grade"></select>
+        </div>
+        <div>
+          <label class="fld" for="ai-subject">科目</label>
+          <select id="ai-subject"></select>
+        </div>
+        <div>
+          <label class="fld" for="ai-count">题量（1~30）</label>
+          <input id="ai-count" type="number" min="1" max="30" value="10">
+        </div>
+        <div>
+          <label class="fld" for="ai-bank">入到哪个题库</label>
+          <select id="ai-bank"></select>
+        </div>
+        <div>
+          <label class="fld" for="ai-device">针对弱项（可选）</label>
+          <select id="ai-device"></select>
+        </div>
+      </div>
+      <label class="fld" for="ai-topics">知识点（可选，逗号分隔）</label>
+      <input id="ai-topics" type="text" placeholder="例如：分数加减，长方形周长，古诗默写">
+      <label class="fld">题型数量（留空 = 自动按 50% 单选 / 25% 多选 / 25% 判断分配）</label>
+      <div class="grid3">
+        <input id="ai-mix-single" type="number" min="0" max="30" placeholder="单选">
+        <input id="ai-mix-multi" type="number" min="0" max="30" placeholder="多选">
+        <input id="ai-mix-judge" type="number" min="0" max="30" placeholder="判断">
+      </div>
+      <div class="row">
+        <button id="ai-gen">生成预览</button>
+        <button class="mini ghost" id="ai-gen-offline">用离线模板生成</button>
+      </div>
+      <p class="hint" id="ai-result-note" style="margin-top:10px"></p>
+
+      <h3>④ 预览并入库<span id="ai-prev-count" class="count"></span></h3>
+      <div id="ai-preview"><p class="hint">还没有生成题目。</p></div>
+      <div class="row">
+        <button id="ai-apply">把勾选的题目加入题库</button>
+        <label class="chk"><input type="checkbox" id="ai-all" checked> 全选</label>
+      </div>
+      <p class="hint">预览题按题干去重，入库后保存立即生效；答案只存在服务端，答题页看不到。</p>
+    </div>
+
+    <!-- 学情 -->
+    <div id="tab-learning" class="card" style="display:none">
+      <h2>学情与错题本</h2>
+      <p class="hint">每答一道题自动记录：错题按 2 小时 / 1 天 / 3 天 / 7 天 / 15 天间隔安排重做，
+        轮到时会插入原题或同知识点的类似题；掌握度偏低的知识点会被多抽到（但一轮最多占一半）。</p>
+      <div id="learn-cards"></div>
+
+      <h3>设备明细</h3>
+      <label class="fld" for="learn-sel">选择设备</label>
+      <select id="learn-sel"></select>
+      <div id="learn-detail" style="margin-top:12px"></div>
+      <div class="row">
+        <button class="mini ghost" id="learn-refresh">刷新</button>
+        <button class="mini danger" id="learn-clear">清空这台设备的学情</button>
       </div>
     </div>
   </div>
@@ -1006,15 +1151,316 @@
   }
   setInterval(tickCountdowns, 1000);
 
+  // ---------- AI 出题 / 学情（3.6.0）----------
+
+  var aiConfig = null, aiPreview = [], learnRows = [];
+
+  function escHtml(s) {
+    return String(s === undefined || s === null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function fillSel(id, items, valKey, txtKey, selected) {
+    var sel = el(id);
+    sel.innerHTML = '';
+    (items || []).forEach(function (it) {
+      var o = document.createElement('option');
+      o.value = (typeof it === 'string') ? it : it[valKey];
+      o.textContent = (typeof it === 'string') ? it : it[txtKey];
+      sel.appendChild(o);
+    });
+    if (selected !== undefined && selected !== null) sel.value = selected;
+  }
+
+  function fillAiBanks() {
+    var cur = el('ai-bank').value;
+    fillSel('ai-bank', banks.map(function (b) {
+      return { id: b.id, name: b.name + '（' + (b.questions || []).length + ' 题）' };
+    }), 'id', 'name', cur);
+  }
+
+  function fillAiDevices() {
+    var cur = el('ai-device').value;
+    return api('/api/admin/devices').then(function (res) {
+      if (!requireAuth(res)) return;
+      var rows = [{ mac: '', name: '不针对设备（通用出题）' }].concat(
+        (res.data.devices || []).map(function (r) {
+          return { mac: r.mac, name: (r.name || r.mac) + ' · ' + r.mac };
+        }));
+      fillSel('ai-device', rows, 'mac', 'name', cur);
+    }).catch(function () {});
+  }
+
+  function renderAiConfig() {
+    var c = aiConfig;
+    if (!c) return;
+    fillSel('ai-provider', c.presets, 'id', 'label', c.provider);
+    fillSel('ai-textbook', c.textbooks, 'value', 'label', c.textbook);
+    fillSel('ai-stage', c.stages, null, null, el('ai-stage').value || '小学');
+    fillSel('ai-grade', c.grades, null, null, el('ai-grade').value || '四年级');
+    fillSel('ai-subject', c.subjects, null, null, el('ai-subject').value || '数学');
+    el('ai-base').value = c.base_url || '';
+    el('ai-model').value = c.model || '';
+    el('ai-prog-auto').value = c.progress_auto ? '1' : '0';
+    el('ai-scope').value = c.term_scope || '';
+    el('ai-key').value = '';                 // 明文永不回填
+    el('ai-keyhint').textContent = c.has_key
+      ? '当前已保存：' + c.key_hint + '（要换 Key 就直接填新的再保存）'
+      : '当前未配置 API Key —— 在上方填写 DeepSeek 的 sk-… 后点「保存连接设置」。';
+    var p = c.progress || {};
+    el('ai-progress').innerHTML = '<b>当前教学进度：</b>' + escHtml(p.label || '') +
+      '<br><b>命题范围：</b>' + escHtml(p.scope || '') +
+      '<br><span style="color:var(--muted)">' + escHtml(p.note || '') + '</span>';
+    el('ai-progress-note').textContent = '按广州校历粗略推断（9 月 1 日 / 2 月下旬开学）；'
+      + '如与孩子实际进度不符，选「手动指定范围」并填写，例如「第 1—3 单元（分数加减）」。';
+    fillAiBanks();
+  }
+
+  function loadAiConfig() {
+    return api('/api/admin/ai/config').then(function (res) {
+      if (!requireAuth(res)) return;
+      if (!res.data.ok) { toast(res.data.detail || '读取 AI 配置失败'); return; }
+      aiConfig = res.data.config;
+      renderAiConfig();
+      fillAiDevices();
+    }).catch(function () { toast('读取 AI 配置失败'); });
+  }
+
+  function saveAiConfig(extra, silent) {
+    var patch = {
+      provider: el('ai-provider').value,
+      base_url: el('ai-base').value,
+      model: el('ai-model').value,
+      api_key: el('ai-key').value,
+      textbook: el('ai-textbook').value,
+      progress_auto: el('ai-prog-auto').value === '1',
+      term_scope: el('ai-scope').value,
+      timeout: 90
+    };
+    if (extra) Object.keys(extra).forEach(function (k) { patch[k] = extra[k]; });
+    return api('/api/admin/ai/config', patch).then(function (res) {
+      if (!requireAuth(res)) return null;
+      if (!res.data.ok) { toast(res.data.detail || '保存失败'); return null; }
+      aiConfig = res.data.config;
+      el('ai-key').value = '';
+      el('ai-keyhint').textContent = aiConfig.has_key
+        ? '当前已保存：' + aiConfig.key_hint : '当前未配置 API Key';
+      var p = aiConfig.progress || {};
+      el('ai-progress').innerHTML = '<b>当前教学进度：</b>' + escHtml(p.label || '') +
+        '<br><b>命题范围：</b>' + escHtml(p.scope || '');
+      if (!silent) toast('已保存');
+      return aiConfig;
+    }).catch(function () { toast('保存失败'); return null; });
+  }
+
+  function testAi() {
+    var fresh = el('ai-key').value.trim();
+    if (!fresh && !(aiConfig && aiConfig.has_key)) {
+      toast('请先在上方填写 API Key 并保存'); return;
+    }
+    var b = el('ai-test');
+    b.disabled = true; b.textContent = '测试中…';
+    var ready = fresh ? saveAiConfig() : Promise.resolve(aiConfig);
+    ready.then(function () {
+      return api('/api/admin/ai/test', {});
+    }).then(function (res) {
+      b.disabled = false; b.textContent = '测试连接';
+      if (!requireAuth(res)) return;
+      if (res.data.ok) toast('连接正常：' + (res.data.model || '') +
+        ' 用时 ' + res.data.latency + ' 秒，回复「' + (res.data.reply || '') + '」');
+      else toast('连接失败：' + (res.data.detail || '未知错误'));
+    }).catch(function () {
+      b.disabled = false; b.textContent = '测试连接'; toast('连接失败');
+    });
+  }
+
+  function answerText(q) {
+    var a = Array.isArray(q.answer) ? q.answer : [q.answer];
+    return a.map(function (x) {
+      return (q.options && q.options[x] !== undefined) ? q.options[x] : String(x);
+    }).join('、');
+  }
+
+  function renderPreview(qs) {
+    aiPreview = qs || [];
+    var box = el('ai-preview');
+    box.innerHTML = '';
+    el('ai-prev-count').textContent = '（' + aiPreview.length + ' 道）';
+    if (!aiPreview.length) {
+      box.innerHTML = '<p class="hint">还没有生成题目。</p>'; return;
+    }
+    aiPreview.forEach(function (q, i) {
+      var d = document.createElement('div');
+      d.className = 'qprev';
+      var kind = q.type === 'multi' ? '多选' : (q.type === 'judge' ? '判断' : '单选');
+      var html = '<div class="qh"><input type="checkbox" class="ai-pick" data-i="' + i +
+        '" checked><div class="qbody"><span class="pill">' + escHtml(kind) + '</span>' +
+        (q.topic ? '<span class="pill ok">' + escHtml(q.topic) + '</span>' : '') +
+        (q.grade ? '<span class="pill">' + escHtml(q.grade) + '</span>' : '') +
+        '<div>' + escHtml(q.text) + '</div>' +
+        '<div class="opts">' + escHtml((q.options || []).join(' / ')) + '</div>' +
+        '<div class="meta">答案：' + escHtml(answerText(q)) +
+        (q.explain ? '　·　' + escHtml(q.explain) : '') + '</div></div></div>';
+      d.innerHTML = html;
+      box.appendChild(d);
+    });
+  }
+
+  function aiSpec(mode) {
+    var spec = {
+      stage: el('ai-stage').value, grade: el('ai-grade').value,
+      subject: el('ai-subject').value,
+      count: Math.min(30, Math.max(1, parseInt(el('ai-count').value, 10) || 10)),
+      topics: el('ai-topics').value, mode: mode
+    };
+    var mix = {};
+    ['single', 'multi', 'judge'].forEach(function (k, i) {
+      var id = ['ai-mix-single', 'ai-mix-multi', 'ai-mix-judge'][i];
+      var v = parseInt(el(id).value, 10);
+      if (!isNaN(v) && v > 0) mix[k] = v;
+    });
+    if (Object.keys(mix).length) spec.mix = mix;
+    return spec;
+  }
+
+  function generateAi(mode) {
+    var b = el('ai-gen');
+    b.disabled = true; b.textContent = '生成中…';
+    el('ai-result-note').textContent = '正在保存设置并调用 AI（最多约 90 秒），请稍候…';
+    var mac = el('ai-device').value;
+    var body = {
+      spec: aiSpec(mode), bank_id: el('ai-bank').value,
+      device_mac: mac, focus_weak: !!mac
+    };
+    // 先静默保存：刚改的教材/进度/新 Key 立即生效，所见即所得
+    saveAiConfig(null, true).then(function () {
+      return api('/api/admin/ai/generate', body);
+    }).then(function (res) {
+      b.disabled = false; b.textContent = '生成预览';
+      if (!requireAuth(res)) return;
+      if (!res.data.ok) {
+        el('ai-result-note').textContent = res.data.detail || '生成失败';
+        toast(res.data.detail || '生成失败'); return;
+      }
+      renderPreview(res.data.questions || []);
+      var pg = res.data.progress || {};
+      el('ai-result-note').textContent =
+        '来源：' + (res.data.source === 'ai' ? 'AI（' + (res.data.model || '') + '）' : '离线模板') +
+        '　' + (res.data.note || '') + '　进度：' + (pg.scope || '');
+      toast('已生成 ' + (res.data.questions || []).length + ' 道，勾选后可入库');
+    }).catch(function () {
+      b.disabled = false; b.textContent = '生成预览';
+      el('ai-result-note').textContent = '生成请求失败，请检查网络或 Key';
+      toast('生成请求失败');
+    });
+  }
+
+  function applyAi() {
+    var picks = [];
+    var nodes = document.querySelectorAll('.ai-pick');
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i].checked) picks.push(aiPreview[parseInt(nodes[i].getAttribute('data-i'), 10)]);
+    }
+    if (!picks.length) { toast('请先勾选要入库的题目'); return; }
+    var b = el('ai-apply');
+    b.disabled = true;
+    api('/api/admin/ai/apply', {
+      questions: picks, bank_id: el('ai-bank').value, mode: 'append'
+    }).then(function (res) {
+      b.disabled = false;
+      if (!requireAuth(res)) return;
+      if (!res.data.ok) { toast(res.data.detail || '入库失败'); return; }
+      toast('已加入 ' + res.data.added + ' 道（跳过重复 ' + (res.data.skipped || 0) +
+        ' 道），题库现有 ' + res.data.total + ' 道');
+      renderPreview([]);
+      loadState().then(fillAiBanks);
+    }).catch(function () { b.disabled = false; toast('入库失败'); });
+  }
+
+  function renderLearning(rows, detail) {
+    learnRows = rows || [];
+    var box = el('learn-cards');
+    box.innerHTML = '';
+    if (!learnRows.length) {
+      box.innerHTML = '<p class="hint">还没有答题记录。孩子答过一轮题后，这里会自动出现学情、弱项和错题。</p>';
+      el('learn-sel').innerHTML = '';
+      el('learn-detail').innerHTML = '';
+      return;
+    }
+    learnRows.forEach(function (r) {
+      var d = document.createElement('div');
+      d.className = 'learncard';
+      var acc = r.accuracy === null || r.accuracy === undefined
+        ? '—' : Math.round(r.accuracy * 100) + '%';
+      d.innerHTML = '<div class="ln">' + escHtml(r.name || '设备') +
+        ' <span style="color:var(--muted);font-weight:400;font-size:12px">' + escHtml(r.mac) + '</span></div>' +
+        '<div style="margin-top:6px">' +
+        '<span class="stat">正确率<b>' + acc + '</b></span>' +
+        '<span class="stat">已答题<b>' + r.total + '</b></span>' +
+        '<span class="stat">错题<b>' + r.wrong_count + '</b></span>' +
+        '<span class="stat">待复习<b>' + r.due_count + '</b></span></div>' +
+        '<div>弱项：' + ((r.weak || []).length
+          ? r.weak.map(function (t) { return '<span class="pill no">' + escHtml(t) + '</span>'; }).join('')
+          : '<span class="hint">暂无明显弱项</span>') + '</div>';
+      box.appendChild(d);
+    });
+    var cur = el('learn-sel').value;
+    fillSel('learn-sel', learnRows.map(function (r) {
+      return { mac: r.mac, name: (r.name || r.mac) + ' · ' + r.mac };
+    }), 'mac', 'name', cur || learnRows[0].mac);
+    renderLearnDetail(detail || null);
+  }
+
+  function renderLearnDetail(a) {
+    var box = el('learn-detail');
+    if (!a || !a.total) {
+      box.innerHTML = '<p class="hint">这台设备还没有答题记录。</p>'; return;
+    }
+    var html = '<div class="stat">正确率<b>' +
+      (a.accuracy === null ? '—' : Math.round(a.accuracy * 100) + '%') + '</b></div>' +
+      '<div class="stat">答题数<b>' + a.total + '</b></div>' +
+      '<div class="stat">轮次 / 全对<b>' + a.rounds + ' / ' + a.perfect + '</b></div>' +
+      '<div class="stat">错题 / 待复习<b>' + a.wrong_count + ' / ' + a.due_count + '</b></div>' +
+      '<div style="clear:both"></div><h3 style="margin-top:6px">薄弱知识点</h3>';
+    html += (a.weak || []).length ? a.weak.map(function (w) {
+      return '<div class="wrong-line">' + escHtml(w.topic) + ' · 正确率 ' +
+        Math.round(w.accuracy * 100) + '%（' + w.right + '/' + w.samples + '）· 掌握度 ' +
+        w.mastery + '</div>';
+    }).join('') : '<p class="hint">暂时没有明显弱项。</p>';
+    html += '<h3>错题本（' + a.wrong_count + '）</h3>';
+    html += (a.wrong || []).length ? a.wrong.slice(0, 25).map(function (w) {
+      return '<div class="wrong-line">' +
+        (w.due ? '<span class="pill no">待复习</span>' : '<span class="pill">已安排</span>') +
+        '<span class="pill">' + escHtml(w.topic || w.subject || '综合') + '</span>' +
+        escHtml(w.text) + ' · 错 ' + w.count + ' 次</div>';
+    }).join('') : '<p class="hint">没有错题记录。</p>';
+    box.innerHTML = html;
+  }
+
+  function loadLearning(mac) {
+    var path = '/api/admin/learning' + (mac ? '?mac=' + encodeURIComponent(mac) : '');
+    return api(path).then(function (res) {
+      if (!requireAuth(res)) return;
+      if (!res.data.ok) { toast(res.data.detail || '读取学情失败'); return; }
+      var rows = res.data.devices || [];
+      renderLearning(rows, res.data.detail);
+      // 首次进入没带 mac：补拉一次第一台设备的明细
+      if (!mac && rows.length) return loadLearning(rows[0].mac);
+    }).catch(function () { toast('读取学情失败'); });
+  }
+
   // ---------- 交互 ----------
 
   function switchTab(name) {
-    ['quiz', 'import', 'devices', 'settings'].forEach(function (n) {
+    ['quiz', 'ai', 'learning', 'import', 'devices', 'settings'].forEach(function (n) {
       el('tab-' + n).style.display = n === name ? 'block' : 'none';
       el('tabbtn-' + n).className = n === name ? '' : 'off';
     });
     if (name === 'devices') refreshDevices();
     if (name === 'import') syncImportBank();
+    if (name === 'ai') loadAiConfig();
+    if (name === 'learning') loadLearning(el('learn-sel').value || '');
   }
 
   el('login-btn').onclick = function () {
@@ -1025,9 +1471,42 @@
   };
   el('pwd').onkeydown = function (e) { if (e.key === 'Enter') el('login-btn').click(); };
   el('logout').onclick = function () { api('/api/admin/logout', {}).then(showLogin); };
-  ['quiz', 'import', 'devices', 'settings'].forEach(function (n) {
+  ['quiz', 'ai', 'learning', 'import', 'devices', 'settings'].forEach(function (n) {
     el('tabbtn-' + n).onclick = function () { switchTab(n); };
   });
+
+  el('ai-save').onclick = function () { saveAiConfig(); };
+  el('ai-test').onclick = testAi;
+  el('ai-clear').onclick = function () {
+    if (!confirm('清除已保存的 API Key？之后出题会自动改用离线模板。')) return;
+    api('/api/admin/ai/config', { clear_key: true }).then(function (res) {
+      if (!requireAuth(res)) return;
+      aiConfig = res.data.config;
+      el('ai-key').value = '';
+      el('ai-keyhint').textContent = '当前未配置 API Key';
+      toast('已清除 Key');
+    });
+  };
+  el('ai-gen').onclick = function () { generateAi('auto'); };
+  el('ai-gen-offline').onclick = function () { generateAi('offline'); };
+  el('ai-apply').onclick = applyAi;
+  el('ai-all').onchange = function () {
+    var on = el('ai-all').checked;
+    var nodes = document.querySelectorAll('.ai-pick');
+    for (var i = 0; i < nodes.length; i++) nodes[i].checked = on;
+  };
+  el('learn-refresh').onclick = function () { loadLearning(el('learn-sel').value || ''); };
+  el('learn-sel').onchange = function () { loadLearning(el('learn-sel').value || ''); };
+  el('learn-clear').onclick = function () {
+    var mac = el('learn-sel').value;
+    if (!mac) { toast('请先选择设备'); return; }
+    if (!confirm('清空这台设备的全部学情、错题与弱项记录？题库和上网时间不受影响。')) return;
+    api('/api/admin/learning/clear', { mac: mac }).then(function (res) {
+      if (!requireAuth(res)) return;
+      toast('已清空');
+      loadLearning(mac);
+    });
+  };
 
   el('bank-sel').onchange = function () {
     var b = banks.filter(function (x) { return x.id === el('bank-sel').value; })[0];

@@ -24,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 import admin_api
+import learning
 import router_adapter
 import schedule
 import store
@@ -211,7 +212,7 @@ def public_question(q):
         "id": q["id"], "text": q["text"], "options": q["options"],
         "type": q["type"], "stage": q.get("stage", ""),
         "grade": q.get("grade", ""), "subject": q.get("subject", ""),
-        "star": q.get("star", 2),
+        "star": q.get("star", 2), "topic": learning.topic_of(q),
     }
 
 
@@ -219,10 +220,22 @@ def start_round(ip, mac, bank, tier_index):
     tier = bank["tiers"][tier_index]
     pool = bank["questions"]
     n = max(1, min(int(tier["questions"]), len(pool)))
+    # 智能组卷：到期错题 / 类似题 + 弱项加权 + 三种题型混合
+    try:
+        questions = learning.pick_questions(pool, mac, n)
+        if not questions:
+            questions = random.sample(pool, n)
+    except Exception as exc:
+        log("PICK-FAIL mac=%s err=%s（回退随机组卷）" % (mac, exc))
+        questions = random.sample(pool, n)
+    try:
+        focus = learning.weak_topics_for(mac, 3)
+    except Exception:
+        focus = []
     sess = {
         "bank_id": bank["id"], "bank_name": bank["name"], "mac": mac,
         "tier": tier_index, "minutes": int(tier["minutes"]),
-        "questions": random.sample(pool, n),
+        "questions": questions, "focus": focus,
         "idx": 0, "results": [], "ts": time.time(),
     }
     with _mutex:
@@ -255,6 +268,7 @@ def round_payload(ip, sess):
         "index": idx,
         "results": sess["results"],
         "question": public_question(sess["questions"][idx]),
+        "focus": sess.get("focus") or [],
         "locked_for": locked_seconds(ip),
     }
 
@@ -977,6 +991,15 @@ class Handler(BaseHTTPRequestHandler):
             total = len(sess["questions"])
             results = list(sess["results"])
             all_ok = all(results)
+
+        # 学情：逐题记入错题本 / 知识点掌握度，一轮结束记轮次。
+        # 记录失败绝不能影响判卷与放行。
+        try:
+            learning.record_answer(sess["mac"], q, ok)
+            if idx >= total:
+                learning.record_round(sess["mac"], all_ok)
+        except Exception as exc:
+            log("LEARNING-FAIL mac=%s err=%s" % (sess["mac"], exc))
 
         feedback = {
             "ok": True,

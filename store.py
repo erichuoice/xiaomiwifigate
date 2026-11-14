@@ -14,6 +14,7 @@
 题目字段：
   id / stage(小学|初中) / grade(年级) / subject(科目) / type(single|multi|judge)
   text / options[] / answer(int 或 int[]) / explain / star(1-5)
+  topic(知识点，弱项分析用) / source(builtin|import|ai|offline)
 
 内置题库在 question_bank.json；首次启动按学段拆成「小学题库」「初中题库」。
 """
@@ -155,6 +156,9 @@ def validate_question(q, index=1, used=None):
         "answer": answer,
         "explain": str(q.get("explain") or q.get("解析") or "").strip()[:400],
         "star": star,
+        # 3.6.0：知识点用于弱项分析与错题变式；source 标记题目来源
+        "topic": str(q.get("topic") or q.get("知识点") or "").strip()[:24],
+        "source": str(q.get("source") or q.get("来源") or "").strip()[:16],
     }
 
 

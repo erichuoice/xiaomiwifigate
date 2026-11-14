@@ -10,7 +10,10 @@ import re
 import time
 from urllib.parse import parse_qs, urlparse
 
+import ai_bank
 import importer
+import learning
+import progress
 import router_adapter
 import schedule
 import store
@@ -277,5 +280,87 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
         name = "wifi-gate-%s.csv" % re.sub(r"[^\w\-]+", "", bank["id"])
         return 200, Raw(importer.bank_to_csv(bank["questions"]),
                         "text/csv; charset=utf-8", name), None
+
+    # ---- AI 出题（3.6.0）：密钥只进 state/ai.json，响应一律打码 ----
+    if path == "/api/admin/ai/config" and method == "GET":
+        return 200, {"ok": True, "config": ai_bank.public_config()}, None
+
+    if path == "/api/admin/ai/config" and method == "POST":
+        try:
+            cfg = ai_bank.save_config(_body(raw))
+        except (ai_bank.AIError, TypeError, ValueError) as exc:
+            return 400, {"ok": False, "detail": str(exc)}, None
+        return 200, {"ok": True, "config": cfg}, None
+
+    if path == "/api/admin/ai/test" and method == "POST":
+        try:
+            res = ai_bank.test_connection()
+        except ai_bank.AIError as exc:
+            return 502, {"ok": False, "detail": str(exc)}, None
+        return 200, dict(res, ok=True), None
+
+    if path == "/api/admin/ai/generate" and method == "POST":
+        data = _body(raw)
+        spec = dict(data.get("spec") if isinstance(data.get("spec"), dict) else data)
+        spec.pop("api_key", None)
+        spec.pop("questions", None)
+        bid = data.get("bank_id") or spec.get("bank_id")
+        bank = st.bank(bid) if bid else st.first_bank()
+        if bank:
+            spec.setdefault("avoid", [q["text"] for q in bank["questions"]][:600])
+        mac = str(data.get("device_mac") or "").strip().lower()
+        try:
+            if mac and data.get("focus_weak", True):
+                result = ai_bank.generate_for_device(spec, learning.ability(mac))
+            else:
+                result = ai_bank.generate(spec)
+        except (ai_bank.AIError, TypeError, ValueError) as exc:
+            return 502, {"ok": False, "detail": str(exc)}, None
+        return 200, dict(result, ok=True), None
+
+    if path == "/api/admin/ai/apply" and method == "POST":
+        data = _body(raw)
+        questions = data.get("questions")
+        if not isinstance(questions, list) or not questions:
+            return 400, {"ok": False, "detail": "没有可入库的题目，请先生成预览"}, None
+        mode = "replace" if str(data.get("mode")) == "replace" else "append"
+        try:
+            saved = st.apply_questions(_bank_id(st, data), questions, mode=mode)
+        except (store.StoreError, TypeError, ValueError) as exc:
+            return 400, {"ok": False, "detail": str(exc)}, None
+        return 200, dict(saved, ok=True, banks=st.banks()), None
+
+    # ---- 学情：错题本 / 弱项 / 复习进度 ----
+    if path == "/api/admin/learning" and method == "GET":
+        mac = str((query.get("mac") or [""])[0]).strip().lower()
+        owner = {}
+        for b in st.banks():
+            for m in b["devices"]:
+                owner[m.lower()] = {"bank_id": b["id"], "bank_name": b["name"]}
+        try:
+            names = adapter.names_by_mac()
+        except Exception:
+            names = {}
+        rows = []
+        for m in sorted(set(owner) | set(learning.all_devices())):
+            a = learning.ability(m)
+            rows.append({
+                "mac": m,
+                "name": names.get(m) or owner.get(m, {}).get("bank_name") or "（未命名设备）",
+                "bank_id": owner.get(m, {}).get("bank_id", ""),
+                "total": a["total"], "accuracy": a["accuracy"],
+                "rounds": a["rounds"], "last": a["last"],
+                "wrong_count": a["wrong_count"], "due_count": a["due_count"],
+                "weak": [w["topic"] for w in a["weak"][:3]],
+            })
+        return 200, {"ok": True, "devices": rows,
+                     "detail": learning.ability(mac) if mac else None}, None
+
+    if path == "/api/admin/learning/clear" and method == "POST":
+        mac = str(_body(raw).get("mac") or "").strip().lower()
+        if not mac:
+            return 400, {"ok": False, "detail": "请指定设备 MAC"}, None
+        learning.clear(mac)
+        return 200, {"ok": True}, None
 
     return 404, {"ok": False, "detail": "接口不存在"}, None

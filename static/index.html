@@ -211,7 +211,7 @@
     info: null, question: null, index: 0, total: 0, results: [],
     picked: [], locked: false, busy: false, answered: false,
     next: null, tier: 0, timer: null, target: null, targetName: '',
-    cdTimer: null, clockSkew: 0, schTimer: null
+    cdTimer: null, clockSkew: 0, schTimer: null, focus: []
   };
   var LETTERS = 'ABCDEFGH';
 
@@ -420,7 +420,9 @@
     if (q.stage) items.push(q.stage + (q.grade ? ' · ' + q.grade : ''));
     if (q.subject) items.push(q.subject);
     if (q.type === 'multi') items.push('多选');
-    if (q.type === 'judge') items.push('判断');
+    else if (q.type === 'judge') items.push('判断');
+    else items.push('单选');
+    if (q.topic) items.push(q.topic);
     items.forEach(function (t, i) {
       var s = document.createElement('span');
       s.className = 'chip' + (i === 0 && q.stage ? '' : ' plain');
@@ -432,6 +434,12 @@
       st.className = 'chip star';
       st.textContent = '难度 ' + new Array(Math.max(1, Math.min(5, q.star)) + 1).join('★');
       box.appendChild(st);
+    }
+    if (S.index === 0 && S.focus && S.focus.length) {
+      var f = document.createElement('span');
+      f.className = 'chip focus';
+      f.textContent = '本轮重点练习：' + S.focus.join('、');
+      box.appendChild(f);
     }
   }
 
@@ -474,6 +482,7 @@
     S.question = payload.question;
     S.index = payload.index;
     S.total = payload.total;
+    if (payload.focus) S.focus = payload.focus;
     S.results = payload.results || [];
     S.next = null;
     S.answered = false;

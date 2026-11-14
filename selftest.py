@@ -14,15 +14,21 @@ import json
 import os
 import random
 import re
+import shutil
 import sys
 import time
+import tempfile
 import urllib.error
 import urllib.request
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
+import ai_bank  # noqa: E402
+import learning  # noqa: E402
+import progress  # noqa: E402
 import router_adapter  # noqa: E402
 import schedule  # noqa: E402
+import store  # noqa: E402
 
 HOST = os.environ.get("WIFIGATE_HOST", "http://127.0.0.1:8080")
 SEED = random.randint(1, 250)
@@ -331,6 +337,13 @@ def main():
         except ValueError:
             grants_before = {}
 
+    # 3.6.0：自检会触碰 AI 配置与学情文件，跑完按原始字节还原
+    extra_paths = {}
+    for _name in ("ai.json", "learning.json"):
+        _p = os.path.join(BASE, "state", _name)
+        extra_paths[_p] = (open(_p, "rb").read()
+                           if os.path.exists(_p) else None)
+
     # ---- 设备识别与归属 ----
     code, info = admin("/api/quiz")
     mac = info.get("mac") or ""
@@ -579,6 +592,80 @@ def main():
     code, res = start(0)
     check("超出错误次数后锁定", code == 429, "HTTP %s" % code)
 
+    # ---- AI 出题与学情接口（3.6.0；题库改动由下面的整份还原清理）----
+    code, cur_state = admin("/api/admin/state")
+    ai_bank_id = (cur_state.get("banks") or [{}])[0].get("id", "")
+    code, res = admin("/api/admin/ai/config")
+    aicfg = res.get("config") or {}
+    check("AI 配置接口返回服务商预设与当前进度",
+          code == 200 and bool(aicfg.get("presets")) and
+          bool((aicfg.get("progress") or {}).get("label")),
+          (aicfg.get("progress") or {}).get("label", ""))
+    check("AI 配置永不回显 api_key 字段",
+          "api_key" not in (res.get("config") or {}))
+    check("AI 配置提供广州教材版本选项", len(aicfg.get("textbooks") or []) >= 3)
+
+    code, res = admin("/api/admin/ai/config", {
+        "provider": "deepseek", "api_key": "sk-selftest-abcdefgh",
+        "textbook": "人教版（全科目）", "progress_auto": False,
+        "term_scope": "第 1—2 单元（自检用）",
+    })
+    aicfg = res.get("config") or {}
+    check("后台填写 API Key 只回显后四位",
+          code == 200 and aicfg.get("has_key") is True and
+          aicfg.get("key_hint") == "sk-****efgh" and
+          "sk-selftest" not in json.dumps(res, ensure_ascii=False),
+          aicfg.get("key_hint", ""))
+    check("手动教学进度范围保存到配置",
+          aicfg.get("progress_auto") is False and
+          (aicfg.get("progress") or {}).get("scope") == "第 1—2 单元（自检用）")
+    code, res = admin("/api/admin/ai/config", {"api_key": "sk-****efgh"})
+    check("打码 Key 不会覆盖已保存密钥",
+          (res.get("config") or {}).get("key_hint") == "sk-****efgh")
+    code, res = admin("/api/admin/ai/config", {"clear_key": True})
+    check("清除 Key 后配置显示未配置",
+          (res.get("config") or {}).get("has_key") is False)
+    code, res = admin("/api/admin/ai/test", {})
+    check("未配置 Key 时测试连接如实报错", code == 502 and
+          "API Key" in (res.get("detail") or ""), res.get("detail", "")[:40])
+
+    code, res = admin("/api/admin/ai/generate", {
+        "spec": {"stage": "小学", "grade": "四年级", "subject": "数学",
+                 "count": 6, "mode": "offline"},
+        "bank_id": ai_bank_id, "focus_weak": False,
+    })
+    qs = res.get("questions") or []
+    qtypes = {q.get("type") for q in qs}
+    check("离线生成单选/多选/判断混合题",
+          code == 200 and len(qs) == 6 and qtypes == {"single", "multi", "judge"},
+          str(sorted(qtypes)))
+    check("生成题带知识点且含广州本地情境",
+          all(q.get("topic") and q.get("source") for q in qs) and
+          any(any(w in q.get("text", "") for w in
+                  ("广州", "珠江", "早茶", "陈家祠", "白云山")) for q in qs))
+    check("生成结果携带当前教学进度",
+          bool((res.get("progress") or {}).get("scope")))
+    code, res = admin("/api/admin/ai/apply",
+                      {"questions": [], "bank_id": ai_bank_id})
+    check("没有预览题时入库被拒绝", code == 400)
+    code, res = admin("/api/admin/ai/apply",
+                      {"questions": qs[:2], "bank_id": ai_bank_id, "mode": "append"})
+    check("预览题目可追加进题库", code == 200 and res.get("added") == 2,
+          "新增 %s 道" % res.get("added"))
+
+    code, res = admin("/api/admin/learning")
+    check("学情接口返回设备汇总列表",
+          code == 200 and isinstance(res.get("devices"), list))
+    code, res = admin("/api/admin/learning?mac=" + (mac or "02:00:00:00:00:77"))
+    detail = res.get("detail") or {}
+    check("学情明细含正确率/弱项/错题字段",
+          code == 200 and all(k in detail for k in
+                              ("accuracy", "weak", "wrong", "due_count")))
+    code, res = admin("/api/admin/learning/clear", {"mac": "02:00:00:00:00:77"})
+    check("清空指定设备学情接口可用", code == 200 and res.get("ok") is True)
+    code, res = admin("/api/admin/learning/clear", {})
+    check("清空学情缺少 MAC 被拒绝", code == 400)
+
     # ---- 还原 ----
     code, res = admin("/api/admin/backup/import", {"data": orig_backup})
     check("备份整份还原", code == 200 and res.get("ok") is True,
@@ -718,6 +805,161 @@ def main():
             check("无法重登时设备列表如实报错", False, repr(exc))
     finally:
         router_adapter._get, router_adapter._post = real_get, real_post
+
+    # ---- AI 出题 / 学情离线单元测试（用临时目录，不碰真实 state、不联网）----
+    tmp = tempfile.mkdtemp(prefix="wg-ai-selftest-")
+    old_l, old_a = (learning.STATE, learning.PATH), (ai_bank.STATE, ai_bank.CONFIG_PATH)
+    try:
+        learning.STATE, learning.PATH = tmp, os.path.join(tmp, "learning.json")
+        ai_bank.STATE, ai_bank.CONFIG_PATH = tmp, os.path.join(tmp, "ai.json")
+
+        def ts(y, m, d, h=10):
+            return time.mktime((y, m, d, h, 0, 0, 0, 0, -1))
+
+        p = progress.current_progress(ts(2026, 11, 14))
+        check("11 月推断为第一学期·期中前后",
+              p["term_key"] == "autumn" and p["week"] == 11 and
+              p["phase"] == "期中前后", p["label"])
+        check("3 月推断为第二学期",
+              progress.current_progress(ts(2027, 3, 15))["term_key"] == "spring")
+        check("7 月推断为暑假（复习范围）",
+              progress.current_progress(ts(2026, 7, 20))["vacation"] == "summer" and
+              "复习" in progress.current_progress(ts(2026, 7, 20))["scope"])
+        p = progress.current_progress(ts(2026, 11, 14), scope="第 1—3 单元（分数）")
+        check("手动教学进度范围优先于自动推断",
+              p["manual_scope"] == "第 1—3 单元（分数）" and
+              p["scope"] == p["manual_scope"])
+        plines = "\n".join(progress.prompt_lines(
+            {"stage": "小学", "grade": "五年级", "subject": "数学",
+             "textbook": progress.DEFAULT_TEXTBOOK}, p))
+        check("进度段落含学期/范围/教材/不超纲",
+              all(w in plines for w in ("第一学期", "第 1—3 单元", "教材", "不超纲")))
+        pr = ai_bank.build_prompt(
+            {"stage": "小学", "grade": "五年级", "subject": "数学", "count": 9},
+            ai_bank.split_mix(9))
+        check("命题 prompt 含进度/广州/三种题型",
+              "【教学进度" in pr and "广东省广州市" in pr and
+              all(w in pr for w in ("单选题", "多选题", "判断题")))
+
+        ai_bank.save_config({"api_key": "sk-unit-1234wxyz"})
+        check("密钥只回显后四位", ai_bank.public_config()["key_hint"] == "sk-****wxyz")
+        check("配置接口不含明文密钥",
+              "sk-unit-1234wxyz" not in json.dumps(ai_bank.public_config()))
+        ai_bank.save_config({"api_key": "sk-****wxyz"})
+        check("打码输入不覆盖已存密钥",
+              ai_bank.load_config()["api_key"] == "sk-unit-1234wxyz")
+        ai_bank.save_config({"clear_key": True})
+        check("清除密钥生效", not ai_bank.load_config()["api_key"])
+
+        gen_qs = ai_bank.offline_generate(
+            {"stage": "小学", "grade": "四年级", "subject": "数学", "count": 12})
+        clean = store.validate_questions(gen_qs)
+        check("离线随机出题 12 道且题干不重复",
+              len(gen_qs) == 12 and len({q["text"] for q in gen_qs}) == 12)
+        check("生成题保留 topic/source 且通过题库校验",
+              len(clean) == 12 and all(c["topic"] and c["source"] for c in clean) and
+              all(clean[i]["topic"] == gen_qs[i]["topic"] for i in range(12)))
+        mix = ai_bank.split_mix(9)
+        check("题型自动分配覆盖三种且总数正确",
+              sum(mix.values()) == 9 and all(mix.get(k, 0) > 0 for k in
+                                             ("single", "multi", "judge")))
+        raw_ai = [
+            {"type": "single", "text": "广州塔高约 600 米，600 = ?",
+             "options": ["6×10²", "6×10³", "0.6×10³", "60×10"], "answer": "A",
+             "explain": "600 = 6×10²。", "topic": "科学记数法"},
+            {"type": "multi", "text": "哪些是岭南水果？",
+             "options": ["荔枝", "龙眼", "牡丹", "菠萝"], "answer": "A,B,D",
+             "explain": "荔枝龙眼菠萝为岭南水果。", "topic": "乡土地理"},
+            {"type": "judge", "text": "广州是广东省省会。",
+             "options": ["正确", "错误"], "answer": "正确",
+             "explain": "广州是省会。", "topic": "乡土地理"},
+            {"type": "single", "text": "bad", "options": ["a"], "answer": 0},
+        ]
+        parsed = ai_bank.normalize_ai_questions(
+            raw_ai, {"stage": "初中", "grade": "八年级", "subject": "数学"})
+        check("AI 返回解析字母/中文答案并剔除非题",
+              len(parsed) == 3 and parsed[0]["answer"] == 0 and
+              parsed[1]["answer"] == [0, 1, 3] and parsed[2]["answer"] == 0,
+              str([q["answer"] for q in parsed]))
+
+        M = "02:00:00:00:00:66"
+        pool = [{"id": "q%02d" % i, "text": "题%d" % i, "subject": "数学",
+                 "type": ["single", "multi", "judge"][i % 3],
+                 "topic": "分数" if i < 10 else ("小数" if i < 20 else "加减法"),
+                 "options": ["A", "B"], "answer": 0, "explain": ""}
+                for i in range(30)]
+        for i in range(4):
+            learning.record_answer(M, pool[i], False)
+        for i in range(10, 15):
+            learning.record_answer(M, pool[i], i < 14)
+        for i in range(20, 24):
+            learning.record_answer(M, pool[i], True)
+        ability = learning.ability(M)
+        check("学情统计总题数/正确率/错题数",
+              ability["total"] == 13 and ability["wrong_count"] == 5 and
+              ability["accuracy"] == round(8 / 13, 3),
+              "%s 题 / %s 错题 / %s 正确率" %
+              (ability["total"], ability["wrong_count"], ability["accuracy"]))
+        check("弱项识别（分数掌握度最低）",
+              bool(ability["weak"]) and ability["weak"][0]["topic"] == "分数",
+              str([w["topic"] for w in ability["weak"]]))
+        later = time.time() + 3 * 3600
+        check("错题按间隔安排到期复习", learning.ability(M, later)["due_count"] >= 4)
+        topic_hits, over_cap = {}, 0
+        for _ in range(200):
+            picked = learning.pick_questions(pool, M, 6, later)
+            c = {}
+            for q in picked:
+                k = learning.topic_of(q)
+                c[k] = c.get(k, 0) + 1
+                topic_hits[k] = topic_hits.get(k, 0) + 1
+            if c and max(c.values()) > 3:
+                over_cap += 1
+        check("弱项加权出题但单知识点不占满一轮",
+              topic_hits.get("分数", 0) > topic_hits.get("加减法", 0) and
+              over_cap == 0, "超上限 %s/200 次" % over_cap)
+        one = learning.pick_questions(pool, M, 6, later)
+        check("一轮题型混合且不重复",
+              len({q["id"] for q in one}) == len(one) and
+              len({q["type"] for q in one}) >= 2)
+        check("清空学情后无残留设备",
+              learning.clear(M) and learning.all_devices() == [])
+        dev_gen = ai_bank.generate_for_device(
+            {"count": 6, "mode": "offline", "subject": "数学"},
+            {"weak": [{"topic": "分数"}], "wrong": []})
+        check("按设备弱项生成专项题", len(dev_gen["questions"]) == 6)
+    finally:
+        learning.STATE, learning.PATH = old_l
+        ai_bank.STATE, ai_bank.CONFIG_PATH = old_a
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # ---- 3.6.0 前端静态检查 ----
+    check("后台提供 API Key 密码框并说明只存 state/ai.json",
+          'id="ai-key" type="password"' in admin_html and
+          "state/ai.json" in admin_html and "sk-****" in admin_html)
+    check("后台有 AI 出题与学情两个页签",
+          all(w in admin_html for w in
+              ("tabbtn-ai", "tab-learning", "ai-progress", "ai-preview",
+               "learn-cards", "learn-detail")))
+    check("后台调用全部 AI/学情接口",
+          all(("/api/admin/ai/" + w) in admin_html for w in
+              ("config", "test", "generate", "apply")) and
+          "/api/admin/learning" in admin_html)
+    check("后台可手动覆盖教学进度", "ai-prog-auto" in admin_html and
+          "ai-scope" in admin_html and "ai-textbook" in admin_html)
+    check("答题页显示知识点与本轮重点", "q.topic" in index_html and
+          "本轮重点练习" in index_html)
+
+    for _p, _raw in extra_paths.items():
+        try:
+            if _raw is None:
+                if os.path.exists(_p):
+                    os.remove(_p)
+            else:
+                with open(_p, "wb") as _f:
+                    _f.write(_raw)
+        except OSError:
+            pass
 
     print("\n结果：%s 项通过，%s 项失败" % (passed, failed))
     sys.exit(1 if failed else 0)
