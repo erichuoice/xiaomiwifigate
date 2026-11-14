@@ -76,7 +76,7 @@ python3 simulate_device.py --url http://<内网IP>:8080 \
         --password 管理密码 --mode wrong --rounds 3
 ```
 
-自检 262 项：
+自检 279 项：
 
 ```bash
 python3 selftest.py
@@ -101,7 +101,7 @@ host 模式下不写 `ports:`，端口由 `config.json` 决定。
 | `./gate.sh up` / `down` / `restart` | 启停 |
 | `./gate.sh status` / `logs` | 状态、健康检查、跟随日志 |
 | `./gate.sh check` | 配置与权限检查 |
-| `./gate.sh selftest` | 容器内 262 项全链路自检 |
+| `./gate.sh selftest` | 容器内 279 项全链路自检 |
 | `./gate.sh sim --mode correct --password xxx --tier 1` | 容器内模拟手机答题 |
 | `./gate.sh probe` | 只读探测路由器（不改规则） |
 | `./gate.sh dryrun` / `live` | 切换演练 / 真实放行 |
@@ -240,6 +240,9 @@ POST /api/answer    ← 逐题提交，返回对错 + 正确答案 + 解析 + �
         ↓ 配额用完
 调用 set_mac_filter?mac=…&wan=0  → 重新断开，需再答一次
 ```
+
+> 题库的「限制方式」选**限速**时，最后一步不是断网，而是调用路由器 QoS
+> 把该设备降到设定速度（外网仍可用），答题成功后清零恢复全速，见 5.6。
 
 判卷规则（3.12.0 起**按题库各自配置**，在后台「题库」页签的「放行规则」里改；
 答哪套题就按那套题的规则判卷）：
@@ -460,6 +463,45 @@ python3 gatectl.py on  huo-2     # 放行，不给分钟数 = 永久
 新增接口：`GET/POST /api/admin/auto-bank`、`POST /api/admin/auto-bank/run`、
 `POST /api/admin/auto-bank/clear`。
 
+### 5.6 限制方式：断网还是限速（3.14.0 起）
+
+原来答完到点、或进入禁止答题时段，程序会直接 `wan=0` 把设备断网。
+3.14.0 起每套题库可以选**另一种限制方式：限速**——不切断外网，只把这台设备的
+上下行降到指定速度，孩子仍然能上网（很慢），**答对题就恢复全速**。
+
+后台「题库」页签 → 每个题库下方的「**限制方式**」：
+
+| 选项 | 到点后的行为 | 适用 |
+|---|---|---|
+| **直接断网（默认）** | 调 `set_mac_filter?wan=0`，完全断外网，老行为 | 想让孩子彻底停下来 |
+| **限速** | 调路由器 QoS 把上下行限到设定值（KB/s），外网仍然可用 | 想让孩子「能上网但不好玩」/ 防止刷视频 |
+
+限速值单位是 **KB/s**（和小米后台一致）：**1 Mbps ≈ 125 KB/s，2 Mbps ≈ 250 KB/s，
+10 Mbps ≈ 1250 KB/s**。默认 50 KB/s（约 0.4 Mbps，只够发消息和看文字）。
+
+实现走的是 BE7000 官方接口（实测，不是抓包推测）：
+
+```
+GET  /api/misystem/qos_info     → status{on,mode} + 每台设备 qos.downmax/upmax(KB/s)
+POST /api/misystem/qos_limits   → data=[{"mac","maxup","maxdown"}]，单位 KB/s，0=不限
+GET  /api/misystem/qos_switch   → on=1 开启 QoS
+GET  /api/misystem/qos_mode     → mode=3 自定义限速模式
+```
+
+程序用到时会自动把 QoS 打开、切到「自定义限速」模式（只改这两个开关），
+并且只限制题库里的设备，家里其它设备不受影响。
+
+几个边界：
+
+- 限速模式下「到点」不会断网，只是变慢；**答对题、家长点「解除限速」都会恢复全速**，
+  解除限速同样可以填分钟数（0 = 永久），到期重新限速。
+- 后台设备页的按钮会跟着变：断网题库显示「断网 / 放行」，限速题库显示「限速 / 解除限速」。
+- 限速值**不是线性精确的**：实测小米的限速器有效速率约为设定值的 0.6–0.8 倍
+  （设 250 KB/s 实测约 1.2–1.6 Mbps）。想要「实际 2 Mbps」就填 400 KB/s 左右；
+  想按标称值填就按 125 KB/s = 1 Mbps 换算。
+- 演练模式（`dry_run=true`）下限速接口同样只记日志不发请求，日志里是 `[DRY-RUN] LIMIT`。
+- 新增接口：`POST /api/admin/device/limit`（`{"mac":…,"kbps":0|N}`，0 = 解除限速）。
+
 ---
 
 ## 六、上线前必须做的一步
@@ -504,7 +546,7 @@ python3 gatectl.py on  huo-2     # 放行，不给分钟数 = 永久
 | `static/admin.html` | 管理后台（题库 / AI 出题 / 学情 / 导入 / 设备 / 设置） |
 | `simulate_device.py` | 模拟手机走完整流程 |
 | `probe_miwifi.py` | 只读探测路由器（不改任何规则） |
-| `selftest.py` | 262 项全链路自检（含时段、进度、学情、出题纯函数单测与前后端约定检查） |
+| `selftest.py` | 279 项全链路自检（含时段、进度、学情、出题纯函数单测与前后端约定检查） |
 | `docker-entrypoint.py` `Dockerfile` `docker-compose.yml` `gate.sh` | 常驻部署与运维 |
 
 运行时文件（`state/`，会随容器持久化）：

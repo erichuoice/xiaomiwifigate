@@ -379,6 +379,13 @@
       : '答错不扣分也不加题，') + '本轮正确率达到 ' + rate + '% 就放行。';
   }
 
+  function limitText(t) {
+    // 3.14.0：限制方式可能是「限速」而不是断网
+    var r = (t && t.limit_rule) || (S.info && S.info.limit_rule) || {};
+    if (r.mode !== 'throttle') return '';
+    return '当前是限速模式：答对后解除限速 ' + (r.kbps || 50) + ' KB/s 的限速。';
+  }
+
   function renderTiers(t) {
     var box = el('tiers');
     box.innerHTML = '';
@@ -386,7 +393,7 @@
     el('pick-title').textContent = bankName ? bankName + ' · 选一个目标开始答题'
                                            : '选一个目标开始答题';
     var who = S.target ? '答对后将放行「' + label(t) + '」。' : '';
-    el('pick-desc').textContent = who + passRuleText(t);
+    el('pick-desc').textContent = who + passRuleText(t) + ' ' + limitText(t);
     var rule = ruleOf(t);
     (t.tiers || []).forEach(function (tier, i) {
       var b = document.createElement('button');

@@ -50,6 +50,8 @@ DEFAULT_TIERS = [{"questions": 3, "minutes": 30}, {"questions": 5, "minutes": 60
 # 默认放行规则：答错加题 + 正确率达标（3.12.0 起按题库各自保存）
 DEFAULT_PASS_RULE = {"pass_mode": "rate", "pass_rate_percent": 80,
                      "wrong_add_questions": 2}
+# 默认限制方式：答完题到点后直接断网；throttle = 改为限速（单位 KB/s）
+DEFAULT_LIMIT = {"limit_mode": "block", "throttle_kbps": 50}
 
 
 class StoreError(Exception):
@@ -264,6 +266,34 @@ def validate_pass_rule(src, current=None):
             "wrong_add_questions": add}
 
 
+def validate_limit_rule(src, current=None):
+    """校验「限制方式」：block = 到点直接断网；throttle = 到点降到限速。
+
+    限速值单位是 KB/s（和小米后台 QoS 页面一致），0 没有意义所以下限 1；
+    1 Mbps ≈ 125 KB/s，2 Mbps ≈ 250 KB/s。
+    """
+    src = src if isinstance(src, dict) else {}
+    current = current if isinstance(current, dict) else {}
+
+    def pick(key):
+        for d in (src, current, DEFAULT_LIMIT):
+            v = d.get(key)
+            if v is not None and v != "":
+                return v
+        return DEFAULT_LIMIT[key]
+
+    mode = str(pick("limit_mode")).strip().lower()
+    if mode not in ("block", "throttle"):
+        raise StoreError("限制方式只能是 block（断网）或 throttle（限速）")
+    try:
+        kbps = int(float(pick("throttle_kbps")))
+    except (TypeError, ValueError):
+        raise StoreError("限速值必须是数字（单位 KB/s）")
+    if not 1 <= kbps <= 1000000:
+        raise StoreError("限速值需在 1-1000000 KB/s 之间（2 Mbps ≈ 250 KB/s）")
+    return {"limit_mode": mode, "throttle_kbps": kbps}
+
+
 def validate_settings(settings, current):
     if not isinstance(settings, dict):
         raise StoreError("设置格式不正确")
@@ -307,7 +337,7 @@ def validate_macs(macs):
     return out
 
 
-def validate_bank(data, strict=True, pass_default=None):
+def validate_bank(data, strict=True, pass_default=None, limit_default=None):
     if not isinstance(data, dict):
         raise StoreError("题库格式不正确")
     name = str(data.get("name") or "").strip()[:24]
@@ -322,6 +352,7 @@ def validate_bank(data, strict=True, pass_default=None):
     # 放行规则存在题库上：老题库没有这几个字段时沿用传进来的默认值
     # （升级时由全局设置填充，保证原本的开关原样保留）。
     rule = validate_pass_rule(data, pass_default)
+    limit = validate_limit_rule(data, limit_default)
     return {
         "id": bid,
         "name": name,
@@ -332,6 +363,8 @@ def validate_bank(data, strict=True, pass_default=None):
         "pass_mode": rule["pass_mode"],
         "pass_rate_percent": rule["pass_rate_percent"],
         "wrong_add_questions": rule["wrong_add_questions"],
+        "limit_mode": limit["limit_mode"],
+        "throttle_kbps": limit["throttle_kbps"],
     }
 
 
@@ -542,6 +575,8 @@ class Store:
         for b in banks:                       # 每套题库都带一份默认放行规则
             for k, v in DEFAULT_PASS_RULE.items():
                 b.setdefault(k, v)
+            for k, v in DEFAULT_LIMIT.items():   # 以及默认限制方式（断网）
+                b.setdefault(k, v)
         return {
             "version": 3,
             "banks": banks,
@@ -580,7 +615,8 @@ class Store:
                         "wrong_add_questions": settings["wrong_add_questions"]}
         raw_banks = data.get("banks")
         if isinstance(raw_banks, list) and raw_banks:
-            banks = [validate_bank(b, strict=False, pass_default=pass_default)
+            banks = [validate_bank(b, strict=False, pass_default=pass_default,
+                                   limit_default=DEFAULT_LIMIT)
                      for b in raw_banks]
             seen = set()
             for b in banks:
@@ -608,6 +644,8 @@ class Store:
                 "pass_mode": pass_default["pass_mode"],
                 "pass_rate_percent": pass_default["pass_rate_percent"],
                 "wrong_add_questions": pass_default["wrong_add_questions"],
+                "limit_mode": DEFAULT_LIMIT["limit_mode"],
+                "throttle_kbps": DEFAULT_LIMIT["throttle_kbps"],
             }]
         self._dedupe_devices(banks)
         schedules = schedule.normalize_all(data.get("schedules"))
@@ -696,6 +734,9 @@ class Store:
                         "bank_name": b["name"],
                         "tiers": copy.deepcopy(b["tiers"]),
                         "pass_rule": dict(rule),
+                        "limit_mode": b.get("limit_mode") or DEFAULT_LIMIT["limit_mode"],
+                        "throttle_kbps": int(b.get("throttle_kbps")
+                                             or DEFAULT_LIMIT["throttle_kbps"]),
                     })
             return out
 
@@ -714,6 +755,8 @@ class Store:
                              "questions": len(b["questions"]),
                              "devices": len(b["devices"]),
                              "tiers": len(b["tiers"]),
+                             "limit_mode": b.get("limit_mode", "block"),
+                             "throttle_kbps": b.get("throttle_kbps", 0),
                              "enabled": b["enabled"]} for b in banks],
             }
 
@@ -732,6 +775,10 @@ class Store:
                 "pass_mode": s.get("pass_mode"),
                 "pass_rate_percent": s.get("pass_rate_percent"),
                 "wrong_add_questions": s.get("wrong_add_questions"),
+            }, limit_default={
+                # 编辑已有题库时保留它原来的限制方式，新建时用默认值
+                "limit_mode": (existing or {}).get("limit_mode"),
+                "throttle_kbps": (existing or {}).get("throttle_kbps"),
             })
             if existing:
                 clean["id"] = existing["id"]

@@ -311,6 +311,52 @@ def pass_rule(bank=None):
             "rate": rate_v, "add": max(0, add_v)}
 
 
+def limit_rule(bank=None):
+    """限制方式（3.14.0：存在题库上）：block = 到点断网，throttle = 到点限速。
+
+    throttle 时用 throttle_kbps（单位 KB/s，2 Mbps ≈ 250 KB/s）限这台设备，
+    做题放行后解除限速，不会真的切断它的外网。
+    """
+    b = bank if isinstance(bank, dict) else {}
+    mode = str(b.get("limit_mode") or "block").lower()
+    try:
+        kbps = int(b.get("throttle_kbps") or 0)
+    except (TypeError, ValueError):
+        kbps = 0
+    if kbps <= 0:
+        kbps = 50
+    return {"mode": "throttle" if mode == "throttle" else "block",
+            "kbps": kbps}
+
+
+def restrict_mac(mac, bank=None, reason="到期"):
+    """按题库设定的限制方式「限制」一台设备：断网或限速。
+
+    限速模式下不切断外网，只把上下行降到题库配置的 KB/s，
+    所以孩子仍然能上网（很慢），答对题就恢复全速。
+    """
+    rule = limit_rule(bank)
+    if rule["mode"] == "throttle":
+        ADAPTER.set_limit(mac, rule["kbps"], rule["kbps"])
+        ADAPTER.set_wan(mac, True)      # 限速模式不切断，确保只是变慢
+        log("THROTTLE mac=%s %sKB/s（%s）" % (mac, rule["kbps"], reason))
+        return "throttle"
+    ADAPTER.set_wan(mac, False)
+    return "block"
+
+
+def release_mac(mac, bank=None, reason="放行"):
+    """解除限制：断网模式恢复外网；限速模式把限速清零（恢复全速）。"""
+    rule = limit_rule(bank)
+    if rule["mode"] == "throttle":
+        ADAPTER.set_limit(mac, 0, 0)
+        ADAPTER.set_wan(mac, True)
+        log("THROTTLE-OFF mac=%s（%s）" % (mac, reason))
+        return "throttle"
+    ADAPTER.set_wan(mac, True)
+    return "block"
+
+
 def locked_seconds(ip):
     cfg = STORE.snapshot()["server"]
     limit = int(cfg["max_wrong_per_window"])
@@ -371,7 +417,7 @@ def grant(ip, mac, bank_id, bank_name, minutes):
                 expire = max(int(st["ends_at"]), int(now) + 1)
                 ends_hhmm = st["ends_hhmm"]
                 granted = max(0, int(math.ceil((expire - now) / 60.0)))
-        ADAPTER.set_wan(mac, True)
+        release_mac(mac, STORE.bank(bank_id), "答题放行")
         rec.update({
             "ip": ip, "mac": mac, "at": now, "expire_at": expire,
             "minutes": granted, "bank": bank_id, "bank_name": bank_name,
@@ -392,20 +438,22 @@ def grant(ip, mac, bank_id, bank_name, minutes):
 
 
 def manual_block(mac, reason="手动断网"):
-    """家长手动断网：调路由器断开，并把放行记录标记为已回收。
+    """家长手动限制：断网模式下断开；限速模式下把设备降到题库设定的速度。
 
-    到期时间写成现在，答题页会立刻显示「已断网」，答一轮题即可恢复。
+    到期时间写成现在，答题页会立刻显示「已限制」，答一轮题即可恢复。
     """
-    ADAPTER.set_wan(mac, False)
+    mode = restrict_mac(mac, STORE.bank_for_mac(mac), reason)
     with _grants_lock:
         grants = load_grants()
         rec = dict(grants.get(mac) or {})
         now = time.time()
         rec.update({"mac": mac, "expire_at": int(now), "reblocked": True,
-                    "reblocked_at": now, "manual": True})
+                    "reblocked_at": now, "reblocked_reason": mode,
+                    "manual": True})
         grants[mac] = rec
         save_grants(grants)
-    log("MANUAL-BLOCK mac=%s（%s）" % (mac, reason))
+    log("MANUAL-%s mac=%s（%s）"
+        % ("THROTTLE" if mode == "throttle" else "BLOCK", mac, reason))
     return rec
 
 
@@ -415,12 +463,12 @@ def manual_unblock(mac, minutes):
     手动放行是家长意志，不走每日上限；也不计入 today_minutes。
     """
     minutes = max(0, int(minutes))
-    ADAPTER.set_wan(mac, True)
+    bank = STORE.bank_for_mac(mac) or {}
+    release_mac(mac, bank, "手动放行")
     with _grants_lock:
         grants = load_grants()
         rec = dict(grants.get(mac) or {})
         now = time.time()
-        bank = STORE.bank_for_mac(mac) or {}
         if rec.get("day") != today():
             rec["today_minutes"] = 0
         expire = 0 if minutes == 0 else int(now + minutes * 60)
@@ -431,8 +479,9 @@ def manual_unblock(mac, minutes):
         })
         grants[mac] = rec
         save_grants(grants)
-    log("MANUAL-ALLOW mac=%s（手动放行 %s）"
-        % (mac, "永久" if minutes == 0 else "+%smin" % minutes))
+    log("MANUAL-ALLOW mac=%s（手动放行 %s%s）"
+        % (mac, "永久" if minutes == 0 else "+%smin" % minutes,
+           "，限速已解除" if limit_rule(bank)["mode"] == "throttle" else ""))
     rec["minutes_left"] = minutes_left(rec)
     return rec
 
@@ -471,15 +520,18 @@ def reblock_worker():
                     if _sched_blocked.get(mac):
                         continue
                     try:
-                        ADAPTER.set_wan(mac, False)
+                        mode = restrict_mac(mac, STORE.bank_for_mac(mac),
+                                            "禁止答题时段")
                         _sched_blocked[mac] = True
                         rec["reblocked"] = True
                         rec["reblocked_at"] = now
                         rec["reblocked_reason"] = "schedule"
                         rec["expire_at"] = int(now)
                         changed = True
-                        log("SCHEDULE-BLOCK mac=%s（%s；下次 %s）"
-                            % (mac, st["today_text"], st["next_label"] or "—"))
+                        log("SCHEDULE-%s mac=%s（%s；下次 %s）"
+                            % ("THROTTLE" if mode == "throttle" else "BLOCK",
+                               mac, st["today_text"],
+                               st["next_label"] or "—"))
                     except Exception as exc:
                         log("SCHEDULE-BLOCK-FAIL mac=%s err=%s" % (mac, exc))
 
@@ -491,12 +543,15 @@ def reblock_worker():
                     if not expire or now < expire:
                         continue
                     try:
-                        ADAPTER.set_wan(mac, False)
+                        mode = restrict_mac(mac, STORE.bank_for_mac(mac),
+                                            "配额 %s 分钟用完" % rec.get("minutes"))
                         rec["reblocked"] = True
                         rec["reblocked_at"] = now
+                        rec["reblocked_reason"] = mode
                         changed = True
-                        log("REBLOCK mac=%s（配额 %s 分钟用完）"
-                            % (mac, rec.get("minutes")))
+                        log("%s mac=%s（配额 %s 分钟用完）"
+                            % ("THROTTLE" if mode == "throttle" else "REBLOCK",
+                               mac, rec.get("minutes")))
                     except Exception as exc:
                         log("REBLOCK-FAIL mac=%s err=%s" % (mac, exc))
                 if changed:
@@ -631,6 +686,48 @@ class Handler(BaseHTTPRequestHandler):
                 _mac_cache.clear()
             log("ADMIN 清除答题锁定（涉及 %s 个 IP）" % cleared)
             return self._json({"ok": True, "cleared": cleared})
+        # 手动限速/解除限速（3.14.0：限速作为「不切断外网」的限制方式）
+        if path == "/api/admin/device/limit":
+            if not STORE.check_session(admin_api.cookie_token(self.headers)):
+                return self._json({"ok": False, "detail": "请先登录后台"}, 401)
+            if method != "POST":
+                return self._json({"ok": False, "detail": "请用 POST"}, 405)
+            try:
+                data = json.loads(raw or b"{}")
+            except ValueError:
+                data = {}
+            mac = str(data.get("mac") or "").strip().lower()
+            if not mac:
+                return self._json({"ok": False, "detail": "请求里没有 MAC"}, 400)
+            try:
+                kbps = int(float(data.get("kbps") or 0))
+            except (TypeError, ValueError):
+                return self._json({"ok": False, "detail": "kbps 必须是数字"}, 400)
+            if kbps < 0 or kbps > 1000000:
+                return self._json(
+                    {"ok": False, "detail": "kbps 需在 0-1000000 之间"}, 400)
+            try:
+                if kbps == 0:
+                    release_mac(mac, STORE.bank_for_mac(mac), "手动解除限速")
+                else:
+                    ADAPTER.set_limit(mac, kbps, kbps)
+                    log("MANUAL-THROTTLE mac=%s %sKB/s" % (mac, kbps))
+                limits = ADAPTER.limit_of(mac)
+            except Exception as exc:
+                return self._json(
+                    {"ok": False, "detail": "路由器接口失败：%s" % exc}, 502)
+            if kbps:
+                with _grants_lock:
+                    grants = load_grants()
+                    rec = dict(grants.get(mac) or {})
+                    now = time.time()
+                    rec.update({"mac": mac, "expire_at": int(now),
+                                "reblocked": True, "reblocked_at": now,
+                                "reblocked_reason": "throttle", "manual": True})
+                    grants[mac] = rec
+                    save_grants(grants)
+            return self._json({"ok": True, "mac": mac, "kbps": kbps,
+                               "limits": limits})
         # 手动断网/放行（后台设备页按钮与 gatectl 的服务端入口）
         if path == "/api/admin/device/wan":
             if not STORE.check_session(admin_api.cookie_token(self.headers)):
@@ -650,6 +747,18 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     log("设备页拉取路由器设备列表失败：%s" % exc)
                     rows = []
+                # 每台设备当前的真实限速值（KB/s），限速模式下列表要显示
+                limits = {}
+                try:
+                    for dev in ADAPTER.qos_info().get("list") or []:
+                        q = dev.get("qos") or {}
+                        d = int(float(q.get("downmax") or 0))
+                        u = int(float(q.get("upmax") or 0))
+                        if d or u:
+                            limits[str(dev.get("mac", "")).lower()] = {
+                                "down": d, "up": u}
+                except Exception as exc:
+                    log("设备页拉取限速状态失败：%s" % exc)
                 out = []
                 seen = set()
                 for r in rows:
@@ -663,6 +772,9 @@ class Handler(BaseHTTPRequestHandler):
                         "name": names.get(mac) or r.get("name") or "",
                         "bank_id": b["id"] if b else "",
                         "bank_name": b["name"] if b else "（不受控）",
+                        "limit_mode": (b.get("limit_mode") or "block") if b else "block",
+                        "throttle_kbps": int(b.get("throttle_kbps") or 0) if b else 0,
+                        "limit": limits.get(mac, {"down": 0, "up": 0}),
                         "remaining_minutes": left,
                         "expire_at": rec.get("expire_at"),
                         "reblocked": bool(rec.get("reblocked")),
@@ -683,6 +795,9 @@ class Handler(BaseHTTPRequestHandler):
                         "mac": mac.lower(),
                         "name": names.get(mac) or "（当前不在线）",
                         "bank_id": b["id"], "bank_name": b["name"],
+                        "limit_mode": b.get("limit_mode") or "block",
+                        "throttle_kbps": int(b.get("throttle_kbps") or 0),
+                        "limit": limits.get(mac.lower(), {"down": 0, "up": 0}),
                         "remaining_minutes": left,
                         "expire_at": rec.get("expire_at"),
                         "reblocked": bool(rec.get("reblocked")),
@@ -827,6 +942,7 @@ class Handler(BaseHTTPRequestHandler):
             "ok": True, "ip": ip, "note": cfg["settings"]["note"],
             "mode": cfg["router"]["mode"], "locked_for": locked_seconds(ip),
             "pass_rule": pass_rule(),
+            "limit_rule": limit_rule(),
             "server_now": time.time(),
         }
         try:
@@ -852,6 +968,8 @@ class Handler(BaseHTTPRequestHandler):
                 "bank": {"id": t["bank_id"], "name": t["bank_name"]},
                 "tiers": t["tiers"],
                 "pass_rule": t.get("pass_rule") or pass_rule(),
+                "limit_rule": limit_rule({"limit_mode": t.get("limit_mode"),
+                                          "throttle_kbps": t.get("throttle_kbps")}),
                 "remaining_minutes": minutes_left(trec),
                 "today_minutes": granted_today(trec),
                 "is_self": t["mac"] == mac,
@@ -875,12 +993,14 @@ class Handler(BaseHTTPRequestHandler):
 
         cap = int(cfg["settings"].get("daily_cap_minutes", 0) or 0)
         used = granted_today(rec)
+        rule = limit_rule(bank)
         base.update({
             "need": True,
             "pick_target": False,
             "bank": {"id": bank["id"], "name": bank["name"]},
             "tiers": bank["tiers"],
             "pass_rule": pass_rule(bank),
+            "limit_rule": rule,
             "remaining_minutes": minutes_left(rec),
             "today_minutes": used,
             "daily_cap_minutes": cap,
@@ -888,6 +1008,12 @@ class Handler(BaseHTTPRequestHandler):
             "schedule": schedule_public(
                 schedule.window_state(scheds.get(mac), now)),
         })
+        if rule["mode"] == "throttle":
+            # 顺带把机器上真实的限速值带出来，页面/后台不用再单独查
+            try:
+                base["limited"] = ADAPTER.limit_of(mac)
+            except Exception as exc:
+                log("LIMIT-QUEUE ip=%s err=%s" % (ip, exc))
         return self._json(base)
 
     def do_POST(self):

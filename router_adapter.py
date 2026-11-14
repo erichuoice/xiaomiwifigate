@@ -225,6 +225,7 @@ class MockAdapter:
     def __init__(self, cfg, log):
         self.cfg = cfg
         self.log = log
+        self._limits = {}
 
     def resolve_mac(self, ip):
         """mock 模式没有路由器设备列表，用 IP 推导一个合法的本地 MAC。
@@ -243,6 +244,36 @@ class MockAdapter:
     def set_wan(self, mac, allow):
         action = "ALLOW" if allow else "BLOCK"
         self.log("[MOCK] %s mac=%s (未修改路由器)" % (action, mac))
+        return "mock-ok"
+
+    def ensure_qos(self):
+        """mock 模式下 QoS 恒可用。"""
+        return {"on": 1, "mode": 3}
+
+    def qos_info(self):
+        devices = [{"mac": mac, "qos": {"downmax": v["down"], "upmax": v["up"]}}
+                   for mac, v in self._limits.items()]
+        return {"code": 0, "status": {"on": 1, "mode": 3},
+                "band": {"upload": 1000000, "download": 1000000},
+                "list": devices}
+
+    def limit_of(self, mac):
+        mac = str(mac or "").strip().lower().replace("-", ":")
+        v = self._limits.get(mac)
+        if not v:
+            return {"down": 0, "up": 0}
+        return dict(v)
+
+    def set_limit(self, mac, down_kbps, up_kbps):
+        mac = str(mac or "").strip().lower().replace("-", ":")
+        down, up = int(down_kbps or 0), int(up_kbps or 0)
+        if down or up:
+            self._limits[mac] = {"down": down, "up": up}
+            self.log("[MOCK] LIMIT mac=%s down=%sKB/s up=%sKB/s（未修改路由器）"
+                     % (mac, down, up))
+        else:
+            self._limits.pop(mac, None)
+            self.log("[MOCK] LIMIT-OFF mac=%s（未修改路由器）" % mac)
         return "mock-ok"
 
     def describe(self):
@@ -464,6 +495,104 @@ class MiWifiAdapter:
                 pass
             return raw
         raise RouterError("放行接口调用失败（最后一次：%s）" % last)
+
+    # ---- 全局限速（QoS）：BE7000 官方接口，实测可用 ----
+    #
+    # GET  /api/misystem/qos_info     全局开关、模式、每台设备的 upmax/downmax（KB/s）
+    # POST /api/misystem/qos_limits   data=[{"mac","maxup","maxdown"}]，单位 KB/s，0=不限
+    # GET  /api/misystem/qos_switch   on=0|1
+    # GET  /api/misystem/qos_mode     mode=3（自定义限速模式）
+    #
+    # 只有「QoS 开启 + mode=3」时每台设备的限速才生效；BE7000 实测该模式
+    # 只限制被设过值的设备，其它设备照常全速。
+
+    QOS_INFO_PATH = "/cgi-bin/luci/;stok={stok}/api/misystem/qos_info"
+    QOS_LIMITS_PATH = "/cgi-bin/luci/;stok={stok}/api/misystem/qos_limits"
+    QOS_SWITCH_PATH = "/cgi-bin/luci/;stok={stok}/api/misystem/qos_switch"
+    QOS_MODE_PATH = "/cgi-bin/luci/;stok={stok}/api/misystem/qos_mode"
+
+    def _qos_path(self, key, default):
+        return self.cfg.get(key) or default
+
+    def _api_with_relogin(self, fn, what):
+        attempts = 2 if self._relogin_available() else 1
+        last = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return fn(self.get_stok())
+            except TokenExpired as exc:
+                last = exc
+                self.log("%s 时登录态失效（第 %s 次）：%s" % (what, attempt, exc))
+                if attempt < attempts:
+                    self.get_stok(force_refresh=True)
+        raise RouterError("%s 失败：登录态失效且无法自动恢复（%s）" % (what, last))
+
+    def _qos_call(self, path, params=None, method="GET"):
+        def go(stok):
+            url = self._base() + path.format(stok=stok)
+            if method == "GET":
+                raw = _get(url + ("?" + parse.urlencode(params) if params else ""))
+            else:
+                raw = _post(url, params or {})
+            self._check_token(raw)
+            try:
+                data = json.loads(raw)
+            except ValueError:
+                raise RouterError("路由器返回了非 JSON：%s" % raw[:160])
+            code = str(data.get("code", "0"))
+            if code not in ("0", "None"):
+                raise RouterError("路由器接口返回 code=%s msg=%s"
+                                  % (data.get("code"), data.get("msg", "")))
+            return data
+        return self._api_with_relogin(go, "限速接口")
+
+    def qos_info(self):
+        return self._qos_call(self._qos_path("qos_info_path", self.QOS_INFO_PATH))
+
+    def ensure_qos(self):
+        """确认 QoS 已开启且处于「自定义限速」模式；否则打开（只改这两个开关）。"""
+        info = self.qos_info()
+        status = info.get("status") or {}
+        changed = []
+        if int(status.get("on") or 0) != 1:
+            self._qos_call(self._qos_path("qos_switch_path", self.QOS_SWITCH_PATH),
+                           {"on": 1})
+            changed.append("已开启 QoS")
+        if int(status.get("mode") or 0) != 3:
+            self._qos_call(self._qos_path("qos_mode_path", self.QOS_MODE_PATH),
+                           {"mode": 3})
+            changed.append("已切到自定义限速模式")
+        if changed:
+            self.log("QOS %s" % "，".join(changed))
+        return info if not changed else self.qos_info()
+
+    def limit_of(self, mac):
+        """这台设备当前的限速值（KB/s）；没设过返回 0。"""
+        mac = str(mac or "").strip().lower().replace("-", ":")
+        info = self.qos_info()
+        for dev in info.get("list") or []:
+            if str(dev.get("mac", "")).lower().replace("-", ":") == mac:
+                q = dev.get("qos") or {}
+                return {"down": int(float(q.get("downmax") or 0)),
+                        "up": int(float(q.get("upmax") or 0))}
+        return {"down": 0, "up": 0}
+
+    def set_limit(self, mac, down_kbps, up_kbps):
+        """给一台设备设/清限速（KB/s，0=不限速）。"""
+        if not mac:
+            raise RouterError("MAC 为空，拒绝调用限速接口")
+        down, up = max(0, int(down_kbps or 0)), max(0, int(up_kbps or 0))
+        if self.cfg.get("dry_run"):
+            self.log("[DRY-RUN] LIMIT mac=%s down=%sKB/s up=%sKB/s"
+                     "（演练模式，未调用路由器接口）" % (mac, down, up))
+            return "dry-run"
+        payload = json.dumps([{"mac": mac.upper(), "maxup": str(up),
+                               "maxdown": str(down)}], separators=(",", ":"))
+        raw = self._qos_call(self._qos_path("qos_limits_path", self.QOS_LIMITS_PATH),
+                             {"data": payload}, method="POST")
+        self.log("[MIWIFI] LIMIT mac=%s down=%sKB/s up=%sKB/s resp=%s"
+                 % (mac, down, up, json.dumps(raw, ensure_ascii=False)[:160]))
+        return raw
 
     def describe(self):
         tag = "（演练模式：只登录不改规则）" if self.cfg.get("dry_run") else ""

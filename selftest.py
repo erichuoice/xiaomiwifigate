@@ -1667,6 +1667,100 @@ def main():
           "passRuleText(t)" in index_html and
           "即可放行" in index_html)
 
+    # ---- 3.14.0 限制方式：限速（不切断外网，答对解除）----
+    lr = store.validate_limit_rule({})
+    check("限制方式默认断网 + 限速默认 50KB/s",
+          lr == {"limit_mode": "block", "throttle_kbps": 50}, str(lr))
+
+    def _raises(fn, *a, **kw):
+        try:
+            fn(*a, **kw)
+        except store.StoreError:
+            return True
+        except Exception:
+            return True
+        return False
+
+    check("限制方式非法值会被拒绝",
+          _raises(store.validate_limit_rule, {"limit_mode": "bogus"}) and
+          _raises(store.validate_limit_rule, {"throttle_kbps": 0}) and
+          _raises(store.validate_limit_rule, {"throttle_kbps": "abc"}))
+    check("题库校验带出限制方式字段",
+          store.validate_bank(dict(TEST_BANK, limit_mode="throttle",
+                                   throttle_kbps=250)).get("limit_mode")
+          == "throttle")
+
+    mock_ad = router_adapter.MockAdapter({}, lambda m: None)
+    mock_ad.set_limit("AA:BB:CC:DD:EE:FF", 250, 250)
+    check("mock 适配器记录限速",
+          mock_ad.limit_of("aa:bb:cc:dd:ee:ff") == {"down": 250, "up": 250})
+    mock_ad.set_limit("AA:BB:CC:DD:EE:FF", 0, 0)
+    check("mock 适配器解除限速",
+          mock_ad.limit_of("aa:bb:cc:dd:ee:ff") == {"down": 0, "up": 0})
+
+    _lim_mac = "aa:bb:cc:dd:ee:01"
+    _thr_bank = {"limit_mode": "throttle", "throttle_kbps": 250}
+    mode = srv.restrict_mac(_lim_mac, _thr_bank, "自检")
+    check("到点按限制方式改成限速（不断网）",
+          mode == "throttle" and
+          srv.ADAPTER.limit_of(_lim_mac)["down"] == 250)
+    srv.release_mac(_lim_mac, _thr_bank)
+    check("答对后解除限速",
+          srv.ADAPTER.limit_of(_lim_mac)["down"] == 0)
+    mode = srv.restrict_mac(_lim_mac, {"limit_mode": "block"}, "自检")
+    check("断网模式仍然走 set_wan 断开",
+          mode == "block" and srv.ADAPTER.limit_of(_lim_mac)["down"] == 0)
+    srv.release_mac(_lim_mac, {"limit_mode": "block"})
+
+    # 前面的「退出登录」用例已经注销过，这里重新登录再做后台接口检查
+    admin("/api/admin/login", {"password": CFG["server"].get("admin_password", "")})
+    code, saved = admin("/api/admin/bank", {
+        "name": "限制方式自检库",
+        "tiers": [{"questions": 1, "minutes": 10}],
+        "devices": [],
+        "questions": [TEST_BANK["questions"][0]],
+        "pass_mode": "strict",
+        "pass_rate_percent": 80,
+        "wrong_add_questions": 0,
+        "limit_mode": "throttle",
+        "throttle_kbps": 250,
+    })
+    ok_bank = (code == 200 and saved.get("bank", {}).get("limit_mode") == "throttle"
+               and saved.get("bank", {}).get("throttle_kbps") == 250)
+    check("后台保存「限制方式=限速」并回读", ok_bank,
+          str(saved.get("detail", ""))[:40])
+    code, bad = admin("/api/admin/bank", dict(
+        TEST_BANK, limit_mode="throttle", throttle_kbps=0))
+    check("非法限速值被后台拒绝", code == 400, (bad.get("detail") or "")[:30])
+    if ok_bank:
+        admin("/api/admin/bank/delete", {"id": saved["bank"]["id"]})
+
+    check("后台题库页有「限制方式」配置",
+          'id="bank-limit-mode"' in admin_html and
+          'id="bank-throttle"' in admin_html and
+          "limit_mode: el('bank-limit-mode').value" in admin_html and
+          "throttle_kbps: Number(el('bank-throttle').value)" in admin_html and
+          "el('bank-limit-mode').value = b.limit_mode" in admin_html)
+    check("后台设备页按限制方式显示限速/解除限速",
+          "function deviceLimit(" in admin_html and
+          "/api/admin/device/limit" in admin_html and
+          "bOff.textContent = lm ? '限速' : '断网'" in admin_html and
+          "limit_mode === 'throttle'" in admin_html)
+    check("答题页提示限速模式",
+          "function limitText(t)" in index_html and
+          "限速模式" in index_html and "解除限速" in index_html)
+    check("服务端把限制方式接进放行/回收链路",
+          "def restrict_mac(" in server_html and
+          "def release_mac(" in server_html and
+          "release_mac(mac, STORE.bank(bank_id)" in server_html and
+          "restrict_mac(mac, STORE.bank_for_mac(mac)" in server_html and
+          'ADAPTER.set_limit(mac, rule["kbps"], rule["kbps"])' in server_html)
+    check("服务端问卷下发限制方式",
+          '"limit_rule": limit_rule()' in server_html and
+          '"limit_rule": rule,' in server_html and
+          '"limit_rule": limit_rule({"limit_mode": t.get("limit_mode")' in server_html and
+          "ADAPTER.limit_of(mac)" in server_html)
+
     for _p, _raw in extra_paths.items():
         try:
             if _raw is None:

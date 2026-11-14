@@ -23,6 +23,10 @@
     "set_filter_method": "both",
     "wan_allow": "1",
     "wan_block": "0",
-    "dry_run": false
+    "dry_run": false,
+    "qos_info_path": "/cgi-bin/luci/;stok={stok}/api/misystem/qos_info",
+    "qos_limits_path": "/cgi-bin/luci/;stok={stok}/api/misystem/qos_limits",
+    "qos_switch_path": "/cgi-bin/luci/;stok={stok}/api/misystem/qos_switch",
+    "qos_mode_path": "/cgi-bin/luci/;stok={stok}/api/misystem/qos_mode"
   }
 }

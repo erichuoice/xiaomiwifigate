@@ -169,18 +169,27 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
             except Exception as exc:
                 rows, hint = [], "设备列表读取失败：%s" % exc
         present = {r["mac"].lower() for r in rows}
+        bank_by_id = {b["id"]: b for b in banks}
         for row in rows:
             row["bank_id"] = owner.get(row["mac"].lower(), "")
+            b = bank_by_id.get(row["bank_id"]) or {}
+            row["limit_mode"] = b.get("limit_mode") or "block"
+            row["throttle_kbps"] = int(b.get("throttle_kbps") or 0)
         # 已分配但当前不在线的设备也列出来，避免「看不见的条目」
         for mac, bid in owner.items():
             if mac not in present:
+                b = bank_by_id.get(bid) or {}
                 rows.append({
                     "ip": [], "mac": mac, "name": "（当前不在线或未在列表）",
                     "type": None, "online": 0, "wan": None, "bank_id": bid,
+                    "limit_mode": b.get("limit_mode") or "block",
+                    "throttle_kbps": int(b.get("throttle_kbps") or 0),
                 })
         return 200, {
             "ok": True, "devices": rows, "hint": hint,
-            "banks": [{"id": b["id"], "name": b["name"], "enabled": b["enabled"]}
+            "banks": [{"id": b["id"], "name": b["name"], "enabled": b["enabled"],
+                       "limit_mode": b.get("limit_mode", "block"),
+                       "throttle_kbps": int(b.get("throttle_kbps") or 0)}
                       for b in banks],
         }, None
 

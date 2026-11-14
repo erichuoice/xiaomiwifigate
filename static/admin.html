@@ -211,6 +211,26 @@
 
       <div class="hint" id="bank-dev" style="margin-top:12px"></div>
 
+      <h2 style="margin-top:22px">限制方式<span class="count">到点后怎么限制</span></h2>
+      <p class="hint">答完题到点、或进入禁止答题时段时，用哪种方式限制这台设备：
+        「直接断网」= 老做法，完全不能上网；「限速」= <b>不切断外网，只把速度降到下面这个值</b>，
+        孩子还能上网但很慢，答对题就恢复全速。限速值单位 KB/s（1 Mbps ≈ 125 KB/s，2 Mbps ≈ 250 KB/s）。</p>
+      <div class="grid2">
+        <div>
+          <label class="fld" for="bank-limit-mode">限制方式</label>
+          <select id="bank-limit-mode">
+            <option value="block">直接断网（默认）</option>
+            <option value="throttle">限速（不切断外网，只降速）</option>
+          </select>
+        </div>
+        <div>
+          <label class="fld" for="bank-throttle">限速值（KB/s，50 ≈ 0.4 Mbps）</label>
+          <input id="bank-throttle" type="number" min="1" max="1000000" value="50">
+        </div>
+      </div>
+      <p class="hint">限速用的是小米路由器「专业设置 → QoS」里的自定义限速；程序会自动把 QoS
+        切到「自定义限速」模式。只有这个题库里的设备会被限速，家里其它设备不受影响。</p>
+
       <h2 style="margin-top:20px">题目<span id="qcount" class="count"></span></h2>
       <div class="filters">
         <select id="f-stage"><option value="">全部学段</option></select>
@@ -288,8 +308,9 @@
     <div id="tab-devices" class="card" style="display:none">
       <h2>设备归属与控制</h2>
       <p class="hint">给每台设备选一套题库（选「不受控」的设备不会自动断网）。
-        每台设备右侧都有「断网 / 放行」按钮，随时手动控制：
-        断网立即生效；放行填分钟数（0 或留空 = 永久），到期自动断。
+        每台设备右侧都有控制按钮：限制方式为「直接断网」的题库显示「断网 / 放行」，
+        为「限速」的题库显示「限速 / 解除限速」——限速只降低速度、不切断外网。
+        放行/解除限速可填分钟数（0 或留空 = 永久），到期自动恢复限制。
         <b>暂时放行的设备，名称旁会显示实时倒计时</b>（答题解锁同样显示），
         到点自动刷新；永久放行不显示倒计时。</p>
       <p class="hint">设备名下方的「时段设置」可按周一～周日设定<b>允许答题放行的时间段</b>：
@@ -614,6 +635,8 @@
       ? b.pass_rate_percent : 80;
     el('bank-wrong-add').value = b.wrong_add_questions != null
       ? b.wrong_add_questions : 2;
+    el('bank-limit-mode').value = b.limit_mode === 'throttle' ? 'throttle' : 'block';
+    el('bank-throttle').value = b.throttle_kbps != null ? b.throttle_kbps : 50;
     el('dl-csv').href = '/api/admin/export.csv?bank=' + encodeURIComponent(b.id);
     if (!keepPage) page = 0;
     renderTiers();
@@ -912,6 +935,8 @@
       pass_mode: el('bank-pass-mode').value,
       pass_rate_percent: Number(el('bank-pass-rate').value),
       wrong_add_questions: Number(el('bank-wrong-add').value),
+      limit_mode: el('bank-limit-mode').value,
+      throttle_kbps: Number(el('bank-throttle').value),
       questions: Q
     }).then(function (res) {
       if (!requireAuth(res)) return;
@@ -1125,8 +1150,20 @@
       var td4 = document.createElement('td');
       var tag = document.createElement('span');
       var on = d.wan === 1 || d.wan === '1';
-      tag.className = 'tag' + (on ? '' : ' off');
-      tag.textContent = d.wan === null || d.wan === undefined ? '未知' : (on ? '可上网' : '已阻断');
+      var lm = d.limit_mode === 'throttle';
+      var lim = d.limit || {};
+      if (lm) {
+        if (lim.down) {
+          tag.className = 'tag off';
+          tag.textContent = '限速 ' + lim.down + ' KB/s';
+        } else {
+          tag.className = 'tag';
+          tag.textContent = '全速';
+        }
+      } else {
+        tag.className = 'tag' + (on ? '' : ' off');
+        tag.textContent = d.wan === null || d.wan === undefined ? '未知' : (on ? '可上网' : '已阻断');
+      }
       td4.appendChild(tag); tr.appendChild(td4);
 
       var td5 = document.createElement('td');
@@ -1148,13 +1185,19 @@
       var bOff = document.createElement('button');
       bOff.className = 'ghost';
       bOff.style.cssText = 'padding:5px 10px;font-size:12.5px;margin-right:6px';
-      bOff.textContent = '断网';
-      bOff.onclick = function () { deviceWan(d, false); };
+      bOff.textContent = lm ? '限速' : '断网';
+      bOff.onclick = function () {
+        if (lm) { deviceLimit(d, Number(d.throttle_kbps) || 50); }
+        else { deviceWan(d, false); }
+      };
       var bOn = document.createElement('button');
       bOn.style.cssText = 'padding:5px 10px;font-size:12.5px';
-      bOn.textContent = '放行';
+      bOn.textContent = lm ? '解除限速' : '放行';
       bOn.onclick = function () {
-        var v = prompt('放行「' + (d.name || d.mac) + '」几分钟？\n留空或填 0 = 永久放行（不会被自动断网）', '30');
+        var tip = lm
+          ? '解除「' + (d.name || d.mac) + '」的限速几分钟？\n留空或填 0 = 永久解除（不会被自动限速）'
+          : '放行「' + (d.name || d.mac) + '」几分钟？\n留空或填 0 = 永久放行（不会被自动断网）';
+        var v = prompt(tip, '30');
         if (v === null) return;
         var m = parseInt(v, 10);
         deviceWan(d, true, isNaN(m) ? 0 : Math.max(0, m));
@@ -1176,7 +1219,24 @@
       .then(function (res) {
       if (!requireAuth(res)) return;
       if (!res.data.ok) { toast(res.data.detail || '操作失败'); return; }
-      toast(device.name + (wan ? ' 已放行' : ' 已断网'));
+      var lm = device.limit_mode === 'throttle';
+      toast(device.name + (wan ? (lm ? ' 已解除限速' : ' 已放行') : ' 已断网'));
+      refreshDevices();
+    }).catch(function () { toast('操作失败'); });
+  }
+
+  // 手动限速（0 = 解除限速）：走路由器 QoS，不切断外网
+  function deviceLimit(device, kbps) {
+    if (!device || !device.mac) {
+      toast('这台设备缺少 MAC，请刷新页面后重试');
+      return;
+    }
+    api('/api/admin/device/limit', { mac: device.mac, kbps: kbps || 0 })
+      .then(function (res) {
+      if (!requireAuth(res)) return;
+      if (!res.data.ok) { toast(res.data.detail || '操作失败'); return; }
+      toast(kbps ? (device.name + ' 已限速到 ' + kbps + ' KB/s')
+                 : (device.name + ' 已解除限速'));
       refreshDevices();
     }).catch(function () { toast('操作失败'); });
   }
@@ -1212,12 +1272,21 @@
         else h.style.display = 'none';
         // 合并暂时放行信息：expire_at>0 且有剩余分钟才显示倒计时
         wanInfo = {};
+        var limitInfo = {};
         (b.devices || []).forEach(function (x) {
           var exp = Number(x.expire_at) || 0;
           wanInfo[x.mac] = {
             expire_at: exp,
             active: exp > 0 && (Number(x.remaining_minutes) || 0) > 0
           };
+          limitInfo[x.mac] = x;
+        });
+        // 把路由器上真实的限速值/限制方式并进设备行（设备页标签与按钮要用）
+        devices.forEach(function (d) {
+          var x = limitInfo[d.mac] || {};
+          d.limit = x.limit || { down: 0, up: 0 };
+          if (x.limit_mode) d.limit_mode = x.limit_mode;
+          if (x.throttle_kbps != null) d.throttle_kbps = x.throttle_kbps;
         });
         // 合并答题时段规则与服务端算好的当前状态
         schedInfo = {};
