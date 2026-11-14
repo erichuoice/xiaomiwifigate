@@ -360,7 +360,38 @@
 
     <!-- 设置 -->
     <div id="tab-settings" class="card" style="display:none">
-      <h2>全局设置</h2>
+      <h2 style="margin-top:22px">AI 出题连接</h2>
+      <p class="hint">AI 出题用的 API Key 在这里统一配置（原来在「AI 出题」页，3.23.0 起挪到系统设置）。</p>
+      <div class="grid2">
+        <div>
+          <label class="fld" for="ai-provider">服务商</label>
+          <select id="ai-provider"></select>
+        </div>
+        <div>
+          <label class="fld" for="ai-key">API Key</label>
+          <input id="ai-key" type="password" autocomplete="new-password"
+                 spellcheck="false" placeholder="sk-…（留空 = 不修改已保存的 Key）">
+        </div>
+        <div>
+          <label class="fld" for="ai-base">接口地址</label>
+          <input id="ai-base" type="text" spellcheck="false" placeholder="https://api.deepseek.com/v1">
+        </div>
+        <div>
+          <label class="fld" for="ai-model">模型</label>
+          <input id="ai-model" type="text" spellcheck="false" placeholder="deepseek-chat">
+        </div>
+      </div>
+      <p class="hint" id="ai-keyhint" style="margin-top:8px"></p>
+      <div class="row">
+        <button id="ai-save">保存连接设置</button>
+        <button class="mini ghost" id="ai-test">测试连接</button>
+        <button class="mini danger" id="ai-clear">清除 Key</button>
+      </div>
+      <p class="hint">Key 只写入路由器的 <code>state/ai.json</code>（权限 600，已被 <code>.gitignore</code> 排除），
+        后台只显示 <code>sk-****后四位</code>；不会写进日志、备份导出或 GitHub。
+        不填 Key 也能用「离线模板」出题，只是题目变化少。</p>
+
+      <h2 style="margin-top:22px">全局设置</h2>
       <label class="fld" for="cap">每人每天最多获得多少分钟（0 = 不限）</label>
       <input id="cap" type="number" min="0" max="1440" value="0">
       <p class="hint" style="margin-top:10px">防止反复答题无限加时。到上限后答题会提示「今天额度已用完」。
@@ -399,37 +430,11 @@
       <h2>AI 出题</h2>
       <div class="ai-note" id="ai-progress">正在读取当前教学进度…</div>
 
-      <h3>① 连接 AI（在这里填写 API Key）</h3>
-      <div class="grid2">
-        <div>
-          <label class="fld" for="ai-provider">服务商</label>
-          <select id="ai-provider"></select>
-        </div>
-        <div>
-          <label class="fld" for="ai-key">API Key</label>
-          <input id="ai-key" type="password" autocomplete="new-password"
-                 spellcheck="false" placeholder="sk-…（留空 = 不修改已保存的 Key）">
-        </div>
-        <div>
-          <label class="fld" for="ai-base">接口地址</label>
-          <input id="ai-base" type="text" spellcheck="false" placeholder="https://api.deepseek.com/v1">
-        </div>
-        <div>
-          <label class="fld" for="ai-model">模型</label>
-          <input id="ai-model" type="text" spellcheck="false" placeholder="deepseek-chat">
-        </div>
-      </div>
-      <p class="hint" id="ai-keyhint" style="margin-top:8px"></p>
-      <div class="row">
-        <button id="ai-save">保存连接设置</button>
-        <button class="mini ghost" id="ai-test">测试连接</button>
-        <button class="mini danger" id="ai-clear">清除 Key</button>
-      </div>
-      <p class="hint">Key 只写入路由器的 <code>state/ai.json</code>（权限 600，已被 <code>.gitignore</code> 排除），
-        后台只显示 <code>sk-****后四位</code>；不会写进日志、备份导出或 GitHub。
-        不填 Key 也能用「离线模板」出题，只是题目变化少。</p>
 
-      <h3>② 教学进度与教材（广州）</h3>
+      <p class="hint">API Key 在「系统设置 → AI 出题连接」里配置。
+        <button type="button" class="mini ghost" id="ai-goset">去系统设置</button></p>
+
+      <h3>① 教学进度与教材（广州）</h3>
       <div class="grid2">
         <div>
           <label class="fld" for="ai-textbook">教材版本</label>
@@ -447,7 +452,7 @@
       <input id="ai-scope" type="text" placeholder="例如：第 1—3 单元（分数加减、周长）">
       <p class="hint" id="ai-progress-note"></p>
 
-      <h3>③ 出一批新题</h3>
+      <h3>② 出一批新题</h3>
       <div class="grid3">
         <div>
           <label class="fld" for="ai-stage">学段</label>
@@ -487,7 +492,7 @@
       </div>
       <p class="hint" id="ai-result-note" style="margin-top:10px"></p>
 
-      <h3>④ 预览并入库<span id="ai-prev-count" class="count"></span></h3>
+      <h3>③ 预览并入库<span id="ai-prev-count" class="count"></span></h3>
       <div id="ai-preview"><p class="hint">还没有生成题目。</p></div>
       <div class="row">
         <button id="ai-apply">把勾选的题目加入题库</button>
@@ -2216,6 +2221,7 @@
     if (name === 'learning') {
       loadLearning(currentBankId || el('learn-sel').value || '');
     }
+    if (name === 'settings') loadAiConfig();   // 3.23.0：AI 连接配置挪到系统设置
     el('open-settings').className = name === 'settings' ? 'mini' : 'mini ghost';
   }
 
@@ -2228,6 +2234,7 @@
   el('pwd').onkeydown = function (e) { if (e.key === 'Enter') el('login-btn').click(); };
   el('logout').onclick = function () { api('/api/admin/logout', {}).then(showLogin); };
   el('open-settings').onclick = function () { switchTab('settings'); };
+  el('ai-goset').onclick = function () { switchTab('settings'); };
   el('obj-sel').onchange = function () { setCurrentBank(el('obj-sel').value); };
   ['quiz', 'ai', 'auto', 'learning', 'devices'].forEach(function (n) {
     el('tabbtn-' + n).onclick = function () { switchTab(n); };

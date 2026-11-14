@@ -1879,6 +1879,37 @@ def main():
     check("后台提供 API Key 密码框并说明只存 state/ai.json",
           'id="ai-key" type="password"' in admin_html and
           "state/ai.json" in admin_html and "sk-****" in admin_html)
+    # 3.23.0：AI 连接配置合并到「系统设置」
+    def _card_end(html, marker):
+        i = html.index(marker)
+        k, depth = i, 0
+        while k < len(html):
+            m = re.search(r"<div\b|</div>", html[k:])
+            if not m:
+                return -1
+            st, en = k + m.start(), k + m.end()
+            if html[st:st + 4] == "<div":
+                depth += 1
+            else:
+                depth -= 1
+                if depth == 0:
+                    return en
+            k = en
+        return -1
+
+    _st_end = _card_end(admin_html, '<div id="tab-settings"')
+    _ai_start = admin_html.index('<div id="tab-ai"')
+    _ai_end = _card_end(admin_html, '<div id="tab-ai"')
+    _key_at = admin_html.index('id="ai-key"')
+    check("AI 连接配置（API Key）在「系统设置」里，不在 AI 出题页（3.23.0）",
+          "AI 出题连接" in admin_html and
+          _key_at < _st_end and not (_ai_start < _key_at < _ai_end) and
+          "el('ai-goset').onclick" in admin_html and
+          "if (name === 'settings') loadAiConfig()" in admin_html,
+          "ai-key@%s settings@end%s ai@%s~%s" % (_key_at, _st_end, _ai_start, _ai_end))
+    check("AI 出题页提示去系统设置配置 Key",
+          "API Key 在「系统设置 → AI 出题连接」里配置" in admin_html and
+          'id="ai-goset"' in admin_html)
     check("后台有 AI 出题与学情两个页签",
           all(w in admin_html for w in
               ("tabbtn-ai", "tab-learning", "ai-progress", "ai-preview",
