@@ -215,7 +215,7 @@
       <p class="hint">答完题到点、或进入禁止答题时段时，用哪种方式限制这台设备：
         「直接断网」= 老做法，完全不能上网；「限速」= <b>不切断外网，只把速度降到下面这个值</b>，
         孩子还能上网但很慢，答对题就恢复全速。限速值单位 KB/s（1 Mbps ≈ 125 KB/s，2 Mbps ≈ 250 KB/s）。
-        <b>路由器最小限速 1 Mbps</b>：填不足 125 KB/s 的值会按 1 Mbps 生效（实际约 100 KB/s）。</p>
+        小米的限速器不是线性的，实测有效速度约为填的值乘 0.3~0.7：填 20 大约只有 6 KB/s，填 250 大约 150 KB/s。</p>
       <div class="grid2">
         <div>
           <label class="fld" for="bank-limit-mode">限制方式</label>
@@ -225,8 +225,8 @@
           </select>
         </div>
         <div>
-          <label class="fld" for="bank-throttle">限速值（KB/s，250 ≈ 2 Mbps）</label>
-          <input id="bank-throttle" type="number" min="1" max="1000000" value="50">
+          <label class="fld" for="bank-throttle">限速值（KB/s，默认 20，250 ≈ 2 Mbps）</label>
+          <input id="bank-throttle" type="number" min="1" max="1000000" value="20">
         </div>
       </div>
       <p class="hint">限速用的是小米路由器「专业设置 → QoS」里的自定义限速；程序会自动把 QoS
@@ -638,7 +638,7 @@
     el('bank-wrong-add').value = b.wrong_add_questions != null
       ? b.wrong_add_questions : 2;
     el('bank-limit-mode').value = b.limit_mode === 'throttle' ? 'throttle' : 'block';
-    el('bank-throttle').value = b.throttle_kbps != null ? b.throttle_kbps : 50;
+    el('bank-throttle').value = b.throttle_kbps != null ? b.throttle_kbps : 20;
     el('dl-csv').href = '/api/admin/export.csv?bank=' + encodeURIComponent(b.id);
     if (!keepPage) page = 0;
     renderTiers();
@@ -1229,17 +1229,18 @@
 
   // 手动限速前先弹窗让家长选速度（3.14.2）：
   // 直接套题库默认值太粗暴——默认带出「当前实际限速值」（没有则用题库默认），
-  // 弹窗里写清 KB/s↔Mbps 换算和「路由器最小 1 Mbps」这个坑。
+  // 弹窗里写清单位就是 KB/s（3.14.3 实测确认路由器不按 Mbps 收）。
   function deviceLimitPrompt(device) {
     if (!device || !device.mac) {
       toast('这台设备缺少 MAC，请刷新页面后重试');
       return;
     }
     var cur = Number((device.limit || {}).down) || 0;
-    var def = cur || Number(device.throttle_kbps) || 50;
+    var def = cur || Number(device.throttle_kbps) || 20;
     var tip = '把「' + (device.name || device.mac) + '」限速到多少 KB/s？\n\n'
-      + '125 ≈ 1 Mbps（路由器最小值，实际约 100 KB/s）\n'
-      + '250 ≈ 2 Mbps，500 ≈ 4 Mbps\n'
+      + '单位 KB/s（路由器 QoS 就是这个单位，程序不换算）\n'
+      + '20（默认，实际约 6 KB/s，只剩文字消息能用）\n'
+      + '125 ≈ 1 Mbps，250 ≈ 2 Mbps，500 ≈ 4 Mbps\n'
       + '留空或填 0 = 解除限速';
     var v = prompt(tip, String(def));
     if (v === null) return;  // 点了取消：什么都不做
@@ -1260,8 +1261,7 @@
       .then(function (res) {
       if (!requireAuth(res)) return;
       if (!res.data.ok) { toast(res.data.detail || '操作失败'); return; }
-      toast(kbps ? (device.name + ' 已限速到 ' + kbps + ' KB/s'
-                    + (kbps < 125 ? '（按路由器最小 1 Mbps 生效）' : ''))
+      toast(kbps ? (device.name + ' 已限速到 ' + kbps + ' KB/s')
                  : (device.name + ' 已解除限速'));
       refreshDevices();
     }).catch(function () { toast('操作失败'); });

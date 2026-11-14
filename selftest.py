@@ -1669,8 +1669,8 @@ def main():
 
     # ---- 3.14.0 限制方式：限速（不切断外网，答对解除）----
     lr = store.validate_limit_rule({})
-    check("限制方式默认断网 + 限速默认 50KB/s",
-          lr == {"limit_mode": "block", "throttle_kbps": 50}, str(lr))
+    check("限制方式默认断网 + 限速默认 20KB/s",
+          lr == {"limit_mode": "block", "throttle_kbps": 20}, str(lr))
 
     def _raises(fn, *a, **kw):
         try:
@@ -1698,17 +1698,31 @@ def main():
     check("mock 适配器解除限速",
           mock_ad.limit_of("aa:bb:cc:dd:ee:ff") == {"down": 0, "up": 0})
 
-    # 换算函数（3.14.1：路由器接口单位是 Mbps 整数，对外统一 KB/s）
-    conv = router_adapter.kbps_to_router_mbps
-    back = router_adapter.router_mbps_to_kbps
-    check("限速值换算 KB/s→Mbps（250→2、50→1、0→0、小数被拒绝）",
-          conv(250) == 2 and conv(50) == 1 and conv(0) == 0 and
-          conv(125) == 1 and conv(1000) == 8 and conv(-5) == 0 and
-          conv("abc") == 0, str((conv(250), conv(50), conv(125), conv(1000))))
-    check("限速值回读 Mbps→KB/s（2→250、0→0、非法→0）",
-          back(2) == 250 and back(0) == 0 and back("x") == 0 and back(None) == 0)
-    check("换算往返一致（250→2→250）",
-          back(conv(250)) == 250 and back(conv(125)) == 125)
+    # 3.14.3：路由器限速单位就是 KB/s（复测推翻 3.14.1 的 Mbps 结论），
+    # 这一层不做换算——下发 20 就必须是 20，回读的 downmax 也是 KB/s。
+    cap = {}
+    mw = router_adapter.MiWifiAdapter(
+        {"base_url": "http://127.0.0.1", "admin_password": "x", "stok": "s",
+         "dry_run": False}, lambda m: None)
+    mw.ensure_qos = lambda: {"status": {"on": 1, "mode": 3}}
+
+    def _fake_qos_call(path, params=None, method="GET"):
+        cap["path"], cap["params"], cap["method"] = path, params, method
+        return {"code": 0}
+
+    mw._qos_call = _fake_qos_call
+    mw.set_limit("aa:bb:cc:dd:ee:02", 20, 20)
+    sent = json.loads((cap.get("params") or {}).get("data") or "[]")
+    check("限速下发按 KB/s 原样（20 不能再被换算成 1）",
+          sent and sent[0].get("maxdown") == "20" and
+          sent[0].get("maxup") == "20", str(sent))
+    mw.qos_info = lambda: {"list": [
+        {"mac": "AA:BB:CC:DD:EE:03", "qos": {"downmax": 20, "upmax": 20}}]}
+    check("限速回读按 KB/s 原样（20 不能回成 125）",
+          mw.limit_of("aa:bb:cc:dd:ee:03") == {"down": 20, "up": 20})
+    check("适配层不再有 Mbps 换算函数",
+          not hasattr(router_adapter, "kbps_to_router_mbps") and
+          not hasattr(router_adapter, "router_mbps_to_kbps"))
 
     _lim_mac = "aa:bb:cc:dd:ee:01"
     _thr_bank = {"limit_mode": "throttle", "throttle_kbps": 250}
@@ -1768,9 +1782,17 @@ def main():
     check("手动限速先弹窗让家长选速度（3.14.2）",
           "function deviceLimitPrompt(" in admin_html and
           "deviceLimitPrompt(d)" in admin_html and
-          "路由器最小值" in admin_html and
-          "按路由器最小 1 Mbps 生效" in admin_html,
+          "单位 KB/s" in admin_html,
           "不能再直接套题库默认值就限速")
+    check("弹窗/输入框默认 20 KB/s（3.14.3）",
+          "Number(device.throttle_kbps) || 20" in admin_html and
+          'id="bank-throttle" type="number" min="1" max="1000000" value="20"'
+          in admin_html and
+          "throttle_kbps : 20" in admin_html)
+    check("不再声称路由器最小 1 Mbps（3.14.3 纠正）",
+          "路由器最小限速 1 Mbps" not in admin_html and
+          "路由器最小值" not in admin_html and
+          "按路由器最小 1 Mbps 生效" not in admin_html)
     check("答题页提示限速模式",
           "function limitText(t)" in index_html and
           "限速模式" in index_html and "解除限速" in index_html)
@@ -1787,14 +1809,13 @@ def main():
           "ADAPTER.limit_of(mac)" in server_html)
     with open(os.path.join(BASE, "router_adapter.py"), encoding="utf-8") as f:
         adapter_src = f.read()
-    check("限速接口按 Mbps 换算且先确保 QoS 开启（3.14.1 修复）",
-          "def kbps_to_router_mbps" in adapter_src and
-          "def router_mbps_to_kbps" in adapter_src and
+    check("限速先确保 QoS 开启且总带宽已设（3.14.1 修复，保留）",
           "self.ensure_qos()" in adapter_src and
-          "kbps_to_router_mbps(down)" in adapter_src and
+          '"maxup": str(up)' in adapter_src and
+          '"maxdown": str(down)' in adapter_src and
           "QOS_BAND_PATH" in adapter_src and
           "已补设总带宽" in adapter_src,
-          "换算/ensure_qos/band 三处缺一不可")
+          "ensure_qos/band/原样下发三处缺一不可")
     check("手动解除限速不看题库模式直接清零（3.14.1 修复）",
           "清残留限速" in server_html and
           "按模式走会漏清" in server_html)

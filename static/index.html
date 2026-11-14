@@ -383,7 +383,7 @@
     // 3.14.0：限制方式可能是「限速」而不是断网
     var r = (t && t.limit_rule) || (S.info && S.info.limit_rule) || {};
     if (r.mode !== 'throttle') return '';
-    return '当前是限速模式：答对后解除限速 ' + (r.kbps || 50) + ' KB/s 的限速。';
+    return '当前是限速模式：答对后解除限速 ' + (r.kbps || 20) + ' KB/s 的限速。';
   }
 
   function renderTiers(t) {

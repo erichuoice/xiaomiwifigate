@@ -51,7 +51,7 @@ DEFAULT_TIERS = [{"questions": 3, "minutes": 30}, {"questions": 5, "minutes": 60
 DEFAULT_PASS_RULE = {"pass_mode": "rate", "pass_rate_percent": 80,
                      "wrong_add_questions": 2}
 # 默认限制方式：答完题到点后直接断网；throttle = 改为限速（单位 KB/s）
-DEFAULT_LIMIT = {"limit_mode": "block", "throttle_kbps": 50}
+DEFAULT_LIMIT = {"limit_mode": "block", "throttle_kbps": 20}
 
 
 class StoreError(Exception):

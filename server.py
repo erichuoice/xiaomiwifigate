@@ -324,7 +324,7 @@ def limit_rule(bank=None):
     except (TypeError, ValueError):
         kbps = 0
     if kbps <= 0:
-        kbps = 50
+        kbps = 20
     return {"mode": "throttle" if mode == "throttle" else "block",
             "kbps": kbps}
 
