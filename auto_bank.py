@@ -391,8 +391,8 @@ def _bank_status(st, bank, rule, done, now):
     else:
         state_text = "已启用"
         if fresh < rule["threshold"]:
-            next_text = "缺 %d 道，%s" % (
-                rule["threshold"] - fresh,
+            next_text = "将生成 %d 道，%s" % (
+                rule["count"],
                 "冷却中（%s）" % fmt_ts(rule["next_run"])
                 if now < rule["next_run"] else "等待守护线程执行")
         else:
@@ -412,6 +412,7 @@ def _bank_status(st, bank, rule, done, now):
         "fresh": fresh,
         "threshold": threshold,
         "need": max(0, threshold - fresh) if rule else 0,
+        "count": rule["count"] if rule else 0,
         "cooldown_minutes": rule["cooldown_minutes"] if rule else 0,
         "cooldown_until": rule["next_run"] if (rule and rule["enabled"]) else 0,
         "cooldown_until_text": cooldown_until_text,
@@ -464,8 +465,8 @@ def run_once(st, rule, reason="auto", now=None):
     """按某条规则生成一批新题并入库到它指定的题库。
 
     无论成败都进入该库自己的冷却并落一条记录。
-    自动触发（reason=auto）时只补缺口：缺 8 道就生成 8 道；
-    手动试跑（reason=manual）按表单题量出满一批。
+    自动触发（reason=auto）与手动试跑都按「每次生成数量」出满一批（3.14.4 起：
+    不再只补缺口，避免阈值 30、只有 29 道新题时只生成 1 道）。
     """
     if not _run_lock.acquire(blocking=False):
         raise AutoBankError("上一次自动出题还在执行，请稍候再试")
@@ -488,11 +489,10 @@ def run_once(st, rule, reason="auto", now=None):
 
         count = cfg["count"]
         if reason != "manual":
-            need = max(0, cfg["threshold"] - fresh_count(st, cfg))
-            count = min(count, max(1, need))
-            if need <= 0:
+            fresh = fresh_count(st, cfg)
+            if fresh >= cfg["threshold"]:
                 raise AutoBankError("新题已够（%s 道未做过 ≥ 阈值 %s），无需补充"
-                                    % (fresh_count(st, cfg), cfg["threshold"]))
+                                    % (fresh, cfg["threshold"]))
 
         spec = {
             "stage": cfg["stage"], "grade": cfg["grade"],

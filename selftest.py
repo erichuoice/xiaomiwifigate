@@ -1199,6 +1199,11 @@ def main():
               ai_bank.normalize_subjects(["数学", "数学", "科学"]) == ["数学", "科学"] and
               ai_bank.normalize_subjects("") == ["数学"] and
               ai_bank.normalize_subjects(["科学", "历史"]) == ["科学", "历史"])
+        # 3.14.4：科目上限不再卡 6 科，9 科可以全选（之前第 7 科会被静默截掉）
+        check("9 个科目可以全部勾选（不再卡 6 科）",
+              ai_bank.MAX_SUBJECTS >= len(ai_bank.SUBJECTS) == 9 and
+              ai_bank.normalize_subjects(ai_bank.SUBJECTS) == ai_bank.SUBJECTS,
+              str(len(ai_bank.normalize_subjects(ai_bank.SUBJECTS))))
         check("多科目题量平均分配",
               ai_bank.allocate(30, 3) == [10, 10, 10] and
               ai_bank.allocate(10, 3) == [4, 3, 3], str(ai_bank.allocate(10, 3)))
@@ -1448,8 +1453,8 @@ def main():
             check("守护线程自动补题入库，全程无需人工操作",
                   rec["ok"] and rec["reason"] == "auto" and rec["added"] >= 1,
                   "生成 %s，入库 %s" % (rec["generated"], rec["added"]))
-            check("只补缺口：缺 28 道就生成 28 道",
-                  rec["generated"] == 28, "生成 %s 道" % rec["generated"])
+            check("每次按设定数量生成（缺 28 道也出满 30 道）",
+                  rec["generated"] == 30, "生成 %s 道" % rec["generated"])
             after = auto_bank.load_rule(fake_st, "bank_test")
             check("执行后进入冷却并留下自动触发记录",
                   after["next_run"] - ab_now == 30 * 60 and
@@ -1476,6 +1481,12 @@ def main():
                   len(ab_status["runs"]) >= 1 and
                   bool(ab_status["runs"][0]["bank_name"]))
             for q in seed[18:]:           # 又答掉剩下的 2 道原始题
+                learning.record_answer(M2, q, True)
+            # 3.14.4 起一次自动触发就出满 30 道，新题会超过阈值；再多答几道
+            # 自动题把「未做过」压到阈值以下，才验证得到「冷却拦住」。
+            auto_new = [q for q in fake_st.bank("bank_test")["questions"]
+                        if str(q.get("source") or "").startswith("auto-")][:5]
+            for q in auto_new:
                 learning.record_answer(M2, q, True)
             check("缺题但冷却未结束，仍不触发",
                   auto_bank.fresh_count(fake_st, after) < after["threshold"]

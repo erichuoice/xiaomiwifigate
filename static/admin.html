@@ -486,7 +486,8 @@
         </div>
       </div>
       <p class="hint">「做过」= 这道题被孩子答过（学情有记录）。题一被答掉新题就会减少；
-        少于阈值时服务自动补一批（缺多少补多少，每次最多 30 道），全程不需要人工操作。</p>
+        少于阈值时服务自动生成一批，<b>每次按下面「每次生成」的数量出满（缺 1 道也出满一批）</b>，
+        全程不需要人工操作。</p>
 
       <h3>② 每次出什么样的题（同样只对上面选中的题库生效）</h3>
       <div class="grid3">
@@ -497,7 +498,7 @@
           <label class="fld" for="auto-grade">年级</label><select id="auto-grade"></select>
         </div>
         <div>
-          <label class="fld" for="auto-count">每次最多生成（1~30）</label>
+          <label class="fld" for="auto-count">每次生成（1~30）</label>
           <input id="auto-count" type="number" min="1" max="30" value="30">
         </div>
         <div>
@@ -1774,7 +1775,7 @@
         ? '<b>' + (b.fresh || 0) + '</b> / ' + (b.threshold || 0)
         : (b.fresh || 0) + ' / —';
       if (b.configured && b.enabled && (b.fresh || 0) < (b.threshold || 0)) {
-        freshHtml += '（缺 ' + (b.need || 0) + '）';
+        freshHtml += '（将生成 ' + (b.count || 0) + ' 道）';
       }
       html += '<tr' + (cur ? ' style="font-weight:bold"' : '') + '><td>' +
         escHtml(b.bank_name || '') + '（' + (b.bank_total || 0) + ' 题，' +
