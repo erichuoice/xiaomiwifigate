@@ -24,6 +24,7 @@
     margin-bottom:10px; flex-wrap:wrap; }
   .badge { font-size:12.5px; padding:4px 10px; border-radius:20px; background:var(--soft); color:var(--accent); }
   .badge.mock { background:var(--warn-bg); color:#8a5a00; }
+  .tabgroup { font-size:12px; color:var(--muted); margin:2px 0 5px; letter-spacing:.08em; }
   .tabs { display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap; }
   .tabs button { flex:1 1 92px; padding:10px 4px; }
   .tabs button.off { background:#e9edf2; color:var(--text); }
@@ -147,7 +148,7 @@
 <body>
 <div class="wrap">
   <h1>上网答题 · 管理后台</h1>
-  <p class="sub">每套题库管一组设备，每档题数换一段上网时间</p>
+  <p class="sub">管理员视图：题库 / AI 出题 / 自动出题 / 学习情况 / 管理设备，系统设置见右上角</p>
 
   <div id="login" class="card">
     <h2>管理员登录</h2>
@@ -160,16 +161,18 @@
   <div id="main" style="display:none">
     <div class="bar">
       <span id="mode" class="badge"></span>
-      <button class="mini" id="logout">退出登录</button>
+      <span style="display:flex;gap:8px">
+        <button class="mini ghost" id="open-settings">系统设置</button>
+        <button class="mini" id="logout">退出登录</button>
+      </span>
     </div>
+    <div class="tabgroup">管理对象</div>
     <div class="tabs">
       <button id="tabbtn-quiz" data-tab="quiz">题库</button>
       <button id="tabbtn-ai" data-tab="ai" class="off">AI 出题</button>
       <button id="tabbtn-auto" data-tab="auto" class="off">自动出题</button>
-      <button id="tabbtn-learning" data-tab="learning" class="off">学情</button>
-      <button id="tabbtn-import" data-tab="import" class="off">导入</button>
-      <button id="tabbtn-devices" data-tab="devices" class="off">设备</button>
-      <button id="tabbtn-settings" data-tab="settings" class="off">设置</button>
+      <button id="tabbtn-learning" data-tab="learning" class="off">学习情况</button>
+      <button id="tabbtn-devices" data-tab="devices" class="off">管理设备</button>
     </div>
 
     <!-- 题库 -->
@@ -252,10 +255,7 @@
         <a id="dl-csv" href="/api/admin/export.csv"><button type="button" class="mini">导出 CSV</button></a>
       </div>
       <p class="hint" style="margin-top:12px">答案只存在服务端，答题页看不到。保存后立即生效，不用重启。</p>
-    </div>
-
-    <!-- 导入 -->
-    <div id="tab-import" class="card" style="display:none">
+    <div style="margin-top:24px;padding-top:18px;border-top:1px dashed var(--line)">
       <h2>导入题目</h2>
       <p class="hint">支持 CSV / TSV / JSON。Excel 里编辑后「另存为 CSV」即可；表头用中文即可识别：
         题型、学段、年级、科目、题干、选项A~D、答案、解析、难度。答案可以写 <code>B</code>、<code>A,C</code>、
@@ -306,6 +306,9 @@
         <button class="mini" id="builtin-replace">用内置题库覆盖</button>
       </div>
     </div>
+    </div>
+
+
 
     <!-- 设备 -->
     <div id="tab-devices" class="card" style="display:none">
@@ -2119,15 +2122,18 @@
   // ---------- 交互 ----------
 
   function switchTab(name) {
-    ['quiz', 'ai', 'auto', 'learning', 'import', 'devices', 'settings'].forEach(function (n) {
+    // 5 个「管理对象」页签 + 右上角「系统设置」（没有页签按钮，从顶栏进入）
+    ['quiz', 'ai', 'auto', 'learning', 'devices', 'settings'].forEach(function (n) {
       el('tab-' + n).style.display = n === name ? 'block' : 'none';
-      el('tabbtn-' + n).className = n === name ? '' : 'off';
+      var btn = el('tabbtn-' + n);
+      if (btn) btn.className = n === name ? '' : 'off';
     });
     if (name === 'devices') refreshDevices();
-    if (name === 'import') syncImportBank();
+    if (name === 'quiz') syncImportBank();
     if (name === 'ai') loadAiConfig();
     if (name === 'auto') loadAutoBank();
     if (name === 'learning') loadLearning(el('learn-sel').value || '');
+    el('open-settings').className = name === 'settings' ? 'mini' : 'mini ghost';
   }
 
   el('login-btn').onclick = function () {
@@ -2138,7 +2144,8 @@
   };
   el('pwd').onkeydown = function (e) { if (e.key === 'Enter') el('login-btn').click(); };
   el('logout').onclick = function () { api('/api/admin/logout', {}).then(showLogin); };
-  ['quiz', 'ai', 'auto', 'learning', 'import', 'devices', 'settings'].forEach(function (n) {
+  el('open-settings').onclick = function () { switchTab('settings'); };
+  ['quiz', 'ai', 'auto', 'learning', 'devices'].forEach(function (n) {
     el('tabbtn-' + n).onclick = function () { switchTab(n); };
   });
 

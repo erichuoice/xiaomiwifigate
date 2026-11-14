@@ -2146,6 +2146,41 @@ def main():
           "清残留限速" in server_html and
           "按模式走会漏清" in server_html)
 
+    # ---- 3.20.0 导航按「管理对象」组织 ----
+    check("页签按管理对象组织（题库/AI出题/自动出题/学习情况/管理设备）",
+          "管理对象" in admin_html and
+          all(w in admin_html for w in
+              ("tabbtn-quiz", "tabbtn-ai", "tabbtn-auto",
+               "tabbtn-learning", "tabbtn-devices")) and
+          "学习情况" in admin_html and "管理设备" in admin_html and
+          ">题库<" in admin_html and
+          "tabbtn-import" not in admin_html and 'id="tab-import"' not in admin_html)
+    def _card_end(html, start_marker):
+        """返回 start_marker 那个 <div> 的闭合位置（做 div 深度扫描）。"""
+        i = html.index(start_marker)
+        k, depth = i, 0
+        while k < len(html):
+            m = re.search(r"<div\b|</div>", html[k:])
+            if not m:
+                return -1
+            st, en = k + m.start(), k + m.end()
+            if html[st:st + 4] == "<div":
+                depth += 1
+            else:
+                depth -= 1
+                if depth == 0:
+                    return en
+            k = en
+        return -1
+
+    _quiz_end = _card_end(admin_html, '<div id="tab-quiz"')
+    check("导入并入题库页（且在题库卡片内部）、系统设置收到右上角",
+          'id="open-settings"' in admin_html and
+          "switchTab('settings')" in admin_html and
+          _quiz_end > admin_html.index('id="imp-text"') and
+          admin_html.index('id="imp-text"') < admin_html.index('id="tab-devices"'),
+          "题库卡片结束@%s，导入@%s" % (_quiz_end, admin_html.index('id="imp-text"')))
+
     # ---- 3.19.0 错题本下载 ----
     check("学情页有错题本下载入口",
           'id="learn-dl"' in admin_html and 'id="learn-dl-json"' in admin_html and
