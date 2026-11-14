@@ -76,7 +76,7 @@ python3 simulate_device.py --url http://<内网IP>:8080 \
         --password 管理密码 --mode wrong --rounds 3
 ```
 
-自检 196 项：
+自检 197 项：
 
 ```bash
 python3 selftest.py
@@ -101,7 +101,7 @@ host 模式下不写 `ports:`，端口由 `config.json` 决定。
 | `./gate.sh up` / `down` / `restart` | 启停 |
 | `./gate.sh status` / `logs` | 状态、健康检查、跟随日志 |
 | `./gate.sh check` | 配置与权限检查 |
-| `./gate.sh selftest` | 容器内 196 项全链路自检 |
+| `./gate.sh selftest` | 容器内 197 项全链路自检 |
 | `./gate.sh sim --mode correct --password xxx --tier 1` | 容器内模拟手机答题 |
 | `./gate.sh probe` | 只读探测路由器（不改规则） |
 | `./gate.sh dryrun` / `live` | 切换演练 / 真实放行 |
@@ -384,6 +384,9 @@ python3 gatectl.py on  huo-2     # 放行，不给分钟数 = 永久
 误伤，只剩勾选框看不到题。折叠样式现限定在题库卡片内，预览正文强制可见，
 并加了前端静态自检防止回归；升级后刷新 `/admin` 即可，题库与配置不受影响。）
 
+（`3.8.1` 修复：模型把真换行/制表符直接写进 JSON 字符串时，自动出题会整批解析失败
+并降级离线模板；现在解析前先转义裸控制字符，AI 正常出题不再悄悄降级。）
+
 （`3.8.0`：自动出题从「按时间表定时」改为**按剩余新题触发**——题库里没做过的题少于
 阈值（默认 30 道）时自动补足，缺多少补多少；原 3.7.0 配置里的频率 / 时刻字段自动废弃，
 开关、题库、科目等设置原样保留，升级即生效，无需人工操作。）
@@ -463,13 +466,13 @@ python3 gatectl.py on  huo-2     # 放行，不给分钟数 = 永久
 | `router_adapter.py` | 小米接口适配、IP→MAC 解析、演练模式 |
 | `updater.py` | 从 GitHub 拉新代码、原地替换、备份旧文件；后台一键更新与定时自动检查 |
 | `gatectl.py` | 命令行管理工具：看设备状态、手动断网/放行（走后台 API，无需开网页） |
-| `VERSION` | 当前版本号（如 `3.8.0`），更新时按它比对远端 |
+| `VERSION` | 当前版本号（如 `3.8.1`），更新时按它比对远端 |
 | `question_bank.json` | 内置 134 道题库 |
 | `static/index.html` | 答题页（选档位 + 逐题 + 即时反馈 + 剩余时间 + 知识点/重点练习） |
 | `static/admin.html` | 管理后台（题库 / AI 出题 / 学情 / 导入 / 设备 / 设置） |
 | `simulate_device.py` | 模拟手机走完整流程 |
 | `probe_miwifi.py` | 只读探测路由器（不改任何规则） |
-| `selftest.py` | 196 项全链路自检（含时段、进度、学情、出题纯函数单测与前后端约定检查） |
+| `selftest.py` | 197 项全链路自检（含时段、进度、学情、出题纯函数单测与前后端约定检查） |
 | `docker-entrypoint.py` `Dockerfile` `docker-compose.yml` `gate.sh` | 常驻部署与运维 |
 
 运行时文件（`state/`，会随容器持久化）：

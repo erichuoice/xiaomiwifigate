@@ -952,6 +952,13 @@ def main():
               len(parsed) == 3 and parsed[0]["answer"] == 0 and
               parsed[1]["answer"] == [0, 1, 3] and parsed[2]["answer"] == 0,
               str([q["answer"] for q in parsed]))
+        # 3.8.1：模型常把真换行写进 JSON 字符串，严格解析会整批作废并降级离线
+        raw_ctrl = ('[{"type":"single","text":"第一行\n第二行","options":["A","B"],'
+                    '"answer":"A","explain":"说明\t带制表符","topic":"分数"}]')
+        parsed_ctrl = ai_bank._extract_json(raw_ctrl)
+        check("AI 返回带裸换行的 JSON 也能解析",
+              len(parsed_ctrl) == 1 and "第二行" in parsed_ctrl[0]["text"],
+              json.dumps(parsed_ctrl, ensure_ascii=False)[:80])
 
         M = "02:00:00:00:00:66"
         pool = [{"id": "q%02d" % i, "text": "题%d" % i, "subject": "数学",

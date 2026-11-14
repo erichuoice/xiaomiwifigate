@@ -367,6 +367,36 @@ def _parse_answer(value, qtype, n_options):
     return idxs[0]
 
 
+def _escape_control(text):
+    """把 JSON 字符串里的裸控制字符（换行/制表符等）转义。
+
+    模型偶尔把真换行直接写进 JSON 字符串，严格解析会报
+    ``Invalid control character``；转义后再解析，正常内容一字不动。
+    """
+    out, in_str, esc = [], False, False
+    for ch in str(text or ""):
+        if in_str:
+            if esc:
+                out.append(ch)
+                esc = False
+            elif ch == "\\":
+                out.append(ch)
+                esc = True
+            elif ch == '"':
+                in_str = False
+                out.append(ch)
+            elif ord(ch) < 0x20:
+                out.append({"\n": "\\n", "\r": "\\r", "\t": "\\t"}
+                           .get(ch, "\\u%04x" % ord(ch)))
+            else:
+                out.append(ch)
+        else:
+            if ch == '"':
+                in_str = True
+            out.append(ch)
+    return "".join(out)
+
+
 def _extract_json(content):
     text = str(content or "").strip()
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I).strip()
@@ -375,8 +405,16 @@ def _extract_json(content):
         text = text[start:end + 1]
     try:
         data = json.loads(text)
-    except ValueError as exc:
-        raise AIError("AI 没有返回合法 JSON：%s" % exc)
+    except ValueError:
+        # 兜底 1：转义裸控制字符（最常见的 Invalid control character）
+        # 兜底 2：宽松模式，允许字符串里出现控制字符
+        try:
+            data = json.loads(_escape_control(text))
+        except ValueError:
+            try:
+                data = json.loads(_escape_control(text), strict=False)
+            except ValueError as exc:
+                raise AIError("AI 没有返回合法 JSON：%s" % exc)
     if not isinstance(data, list):
         if isinstance(data, dict):
             for key in ("questions", "items", "data", "result"):
