@@ -948,6 +948,39 @@ def main():
     code, res = admin("/api/admin/learning/clear", {"bank_id": _lb})
     check("清空指定题库（人）学情接口可用",
           code == 200 and res.get("ok") is True)
+
+    # 3.19.0：错题本下载（CSV / JSON）
+    import admin_api as _api_mod
+    _unit = [{"type": "judge", "text": "1+1=2", "options": ["正确", "错误"],
+              "answer": 0, "count": 2, "last_wrong": 1700000000, "due_at": 0,
+              "status": "待安排", "subject": "数学", "topic": "加减法",
+              "explain": "对", "qid": "x1"}]
+    _csv_unit = _api_mod.mistakes_csv(_unit, "测试库")
+    check("错题 CSV 含表头/答案/解析且带 BOM",
+          _csv_unit.startswith("\ufeff") and "题干" in _csv_unit and
+          "1+1=2" in _csv_unit and "正确" in _csv_unit and "测试库" in _csv_unit)
+
+    learning.record_answer("bank_csv_test", {
+        "id": "csvq1", "text": "错题本导出 2+3=?", "type": "single",
+        "options": ["4", "5", "6"], "answer": 1, "explain": "2+3=5",
+        "subject": "数学", "topic": "加减法", "star": 1}, False)
+    code, raw_csv = call("/api/admin/learning/wrong?bank=bank_csv_test",
+                         opener=_opener)
+    check("错题本可下载为 CSV（Excel 直接打开）",
+          code == 200 and raw_csv.startswith("\ufeff") and
+          "错题本导出 2+3=?" in raw_csv and "题目ID" in raw_csv and
+          "csvq1" in raw_csv, "HTTP %s" % code)
+    code, raw_json = call(
+        "/api/admin/learning/wrong?bank=bank_csv_test&format=json",
+        opener=_opener)
+    try:
+        _j = json.loads(raw_json)
+    except ValueError:
+        _j = {}
+    check("错题本可下载为 JSON 原始明细",
+          code == 200 and len(_j.get("wrong") or []) == 1 and
+          (_j.get("wrong") or [{}])[0].get("qid") == "csvq1")
+    learning.clear("bank_csv_test")
     code, res = admin("/api/admin/learning/clear", {})
     check("清空学情缺少 MAC 被拒绝", code == 400)
 
@@ -2112,6 +2145,13 @@ def main():
     check("手动解除限速不看题库模式直接清零（3.14.1 修复）",
           "清残留限速" in server_html and
           "按模式走会漏清" in server_html)
+
+    # ---- 3.19.0 错题本下载 ----
+    check("学情页有错题本下载入口",
+          'id="learn-dl"' in admin_html and 'id="learn-dl-json"' in admin_html and
+          "/api/admin/learning/wrong" in admin_html and
+          "下载错题本" in admin_html and
+          "function setLearnDownload(" in admin_html)
 
     # ---- 3.18.0 学情按题库（人）：界面与服务端 ----
     check("学情页按题库（人）展示",

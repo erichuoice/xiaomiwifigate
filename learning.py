@@ -539,6 +539,25 @@ def ability(who, now=None):
     }
 
 
+def wrong_book(who, now=None):
+    """错题本原始明细（导出用）：题干、选项、答案、解析、错次数、复习时间。
+
+    按「最近答错」倒序；due 表示是否到了该复习的时间。
+    """
+    now = float(now or time.time())
+    with _lock:
+        dev = dict(_dev(_load(), who, create=False))
+    out = []
+    for w in dev.get("wrong") or []:
+        item = dict(w)
+        item["due"] = int(w.get("due_at") or 0) <= now
+        item["status"] = "待复习" if item["due"] else (
+            "已安排复习" if w.get("due_at") else "待安排")
+        out.append(item)
+    out.sort(key=lambda x: int(x.get("last_wrong") or 0), reverse=True)
+    return out
+
+
 def summary(who, now=None):
     """答题页/接口用的精简版：不暴露完整错题明细。"""
     a = ability(who, now)

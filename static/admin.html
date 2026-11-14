@@ -588,8 +588,16 @@
       <div id="learn-detail" style="margin-top:12px"></div>
       <div class="row">
         <button class="mini ghost" id="learn-refresh">刷新</button>
+        <a id="learn-dl" href="#" style="text-decoration:none">
+          <button type="button" class="mini ghost">下载错题本（CSV）</button>
+        </a>
+        <a id="learn-dl-json" href="#" style="text-decoration:none">
+          <button type="button" class="mini ghost">下载 JSON</button>
+        </a>
         <button class="mini danger" id="learn-clear">清空这个人的学情</button>
       </div>
+      <p class="hint">CSV 用 Excel 直接打开（已带 BOM，中文不乱码），包含题干、选项、正确答案、
+        解析、错次数、下次复习时间；JSON 是原始明细，适合备份或自己处理。</p>
     </div>
   </div>
 
@@ -1819,6 +1827,15 @@
     box.innerHTML = html;
   }
 
+  function setLearnDownload(bankId) {
+    var q = bankId ? '?bank=' + encodeURIComponent(bankId) : '';
+    if (el('learn-dl')) el('learn-dl').href = '/api/admin/learning/wrong' + q;
+    if (el('learn-dl-json')) {
+      el('learn-dl-json').href = '/api/admin/learning/wrong' + q +
+        (q ? '&format=json' : '?format=json');
+    }
+  }
+
   function loadLearning(bankId) {
     var path = '/api/admin/learning' + (bankId ? '?bank=' + encodeURIComponent(bankId) : '');
     return api(path).then(function (res) {
@@ -1826,6 +1843,8 @@
       if (!res.data.ok) { toast(res.data.detail || '读取学情失败'); return; }
       var rows = res.data.banks || [];
       renderLearning(rows, res.data.detail);
+      var cur = bankId || (rows[0] && rows[0].bank_id) || '';
+      setLearnDownload(cur);
       // 首次进入没带题库：补拉一次第一个题库的明细
       if (!bankId && rows.length) return loadLearning(rows[0].bank_id);
     }).catch(function () { toast('读取学情失败'); });

@@ -5,6 +5,8 @@
 返回 (HTTP 状态码, JSON 对象或 Raw, Set-Cookie 值或 None)，由 server.py 发出。
 """
 
+import csv
+import io
 import json
 import re
 import time
@@ -31,6 +33,70 @@ class Raw:
         self.body = body
         self.ctype = ctype
         self.filename = filename
+
+
+TYPE_NAMES = {"single": "单选", "multi": "多选", "judge": "判断"}
+
+
+def _fmt_ts(ts):
+    if not ts:
+        return ""
+    try:
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(int(ts)))
+    except (TypeError, ValueError, OSError):
+        return ""
+
+
+def _answer_text(item):
+    """正确答案的可读文字：单选 A、多选 A,C、判断 正确/错误。"""
+    answer = item.get("answer")
+    options = list(item.get("options") or [])
+    qtype = item.get("type") or "single"
+    if qtype == "judge" and not options:
+        options = ["正确", "错误"]
+    idxs = answer if isinstance(answer, list) else [answer]
+    out = []
+    for i in idxs:
+        try:
+            i = int(i)
+        except (TypeError, ValueError):
+            out.append(str(i))
+            continue
+        if 0 <= i < len(options):
+            out.append("ABCDEFGH"[i] if qtype != "judge" else str(options[i]))
+        else:
+            out.append("ABCDEFGH"[i] if 0 <= i < 26 else str(i))
+    return "、".join(out) if qtype == "judge" else ",".join(out)
+
+
+def _options_text(item):
+    options = list(item.get("options") or [])
+    if not options:
+        return ""
+    return " / ".join("%s. %s" % ("ABCDEFGH"[i] if i < 8 else str(i + 1), o)
+                      for i, o in enumerate(options))
+
+
+def mistakes_csv(rows, bank_name=""):
+    """错题本导出 CSV（带 BOM，Excel 直接打开不乱码）。"""
+    buf = io.StringIO()
+    buf.write("\ufeff")
+    writer = csv.writer(buf)
+    writer.writerow(["序号", "题库", "题型", "学段", "年级", "科目", "知识点",
+                     "错次数", "最近答错", "应复习时间", "状态",
+                     "题干", "选项", "正确答案", "解析", "题目ID"])
+    for i, item in enumerate(rows, 1):
+        writer.writerow([
+            i, bank_name, TYPE_NAMES.get(item.get("type") or "single", "单选"),
+            item.get("stage") or "", item.get("grade") or "",
+            item.get("subject") or "", item.get("topic") or "",
+            int(item.get("count") or 0), _fmt_ts(item.get("last_wrong")),
+            _fmt_ts(item.get("due_at")), item.get("status") or "",
+            item.get("text") or "", _options_text(item),
+            _answer_text(item), item.get("explain") or "",
+            item.get("qid") or item.get("id") or "",
+        ])
+    return buf.getvalue()
 
 
 def cookie_token(headers):
@@ -348,6 +414,24 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
         return 200, dict(saved, ok=True, banks=st.banks()), None
 
     # ---- 学情：错题本 / 弱项 / 复习进度（3.18.0 起按题库=人，不按设备）----
+    if path == "/api/admin/learning/wrong" and method == "GET":
+        which = str((query.get("bank") or [""])[0] or
+                    (query.get("mac") or [""])[0] or "").strip().lower()
+        bank = st.bank(which) if which else st.first_bank()
+        bid = which or (bank["id"] if bank else "")
+        bank_name = bank["name"] if bank else bid
+        rows = learning.wrong_book(bid)
+        safe = re.sub(r"[^\w\-]+", "", bid or "mistakes") or "mistakes"
+        fmt = str((query.get("format") or ["csv"])[0]).strip().lower()
+        if fmt == "json":
+            body = json.dumps({"bank_id": bid, "bank_name": bank_name,
+                               "wrong": rows}, ensure_ascii=False, indent=2)
+            return 200, Raw(body, "application/json; charset=utf-8",
+                            "wifi-gate-mistakes-%s.json" % safe), None
+        return 200, Raw(mistakes_csv(rows, bank_name),
+                        "text/csv; charset=utf-8",
+                        "wifi-gate-mistakes-%s.csv" % safe), None
+
     if path == "/api/admin/learning" and method == "GET":
         which = str((query.get("bank") or [""])[0] or
                     (query.get("mac") or [""])[0] or "").strip().lower()
