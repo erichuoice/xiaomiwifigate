@@ -1265,6 +1265,56 @@ def main():
         check("一轮题型混合且不重复",
               len({q["id"] for q in one}) == len(one) and
               len({q["type"] for q in one}) >= 2)
+
+        # ---- 3.13.0 组卷四层优先级：错题 → 新题 → 毕业错题 → 已会题 ----
+        check("组卷配额按 40/40/10/10 分配",
+              learning._quotas(10, learning.PICK_RATIOS) == [4, 4, 1, 1] and
+              learning._quotas(6, learning.PICK_RATIOS) == [2, 2, 1, 1] and
+              learning._quotas(1, learning.PICK_RATIOS) == [1, 0, 0, 0] and
+              learning._quotas(5, learning.PICK_RATIOS) == [2, 2, 1, 0],
+              str(learning._quotas(5, learning.PICK_RATIOS)))
+        # 造一题「毕业错题」：错过一次，之后连对两次移出错题本
+        for ok in (False, True, True):
+            learning.record_answer(M, pool[17], ok)
+
+        def _tier_of(qid):
+            """按 M 的学情判断该题属于哪一层（A 错题 / B 新题 / C 毕业 / D 已会）。"""
+            if qid in ("q00", "q01", "q02", "q03", "q14"):
+                return "A"
+            if qid == "q17":
+                return "C"
+            if qid in ("q10", "q11", "q12", "q13",
+                       "q20", "q21", "q22", "q23"):
+                return "D"
+            return "B"
+
+        mix_ok, buckets = True, {}
+        for _i in range(3):          # 乱序出题，多跑几次防偶然
+            picked10 = learning.pick_questions(pool, M, 10, later)
+            buckets = {}
+            for q in picked10:
+                k = _tier_of(q["id"])
+                buckets[k] = buckets.get(k, 0) + 1
+            if buckets != {"A": 4, "B": 4, "C": 1, "D": 1}:
+                mix_ok = False
+                break
+        check("一轮 10 题按 4 错题/4 新题/1 毕业错题/1 已会题组成",
+              mix_ok, str(buckets))
+
+        # 错题只有 2 道时：份额顺延，整轮 6 题 = 2 错题 + 4 新题
+        # （M2 只做过 q00/q01 两道错题，对它来说其余全是没做过的新题）
+        M2 = "02:00:00:00:00:77"
+        learning.record_answer(M2, pool[0], False)
+        learning.record_answer(M2, pool[1], False)
+        p2 = learning.pick_questions(pool, M2, 6, later)
+        p2_ids = {q["id"] for q in p2}
+        check("某层题不够时份额自动顺延（2 道错题 + 4 道新题）",
+              len(p2) == 6 and len(p2_ids) == 6 and
+              len(p2_ids & {"q00", "q01"}) == 2 and
+              len(p2_ids - {"q00", "q01"}) == 4,
+              str(sorted(p2_ids)))
+        learning.clear(M2)
+
         check("清空学情后无残留设备",
               learning.clear(M) and learning.all_devices() == [])
         dev_gen = ai_bank.generate_for_device(
@@ -1518,6 +1568,18 @@ def main():
         server_html = f.read()
     with open(os.path.join(BASE, "Dockerfile"), encoding="utf-8") as f:
         dockerfile = f.read()
+    with open(os.path.join(BASE, "learning.py"), encoding="utf-8") as f:
+        learning_src = f.read()
+    check("组卷按四层优先级取题（错题/新题/毕业错题/已会题）",
+          "PICK_RATIOS = (0.40, 0.40, 0.10, 0.10)" in learning_src and
+          "def _quotas" in learning_src and
+          "shortfall" in learning_src and
+          "_weak_order" in learning_src and
+          "四层优先级" in server_html)
+    check("组卷仍保留弱项加权与单知识点上限",
+          "_weighted_pick" in learning_src and
+          "topic_cap" in learning_src and
+          "_enforce_topic_cap" in learning_src)
     check("服务端守护线程逐库检查、逐库补题",
           "def auto_bank_worker" in server_html and
           "target=auto_bank_worker" in server_html and

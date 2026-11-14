@@ -225,7 +225,7 @@ def start_round(ip, mac, bank, tier_index):
     tier = bank["tiers"][tier_index]
     pool = bank["questions"]
     n = max(1, min(int(tier["questions"]), len(pool)))
-    # 智能组卷：到期错题 / 类似题 + 弱项加权 + 三种题型混合
+    # 智能组卷（3.13.0 四层优先级）：错题 40% → 新题 40% → 毕业错题 10% → 已会题 10%
     try:
         questions = learning.pick_questions(pool, mac, n)
         if not questions:

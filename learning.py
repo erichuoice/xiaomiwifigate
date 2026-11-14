@@ -9,11 +9,14 @@
     rounds:  答题轮次统计,
   }
 
-组卷不再是纯随机：
-  1) 到期的错题原题 / 同知识点的类似题优先插入（间隔复习）
-  2) 弱项知识点加权抽题，弱得越明显权重越高
-  3) 尽量让单选、多选、判断三种题型都出现
-  4) 一轮之内不重复，且复习题不总排在最前面
+组卷不再是纯随机（3.13.0 起按四层优先级取题）：
+  1) 错题（答错过、还没答对过的）优先，占约 40%——复习到期的先出
+  2) 没做过的新题占约 40%，保证进度推进
+  3) 以前错过、后来连对「毕业」的题占约 10%，少量复习防遗忘
+  4) 做过且一直答对的已会题占约 10%，热身维持
+  某层题不够时份额自动顺延给后面的层；层内仍按弱项知识点加权。
+  另保留：弱项加权（层内排序）、同一知识点一轮最多占一半、
+  尽量三种题型都出现、一轮之内不重复、乱序出题。
 """
 
 import json
@@ -416,8 +419,44 @@ def _enforce_topic_cap(chosen, pool, cap):
     return chosen
 
 
+# ---------- 智能取题（3.13.0 四层优先级：错题/新题/毕业错题/已会题）----------
+
+# 3.13.0 四层优先级与比例：错题(未消化) / 新题 / 已毕业的错题 / 已会题
+PICK_RATIOS = (0.40, 0.40, 0.10, 0.10)
+
+
+def _quotas(n, ratios):
+    """按比例算各层配额：先向下取整，剩余名额按小数余量从大到小分配
+    （余量相同优先靠前的层）。例：n=10 → 4/4/1/1，n=6 → 2/2/1/1，n=1 → 1/0/0/0。"""
+    q = [int(n * r) for r in ratios]
+    rem = n - sum(q)
+    order = sorted(range(len(ratios)),
+                   key=lambda i: (-(n * ratios[i] - q[i]), i))
+    for i in order[:max(0, rem)]:
+        q[i] += 1
+    return q
+
+
+def _weak_order(qs, weak):
+    """层内排序：弱项知识点的题排前面（同分随机），供按配额顺序取题。"""
+    lst = list(qs)
+    random.shuffle(lst)
+    lst.sort(key=lambda q: -(weak[topic_of(q)]["score"]
+                             if topic_of(q) in weak else 0))
+    return lst
+
+
 def pick_questions(pool, mac, n, now=None):
-    """智能组卷：复习题 + 弱项加权 + 题型混合，返回 n 道题（不重复）。"""
+    """智能组卷（3.13.0 四层优先级）：
+
+    ① 错题 40% —— 答错过、还没答对过的错题优先消化，复习到期的排最前
+    ② 新题 40% —— 没做过的题，保证进度
+    ③ 毕业错题 10% —— 以前错过、后来连对两次移出错题本的题，少量复习防遗忘
+    ④ 已会题 10% —— 做过且一直答对的题，热身维持
+    某层题不够（或被知识点上限挡住）时份额自动顺延给后面的层；
+    层内按弱项知识点加权排序。另保留：同一知识点一轮最多占一半、
+    题型混合、不重复、乱序。返回 n 道题。
+    """
     pool = [q for q in (pool or []) if q]
     n = max(1, min(int(n), len(pool)))
     if not pool:
@@ -429,34 +468,60 @@ def pick_questions(pool, mac, n, now=None):
     except Exception:
         dev = _empty_device()
     weak = {w["topic"]: w for w in weak_topics(dev)}
-    due = [w for w in (dev.get("wrong") or []) if w.get("due_at", 0) <= now]
+    wrong = {str(w.get("qid") or ""): w for w in (dev.get("wrong") or [])}
+    seen_wrong, seen_right = set(), set()
+    for h in dev.get("history") or []:
+        qid = str(h.get("qid") or "")
+        if qid:
+            (seen_wrong if not h.get("ok") else seen_right).add(qid)
+
+    # 把整个题池分成四层
+    tiers = ([], [], [], [])
+    for q in pool:
+        qid = str(q.get("id") or "")
+        if qid and qid in wrong:
+            tiers[0].append(q)      # ① 错题：还在错题本里 = 没答对过
+        elif qid and qid in seen_wrong:
+            tiers[2].append(q)      # ③ 错过但已毕业（连对两次移出错题本）
+        elif qid and qid in seen_right:
+            tiers[3].append(q)      # ④ 做过且一直对
+        else:
+            tiers[1].append(q)      # ② 没做过的新题
+    # 错题层内部：复习到期的在前，都没到期则最近做错的在前
+    tiers[0].sort(
+        key=lambda q: (
+            wrong.get(str(q.get("id") or ""), {}).get("due_at", 0) <= now,
+            wrong.get(str(q.get("id") or ""), {}).get("last_wrong", 0)),
+        reverse=True)
 
     chosen, used, counts = [], set(), {}
     # 弱项要「多出题」但不能整轮只做弱项，孩子会崩；同一知识点最多占半轮
     topic_cap = max(1, int(math.ceil(n * 0.5)))
 
-    # 1) 到期错题：一半原题、一半同知识点「类似题」，避免死记答案
-    quota = min(len(due), max(1, n // 4)) if n >= 4 else (1 if due and n >= 2 else 0)
-    for w in random.sample(due, min(quota, len(due))):
-        exact = next((q for q in pool if q.get("id") == w.get("qid")), None)
-        similar = [q for q in pool
-                   if q.get("id") != w.get("qid") and q.get("id") not in used
-                   and topic_of(q) == w.get("topic")]
-        pick = None
-        if exact and exact.get("id") not in used and (not similar or random.random() < 0.5):
-            pick = exact
-        elif similar:
-            pick = random.choice(similar)
-        elif exact and exact.get("id") not in used:
-            pick = exact
-        t = topic_of(pick) if pick else ""
-        if pick and pick.get("id") not in used and counts.get(t, 0) < topic_cap:
-            used.add(pick.get("id"))
+    def take(cands, k):
+        """按给定顺序取 k 道（跳过已用/超知识点上限的），返回实际取到的数量。"""
+        got = 0
+        for q in cands:
+            if got >= k:
+                break
+            qid = q.get("id")
+            if qid in used or counts.get(topic_of(q), 0) >= topic_cap:
+                continue
+            used.add(qid)
+            t = topic_of(q)
             counts[t] = counts.get(t, 0) + 1
-            chosen.append(pick)
+            chosen.append(q)
+            got += 1
+        return got
 
-    # 2) 其余按知识点加权抽（弱项最高 3 倍）；已达本轮上限的知识点先排除，
-    #    池子不够多样时才放宽，保证「弱项多出题」但不把孩子按在同一知识点上刷
+    # 按四层配额取题；某层不够的份额顺延给后面的层，最后弱项加权补齐
+    shortfall = 0
+    for tier, quota in zip(tiers, _quotas(n, PICK_RATIOS)):
+        shortfall += quota - take(_weak_order(tier, weak), quota)
+    for tier in tiers:
+        if shortfall <= 0:
+            break
+        shortfall -= take(_weak_order(tier, weak), shortfall)
     while len(chosen) < n:
         remaining = [q for q in pool if q.get("id") not in used]
         if not remaining:
