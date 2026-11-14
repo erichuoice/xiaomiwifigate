@@ -950,6 +950,15 @@ def main():
     check("答题页显示知识点与本轮重点", "q.topic" in index_html and
           "本轮重点练习" in index_html)
 
+    # ---- 3.6.1：AI 预览题目必须可见 ----
+    # 题库列表用 .qbody{display:none} 做折叠；预览卡片若沿用同名类且未覆盖，
+    # 题目正文会整块被隐藏（只剩勾选框）。两条规则缺一不可。
+    check("题库折叠样式限定在 .qcard 内",
+          bool(re.search(r"\.qcard\s*>\s*\.qbody\s*\{[^}]*display\s*:\s*none", admin_html)) and
+          ".qcard.open > .qbody" in admin_html)
+    check("AI 预览题目正文强制可见",
+          bool(re.search(r"\.qprev\s+\.qbody\s*\{[^}]*display\s*:\s*block", admin_html)))
+
     for _p, _raw in extra_paths.items():
         try:
             if _raw is None:
