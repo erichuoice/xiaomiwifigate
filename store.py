@@ -47,6 +47,9 @@ MAX_OPTIONS = 8
 MAX_MINUTES = 1440
 MAX_TIER_QUESTIONS = 50
 DEFAULT_TIERS = [{"questions": 3, "minutes": 30}, {"questions": 5, "minutes": 60}]
+# 默认放行规则：答错加题 + 正确率达标（3.12.0 起按题库各自保存）
+DEFAULT_PASS_RULE = {"pass_mode": "rate", "pass_rate_percent": 80,
+                     "wrong_add_questions": 2}
 
 
 class StoreError(Exception):
@@ -226,6 +229,41 @@ def validate_tiers(raw, total_questions, fallback_minutes=60, strict=True):
     return out
 
 
+def validate_pass_rule(src, current=None):
+    """校验一套「放行规则」：怎样算答完一轮可以上网。
+
+    3.12.0 起每套题库各存一份（答题时按设备所属题库判卷），
+    全局 settings 里那份只作为新题库 / 老数据的默认值。
+    """
+    src = src if isinstance(src, dict) else {}
+    current = current if isinstance(current, dict) else {}
+
+    def pick(key):
+        for d in (src, current, DEFAULT_PASS_RULE):
+            v = d.get(key)
+            if v is not None and v != "":
+                return v
+        return DEFAULT_PASS_RULE[key]
+
+    mode = str(pick("pass_mode")).strip().lower()
+    if mode not in ("strict", "rate"):
+        raise StoreError("放行规则只能是 strict（全部答对）或 rate（正确率达标）")
+    try:
+        rate = int(pick("pass_rate_percent"))
+    except (TypeError, ValueError):
+        raise StoreError("放行正确率阈值必须是数字")
+    if not 50 <= rate <= 100:
+        raise StoreError("放行正确率阈值需在 50-100 之间")
+    try:
+        add = int(pick("wrong_add_questions"))
+    except (TypeError, ValueError):
+        raise StoreError("答错加题数必须是数字")
+    if not 0 <= add <= 10:
+        raise StoreError("答错加题数需在 0-10 之间（0 = 不加题）")
+    return {"pass_mode": mode, "pass_rate_percent": rate,
+            "wrong_add_questions": add}
+
+
 def validate_settings(settings, current):
     if not isinstance(settings, dict):
         raise StoreError("设置格式不正确")
@@ -237,28 +275,12 @@ def validate_settings(settings, current):
         raise StoreError("每日累计上限必须是数字")
     if not 0 <= cap <= MAX_MINUTES:
         raise StoreError("每日累计上限需在 0-%s 分钟之间（0 = 不限）" % MAX_MINUTES)
-    # ---- 3.11.0 放行规则：严格（全对）/ 正确率达标 ----
-    mode = str(settings.get("pass_mode",
-                             current.get("pass_mode", "rate"))).strip().lower()
-    if mode not in ("strict", "rate"):
-        raise StoreError("放行规则只能是 strict（全部答对）或 rate（正确率达标）")
-    try:
-        rate = int(settings.get("pass_rate_percent",
-                                 current.get("pass_rate_percent", 80)))
-    except (TypeError, ValueError):
-        raise StoreError("放行正确率阈值必须是数字")
-    if not 50 <= rate <= 100:
-        raise StoreError("放行正确率阈值需在 50-100 之间")
-    try:
-        add = int(settings.get("wrong_add_questions",
-                                current.get("wrong_add_questions", 2)))
-    except (TypeError, ValueError):
-        raise StoreError("答错加题数必须是数字")
-    if not 0 <= add <= 10:
-        raise StoreError("答错加题数需在 0-10 之间（0 = 不加题）")
+    # ---- 放行规则：3.12.0 起按题库各自配置，全局这份只作为新题库的默认值 ----
+    rule = validate_pass_rule(settings, current)
     return {"note": note, "daily_cap_minutes": cap,
-            "pass_mode": mode, "pass_rate_percent": rate,
-            "wrong_add_questions": add,
+            "pass_mode": rule["pass_mode"],
+            "pass_rate_percent": rule["pass_rate_percent"],
+            "wrong_add_questions": rule["wrong_add_questions"],
             "update_auto_check": _flag(settings.get(
                 "update_auto_check", current.get("update_auto_check", True))),
             "update_auto_apply": _flag(settings.get(
@@ -285,7 +307,7 @@ def validate_macs(macs):
     return out
 
 
-def validate_bank(data, strict=True):
+def validate_bank(data, strict=True, pass_default=None):
     if not isinstance(data, dict):
         raise StoreError("题库格式不正确")
     name = str(data.get("name") or "").strip()[:24]
@@ -297,6 +319,9 @@ def validate_bank(data, strict=True):
     bid = str(data.get("id") or "").strip() or ("bank_" + secrets.token_hex(3))
     if not BANK_ID_RE.match(bid):
         raise StoreError("题库 ID 不合法（只能是字母、数字、下划线、短横线）")
+    # 放行规则存在题库上：老题库没有这几个字段时沿用传进来的默认值
+    # （升级时由全局设置填充，保证原本的开关原样保留）。
+    rule = validate_pass_rule(data, pass_default)
     return {
         "id": bid,
         "name": name,
@@ -304,6 +329,9 @@ def validate_bank(data, strict=True):
         "tiers": tiers,
         "devices": devices,
         "questions": questions,
+        "pass_mode": rule["pass_mode"],
+        "pass_rate_percent": rule["pass_rate_percent"],
+        "wrong_add_questions": rule["wrong_add_questions"],
     }
 
 
@@ -510,15 +538,19 @@ class Store:
 
     def _default_runtime(self):
         s = self._static["server"]
+        banks = self._default_banks()
+        for b in banks:                       # 每套题库都带一份默认放行规则
+            for k, v in DEFAULT_PASS_RULE.items():
+                b.setdefault(k, v)
         return {
             "version": 3,
-            "banks": self._default_banks(),
+            "banks": banks,
             "settings": {
                 "note": str(s.get("note", "")),
                 "daily_cap_minutes": int(s.get("daily_cap_minutes", 0) or 0),
-                "pass_mode": "rate",
-                "pass_rate_percent": 80,
-                "wrong_add_questions": 2,
+                "pass_mode": DEFAULT_PASS_RULE["pass_mode"],
+                "pass_rate_percent": DEFAULT_PASS_RULE["pass_rate_percent"],
+                "wrong_add_questions": DEFAULT_PASS_RULE["wrong_add_questions"],
                 "update_auto_check": bool(s.get("update_auto_check", True)),
                 "update_auto_apply": bool(s.get("update_auto_apply", False)),
             },
@@ -540,9 +572,16 @@ class Store:
 
     def _normalize_runtime(self, data):
         base = self._default_runtime()
+        # 先算全局设置：老题库（3.11.0 及以前）没有题库级放行规则，
+        # 用全局那份当默认值，升级后行为与升级前完全一致。
+        settings = validate_settings(data.get("settings") or {}, base["settings"])
+        pass_default = {"pass_mode": settings["pass_mode"],
+                        "pass_rate_percent": settings["pass_rate_percent"],
+                        "wrong_add_questions": settings["wrong_add_questions"]}
         raw_banks = data.get("banks")
         if isinstance(raw_banks, list) and raw_banks:
-            banks = [validate_bank(b, strict=False) for b in raw_banks]
+            banks = [validate_bank(b, strict=False, pass_default=pass_default)
+                     for b in raw_banks]
             seen = set()
             for b in banks:
                 if b["id"] in seen:
@@ -566,9 +605,11 @@ class Store:
                 "devices": validate_macs(data.get("managed_devices") or []),
                 "tiers": [{"questions": pick, "minutes": minutes}],
                 "questions": questions,
+                "pass_mode": pass_default["pass_mode"],
+                "pass_rate_percent": pass_default["pass_rate_percent"],
+                "wrong_add_questions": pass_default["wrong_add_questions"],
             }]
         self._dedupe_devices(banks)
-        settings = validate_settings(data.get("settings") or {}, base["settings"])
         schedules = schedule.normalize_all(data.get("schedules"))
         return {"version": 3, "banks": banks, "settings": settings,
                 "schedules": schedules}
@@ -634,18 +675,27 @@ class Store:
         return None
 
     def targets(self):
-        """所有受控设备（含所属题库与档位），供「代答」时选择解锁对象。"""
+        """所有受控设备（含所属题库、档位与放行规则），供「代答」时选择解锁对象。"""
         with self._lock:
             out = []
             for b in self._runtime["banks"]:
                 if not b.get("enabled"):
                     continue
+                rule = {
+                    "mode": b.get("pass_mode") or DEFAULT_PASS_RULE["pass_mode"],
+                    "rate": int(b.get("pass_rate_percent")
+                                or DEFAULT_PASS_RULE["pass_rate_percent"]),
+                    "add": int(b.get("wrong_add_questions")
+                               if b.get("wrong_add_questions") is not None
+                               else DEFAULT_PASS_RULE["wrong_add_questions"]),
+                }
                 for mac in b["devices"]:
                     out.append({
                         "mac": mac,
                         "bank_id": b["id"],
                         "bank_name": b["name"],
                         "tiers": copy.deepcopy(b["tiers"]),
+                        "pass_rule": dict(rule),
                     })
             return out
 
@@ -676,7 +726,13 @@ class Store:
             bid = str(data.get("id") or "").strip()
             existing = next((b for b in self._runtime["banks"]
                              if b["id"] == bid), None) if bid else None
-            clean = validate_bank(data)
+            # 新建题库没带放行规则时，沿用当前全局设置里的那份默认值
+            s = self._runtime["settings"]
+            clean = validate_bank(data, pass_default={
+                "pass_mode": s.get("pass_mode"),
+                "pass_rate_percent": s.get("pass_rate_percent"),
+                "wrong_add_questions": s.get("wrong_add_questions"),
+            })
             if existing:
                 clean["id"] = existing["id"]
             elif any(b["id"] == clean["id"] for b in self._runtime["banks"]):

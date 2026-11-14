@@ -241,6 +241,8 @@ def start_round(ip, mac, bank, tier_index):
         "bank_id": bank["id"], "bank_name": bank["name"], "mac": mac,
         "tier": tier_index, "minutes": int(tier["minutes"]),
         "questions": questions, "focus": focus,
+        # 本轮采用题库自己的放行规则；开答后后台改了规则也不会打断这一轮
+        "pass_rule": pass_rule(bank),
         "idx": 0, "results": [], "ts": time.time(),
     }
     with _mutex:
@@ -287,14 +289,26 @@ def is_correct(q, choices):
     return got == sorted(expected)
 
 
-def pass_rule():
-    """当前放行规则（3.11.0：后台可配的判卷方式），给前端展示用。"""
+def pass_rule(bank=None):
+    """放行规则（3.12.0：存在题库上，按设备所属题库判卷）。
+
+    老数据里的题库没有这几个字段时，回落到全局设置 → 内置默认值。
+    """
     s = STORE.snapshot()["settings"]
-    return {
-        "mode": s.get("pass_mode") or "rate",
-        "rate": int(s.get("pass_rate_percent") or 80),
-        "add": int(s.get("wrong_add_questions") or 0),
-    }
+    b = bank if isinstance(bank, dict) else {}
+    mode = b.get("pass_mode") or s.get("pass_mode") or "rate"
+    rate = b.get("pass_rate_percent")
+    if rate is None:
+        rate = s.get("pass_rate_percent", 80)
+    add = b.get("wrong_add_questions")
+    if add is None:
+        add = s.get("wrong_add_questions", 2)
+    try:
+        rate_v, add_v = int(rate), int(add)
+    except (TypeError, ValueError):
+        rate_v, add_v = 80, 2
+    return {"mode": "strict" if mode == "strict" else "rate",
+            "rate": rate_v, "add": max(0, add_v)}
 
 
 def locked_seconds(ip):
@@ -837,6 +851,7 @@ class Handler(BaseHTTPRequestHandler):
                 "name": names.get(t["mac"], ""),
                 "bank": {"id": t["bank_id"], "name": t["bank_name"]},
                 "tiers": t["tiers"],
+                "pass_rule": t.get("pass_rule") or pass_rule(),
                 "remaining_minutes": minutes_left(trec),
                 "today_minutes": granted_today(trec),
                 "is_self": t["mac"] == mac,
@@ -865,6 +880,7 @@ class Handler(BaseHTTPRequestHandler):
             "pick_target": False,
             "bank": {"id": bank["id"], "name": bank["name"]},
             "tiers": bank["tiers"],
+            "pass_rule": pass_rule(bank),
             "remaining_minutes": minutes_left(rec),
             "today_minutes": used,
             "daily_cap_minutes": cap,
@@ -1035,13 +1051,14 @@ class Handler(BaseHTTPRequestHandler):
             total = len(sess["questions"])
             results = list(sess["results"])
 
-        # ---- 3.11.0 正确率模式：答错当场在本轮末尾追加题目 ----
-        settings = STORE.snapshot()["settings"]
-        rule_mode = settings.get("pass_mode") or "rate"
+        # ---- 正确率模式：答错当场在本轮末尾追加题目 ----
+        # 规则来自本轮的题库（3.12.0：每套题库各配各的），开答时已快照进会话。
+        rule = sess.get("pass_rule") or pass_rule(STORE.bank(sess["bank_id"]))
+        rule_mode = rule.get("mode") or "rate"
         rate_mode = rule_mode != "strict"
         added = 0
         if not ok and rate_mode:
-            add_n = int(settings.get("wrong_add_questions") or 0)
+            add_n = int(rule.get("add") or 0)
             if add_n > 0:
                 try:
                     used = {x["id"] for x in sess["questions"]}
@@ -1070,7 +1087,7 @@ class Handler(BaseHTTPRequestHandler):
         accuracy = int(round(correct_n * 100.0 / total)) if total else 0
         if idx >= total:
             if rate_mode:
-                rate = int(settings.get("pass_rate_percent") or 80)
+                rate = int(rule.get("rate") or 80)
                 passed = correct_n * 100 >= rate * total
             else:
                 passed = all(results)
@@ -1108,8 +1125,7 @@ class Handler(BaseHTTPRequestHandler):
         # 一轮结束
         feedback["done"] = True
         if rate_mode:
-            feedback["pass_rate_percent"] = int(
-                settings.get("pass_rate_percent") or 80)
+            feedback["pass_rate_percent"] = int(rule.get("rate") or 80)
             feedback["accuracy_percent"] = accuracy
         if passed:
             try:

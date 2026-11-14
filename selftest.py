@@ -252,6 +252,30 @@ def main():
         except store.StoreError:
             check(name, True)
 
+    # ---- 3.12.0 放行规则存到题库上（校验函数，纯逻辑）----
+    ok_bank = {"id": "bank_selftest", "name": "校验用题库",
+               "tiers": [{"questions": 1, "minutes": 30}], "devices": [],
+               "questions": [{"type": "single", "text": "自检：1 + 1 = ?",
+                              "options": ["1", "2"], "answer": 1}]}
+    b1 = store.validate_bank(dict(ok_bank, pass_mode="strict",
+                                  pass_rate_percent=90, wrong_add_questions=0))
+    check("题库可各自保存放行规则（严格 / 90% / 不加题）",
+          b1["pass_mode"] == "strict" and b1["pass_rate_percent"] == 90 and
+          b1["wrong_add_questions"] == 0)
+    b2 = store.validate_bank(ok_bank, pass_default={
+        "pass_mode": "rate", "pass_rate_percent": 65, "wrong_add_questions": 3})
+    check("题库没带放行规则时沿用默认值（老数据升级行为不变）",
+          b2["pass_mode"] == "rate" and b2["pass_rate_percent"] == 65 and
+          b2["wrong_add_questions"] == 3)
+    for name, patch in (("题库正确率阈值非法被拒绝", {"pass_rate_percent": 10}),
+                        ("题库答错加题数非法被拒绝", {"wrong_add_questions": 99}),
+                        ("题库未知放行模式被拒绝", {"pass_mode": "随便填"})):
+        try:
+            store.validate_bank(dict(ok_bank, **patch))
+            check(name, False)
+        except store.StoreError:
+            check(name, True)
+
     # ---- 答题时段规则单测（纯函数、固定时间戳，不碰真实路由器）----
     # 2026-11-09 是周一，at(0)=周一、at(5)=周六、at(6)=周日
     def at(day, hour, minute=0):
@@ -434,6 +458,16 @@ def main():
     check("新建题库", code == 200 and bool(test_bank.get("id")),
           "%s / %s 道" % (test_bank.get("name"), len(test_bank.get("questions", []))))
 
+    def set_pass_rule(**rule):
+        """按题库设置放行规则（3.12.0：规则存在题库上，不再走全局设置）。"""
+        code, cur_state = admin("/api/admin/state")
+        b = next((x for x in (cur_state.get("banks") or [])
+                  if x.get("id") == test_bank.get("id")), None)
+        if not b:
+            return 0, {"ok": False, "detail": "自检题库不存在"}
+        b.update(rule)
+        return admin("/api/admin/bank", b)
+
     code, res = admin("/api/admin/bank/assign",
                       {"mac": mac, "bank_id": test_bank.get("id", "")})
     check("设备分配到题库", code == 200 and res.get("result", {}).get("bank_id"),
@@ -482,13 +516,12 @@ def main():
     code, res = start(9)
     check("非法档位被拒绝", code == 400, "HTTP %s" % code)
 
-    # ---- 3.11.0：默认判卷规则是「正确率放行」；本段先切回严格模式 ----
+    # ---- 3.12.0：放行规则存在题库上；本段先把自检题库切回严格模式 ----
     # 验证原有「全对才放行、答错整轮重来」的行为保持不变。
-    code, res = admin("/api/admin/settings", {"settings": {
-        "pass_mode": "strict", "daily_cap_minutes": orig_cap,
-        "note": orig_settings["note"]}})
-    check("后台可切回严格模式（全部答对才放行）",
-          code == 200 and (res.get("settings") or {}).get("pass_mode") == "strict")
+    code, res = set_pass_rule(pass_mode="strict")
+    check("后台可按题库切回严格模式（全部答对才放行）",
+          code == 200 and (res.get("bank") or {}).get("pass_mode") == "strict",
+          str((res.get("bank") or {}).get("pass_mode")))
 
     # ---- 逐题作答：答错重来 ----
     code, d = start(1)
@@ -562,15 +595,13 @@ def main():
           {"settings": {"daily_cap_minutes": orig_cap,
                         "note": orig_settings["note"]}})
 
-    # ---- 3.11.0 正确率放行：答错当场加题 + 达标放行 ----
-    code, res = admin("/api/admin/settings", {"settings": {
-        "pass_mode": "rate", "pass_rate_percent": 80,
-        "wrong_add_questions": 2, "daily_cap_minutes": orig_cap,
-        "note": orig_settings["note"]}})
-    check("切换到正确率放行（80% / 每答错加 2 题）",
-          code == 200 and (res.get("settings") or {}).get("pass_mode") == "rate"
-          and (res.get("settings") or {}).get("pass_rate_percent") == 80
-          and (res.get("settings") or {}).get("wrong_add_questions") == 2)
+    # ---- 3.12.0 正确率放行：答错当场加题 + 达标放行（配在题库上）----
+    code, res = set_pass_rule(pass_mode="rate", pass_rate_percent=80,
+                              wrong_add_questions=2)
+    check("题库可以配成正确率放行（80% / 每答错加 2 题）",
+          code == 200 and (res.get("bank") or {}).get("pass_mode") == "rate"
+          and (res.get("bank") or {}).get("pass_rate_percent") == 80
+          and (res.get("bank") or {}).get("wrong_add_questions") == 2)
 
     # 给自检题库加一个 5 题档，让「答错还能达标」有稀释空间
     code, cur = admin("/api/admin/state")
@@ -583,8 +614,27 @@ def main():
 
     code, info = admin("/api/quiz")
     pr = info.get("pass_rule") or {}
-    check("答题页下发放行规则（模式/阈值/加题数）",
-          pr.get("mode") == "rate" and pr.get("rate") == 80 and pr.get("add") == 2)
+    check("答题页按本题库下发放行规则（模式/阈值/加题数）",
+          pr.get("mode") == "rate" and pr.get("rate") == 80 and pr.get("add") == 2,
+          str(pr))
+    tgt_pr = ((info.get("targets") or [{}])[0] or {}).get("pass_rule") or {}
+    check("可选设备列表里每台设备带自己题库的放行规则",
+          bool(tgt_pr) and tgt_pr == pr, str(tgt_pr))
+
+    # 全局设置里的那份只作为新题库的默认值，不能盖掉题库自己的规则
+    admin("/api/admin/settings", {"settings": {
+        "pass_mode": "strict", "pass_rate_percent": 60,
+        "wrong_add_questions": 0, "daily_cap_minutes": orig_cap,
+        "note": orig_settings["note"]}})
+    code, info = admin("/api/quiz")
+    pr2 = info.get("pass_rule") or {}
+    check("判卷按题库自己的规则，全局设置只作新题库默认值",
+          pr2.get("mode") == "rate" and pr2.get("rate") == 80 and
+          pr2.get("add") == 2, str(pr2))
+    admin("/api/admin/settings", {"settings": {
+        "pass_mode": "rate", "pass_rate_percent": 80,
+        "wrong_add_questions": 2, "daily_cap_minutes": orig_cap,
+        "note": orig_settings["note"]}})
 
     right = answers_of(test_bank["id"])
 
@@ -623,11 +673,9 @@ def main():
           % (last.get("accuracy_percent"), last.get("pass_rate_percent")))
 
     # ③ 边界：正确率恰好等于阈值也放行（≥ 判定）
-    code, res = admin("/api/admin/settings", {"settings": {
-        "pass_rate_percent": 75, "daily_cap_minutes": orig_cap,
-        "note": orig_settings["note"]}})
-    check("阈值可以调成 75", code == 200 and
-          (res.get("settings") or {}).get("pass_rate_percent") == 75)
+    code, res = set_pass_rule(pass_rate_percent=75)
+    check("题库阈值可以单独调成 75", code == 200 and
+          (res.get("bank") or {}).get("pass_rate_percent") == 75)
     code, d = start(1)
     q1 = d.get("question") or {}
     code, d = answer(q1["id"], wrong_pick(q1, right))
@@ -635,9 +683,7 @@ def main():
     check("正确率恰好达到阈值也放行（≥ 判定）",
           last.get("all_correct") is True and last.get("accuracy_percent") == 75,
           "正确率 %s%%" % last.get("accuracy_percent"))
-    admin("/api/admin/settings", {"settings": {
-        "pass_rate_percent": 80, "daily_cap_minutes": orig_cap,
-        "note": orig_settings["note"]}})
+    set_pass_rule(pass_rate_percent=80)
 
     # ---- 题库校验 ----
     bad = dict(TEST_BANK, id=test_bank.get("id"),
@@ -706,11 +752,9 @@ def main():
     # ---- 答错次数锁定（放最后，会锁 60 秒）----
     admin("/api/admin/bank/assign",
           {"mac": mac, "bank_id": test_bank.get("id")})
-    # 3.11.0：锁定语义按「整轮重来」验证，先切回严格模式；
+    # 3.12.0：锁定语义按「整轮重来」验证，先把自检题库切回严格模式；
     # 前面正确率模式的用例已累计错误计数，这里清零保持用例独立。
-    admin("/api/admin/settings", {"settings": {
-        "pass_mode": "strict", "daily_cap_minutes": orig_cap,
-        "note": orig_settings["note"]}})
+    set_pass_rule(pass_mode="strict")
     code, res = admin("/api/admin/unlock", {})
     check("清零答题错误计数（后台一键解锁）",
           code == 200 and res.get("ok") is True)
@@ -1285,6 +1329,22 @@ def main():
                 }, f, ensure_ascii=False)
             fake_st = store.Store()
 
+            # 3.12.0：放行规则存在题库上，两套题库各配各的
+            fake_st.save_bank({"id": "bank_test", "name": "自动自检题库",
+                               "tiers": [{"questions": 1, "minutes": 30}],
+                               "devices": [], "questions": seed,
+                               "pass_mode": "strict", "pass_rate_percent": 90,
+                               "wrong_add_questions": 0})
+            check("题库 A 保存自己的放行规则（严格 / 90% / 不加题）",
+                  fake_st.bank("bank_test")["pass_mode"] == "strict" and
+                  fake_st.bank("bank_test")["pass_rate_percent"] == 90 and
+                  fake_st.bank("bank_test")["wrong_add_questions"] == 0)
+            check("题库 B 不受题库 A 的规则影响（仍为默认 80% / 加 2 题）",
+                  fake_st.bank("bank_junior")["pass_mode"] == "rate" and
+                  fake_st.bank("bank_junior")["pass_rate_percent"] == 80 and
+                  fake_st.bank("bank_junior")["wrong_add_questions"] == 2,
+                  str(fake_st.bank("bank_junior").get("pass_rate_percent")))
+
             # 旧版（3.9.0 及以前）单份配置文件 → 首次读取自动迁移成一条规则
             with open(auto_bank.PATH, "w", encoding="utf-8") as f:
                 json.dump({"enabled": True, "threshold": 25,
@@ -1399,6 +1459,26 @@ def main():
             check("初中库执行后进入它自己的冷却（60 分钟）",
                   auto_bank.load_rule(fake_st, "bank_junior")["next_run"] -
                   ab_now == 60 * 60)
+
+            # 3.12.0：老数据（3.11.0 及以前）题库里没有放行规则 →
+            # 继承当时的全局设置，升级后判卷行为与升级前完全一致。
+            with open(store.RUNTIME_PATH, "w", encoding="utf-8") as f:
+                json.dump({"version": 3, "banks": [
+                    {"id": "bank_old", "name": "老题库", "enabled": True,
+                     "devices": [], "tiers": [{"questions": 1, "minutes": 30}],
+                     "questions": seed}],
+                    "settings": {"pass_mode": "strict", "pass_rate_percent": 70,
+                                 "wrong_add_questions": 5},
+                    "schedules": {}}, f, ensure_ascii=False)
+            legacy_st = store.Store()
+            lb = legacy_st.bank("bank_old")
+            check("老题库自动继承全局放行规则（升级不改行为）",
+                  lb["pass_mode"] == "strict" and
+                  lb["pass_rate_percent"] == 70 and
+                  lb["wrong_add_questions"] == 5,
+                  "%s / %s%% / %s" % (lb["pass_mode"],
+                                      lb["pass_rate_percent"],
+                                      lb["wrong_add_questions"]))
         finally:
             store.RUNTIME_PATH = old_rt
     finally:
@@ -1487,20 +1567,29 @@ def main():
           admin_html.count("请至少勾选一个科目") >= 2,
           str(admin_html.count("请至少勾选一个科目")))
 
-    # ---- 3.11.0 放行规则（答错加题 + 正确率达标）----
-    check("后台设置页有放行规则三项（模式/阈值/加题）",
+    # ---- 3.12.0 放行规则：按题库配置（答错加题 + 正确率达标）----
+    check("放行规则三条配置放在「题库」页签，不再是全局设置",
+          "放行规则<span class=\"count\">只对本题库生效</span>" in admin_html and
           all(w in admin_html for w in
-              ('id="pass-mode"', 'id="pass-rate"', 'id="wrong-add"',
-               "pass_mode: el('pass-mode').value",
-               "pass_rate_percent: Number(el('pass-rate').value)",
-               "wrong_add_questions: Number(el('wrong-add').value)")))
+              ('id="bank-pass-mode"', 'id="bank-pass-rate"',
+               'id="bank-wrong-add"',
+               "pass_mode: el('bank-pass-mode').value",
+               "pass_rate_percent: Number(el('bank-pass-rate').value)",
+               "wrong_add_questions: Number(el('bank-wrong-add').value)")) and
+          'id="pass-mode"' not in admin_html and
+          'id="wrong-add"' not in admin_html)
+    check("切换题库时回填该题库自己的放行规则",
+          "el('bank-pass-mode').value = b.pass_mode" in admin_html and
+          "el('bank-pass-rate').value = b.pass_rate_percent" in admin_html and
+          "el('bank-wrong-add').value = b.wrong_add_questions" in admin_html)
     check("判卷支持两种模式且默认正确率放行",
           'value="rate">正确率达到阈值就放行' in admin_html and
           'value="strict">一轮全部答对才放行' in admin_html)
-    check("服务端按模式判卷并下发加题信息",
-          "pass_mode" in server_html and "added_questions" in server_html and
+    check("服务端按题库规则判卷（开答时把规则快照进本轮）",
+          '"pass_rule": pass_rule(bank)' in server_html and
+          'sess.get("pass_rule")' in server_html and
+          "added_questions" in server_html and
           "accuracy_percent" in server_html and
-          "wrong_add_questions" in server_html and
           "correct_n * 100 >= rate * total" in server_html)
     check("答错加题只挑本轮没出过的题",
           "sess[\"bank_id\"]" in server_html and
@@ -1510,8 +1599,10 @@ def main():
           "本轮正确率" in index_html and
           "passRuleText" in index_html and
           "if (d.total) S.total = d.total" in index_html)
-    check("答题页档位说明按放行规则显示",
-          "pass_rule" in index_html and
+    check("答题页按所选设备的题库显示放行规则",
+          "function ruleOf(t)" in index_html and
+          "(t && t.pass_rule)" in index_html and
+          "passRuleText(t)" in index_html and
           "即可放行" in index_html)
 
     for _p, _raw in extra_paths.items():

@@ -364,8 +364,13 @@
     });
   }
 
-  function passRuleText() {
-    var rule = (S.info && S.info.pass_rule) || {};
+  function ruleOf(t) {
+    // 3.12.0：放行规则按题库配置，优先用所选设备的题库规则
+    return (t && t.pass_rule) || (S.info && S.info.pass_rule) || {};
+  }
+
+  function passRuleText(t) {
+    var rule = ruleOf(t);
     if (rule.mode === 'strict')
       return '一轮全部答对才生效，答错一道要重来。';
     var rate = rule.rate || 80, add = rule.add || 0;
@@ -381,8 +386,8 @@
     el('pick-title').textContent = bankName ? bankName + ' · 选一个目标开始答题'
                                            : '选一个目标开始答题';
     var who = S.target ? '答对后将放行「' + label(t) + '」。' : '';
-    el('pick-desc').textContent = who + passRuleText();
-    var rule = (S.info && S.info.pass_rule) || {};
+    el('pick-desc').textContent = who + passRuleText(t);
+    var rule = ruleOf(t);
     (t.tiers || []).forEach(function (tier, i) {
       var b = document.createElement('button');
       b.type = 'button';
