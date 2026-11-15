@@ -38,6 +38,7 @@
     background:var(--soft); }
   .notes-panel { display:none; margin:8px 0 4px; padding:10px 12px;
     border-radius:10px; background:#f7f9fb; border:1px dashed var(--line); }
+  .notes-panel.open { display:block; }
   .notes-panel > p.hint, .notes-panel > div { margin:0 0 6px; background:none;
     border:0; padding:0; }
   .notes-panel > *:last-child { margin-bottom:0; }
@@ -3382,9 +3383,9 @@
         heading.parentNode.insertBefore(panel, heading.nextSibling);
         sec.nodes.forEach(function (n) { panel.appendChild(n); });
         btn.onclick = function () {
-          var open = panel.style.display !== 'none';
-          panel.style.display = open ? 'none' : 'block';
-          btn.className = open ? 'info-btn' : 'info-btn on';
+          panel.classList.toggle('open');
+          btn.className = panel.classList.contains('open')
+            ? 'info-btn on' : 'info-btn';
         };
       });
     });

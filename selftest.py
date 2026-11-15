@@ -2541,6 +2541,10 @@ def main():
           "这里只显示<b>当前管理对象</b>的反馈" in admin_html and
           "loadFeedback()" in admin_html and
           "/api/admin/feedback' + (bid ?" in admin_html)
+    check("说明小 i 图标点一次就展开（3.44.1）",
+          ".notes-panel.open { display:block; }" in admin_html and
+          "panel.classList.toggle('open');" in admin_html and
+          "panel.style.display" not in admin_html)
     check("说明收进标题旁的小 i 图标，点击才展开（3.44.0）",
           ".info-btn {" in admin_html and ".notes-panel {" in admin_html and
           "function buildInfoPanels(" in admin_html and
