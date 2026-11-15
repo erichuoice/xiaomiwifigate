@@ -2519,6 +2519,12 @@ def main():
           "错题原因与建议" in admin_html and
           "window.scrollTo(0, 0);" in index_html and
           'href="/mistakes"' in index_html)
+    check("答题页进度条/题目信息/操作提示移到底部（3.46.0）",
+          index_html.index('id="main"') < index_html.index('id="progress"') <
+          index_html.index('id="chips"') < index_html.index('id="answer-hint"') and
+          "el('chips').style.display = show ? 'flex' : 'none';" in index_html and
+          "el('answer-hint').style.display = show ? 'block' : 'none';" in index_html and
+          "el('progress').style.display = 'none';" in index_html)
     check("答题页单选/判断选中即提交、答对 1 秒自动下一题（3.35.0）",
           "选中答案就提交" in index_html and
           "S.picked = [idx];" in index_html and
