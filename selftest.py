@@ -1006,6 +1006,19 @@ def main():
               for s in _dsub.get("subjects") or []) and
           any(s.get("subject") == "英语" and s.get("accuracy") == 0.0
               for s in _dsub.get("subjects") or []))
+    # 3.39.0：删掉某学科的错题记录
+    _del_before = learning.ability("bank_subj_test").get("wrong_count")
+    _removed = learning.delete_wrong_by_subject("bank_subj_test", "英语")
+    _after = learning.ability("bank_subj_test")
+    check("可以只删某个学科的错题记录",
+          _removed >= 1 and _after.get("wrong_count") == _del_before - _removed and
+          all(w.get("subject") != "英语" for w in _after.get("wrong") or []))
+    code, res = admin("/api/admin/learning/wrong/delete",
+                      {"bank_id": "bank_subj_test", "subject": "数学"})
+    check("删除某科错题接口可用（只删该科）",
+          code == 200 and res.get("ok") is True and
+          all(w.get("subject") != "数学"
+              for w in (res.get("detail") or {}).get("wrong") or []))
     learning.clear("bank_subj_test")
 
     # 3.34.0：错题本里编辑题目 + 学生异议反馈
@@ -2496,6 +2509,10 @@ def main():
           "id=\"qedit-mask\"" in admin_html and
           "/api/feedback" in index_html and "这题是不是出错了" in index_html and
           "function addDispute(" in index_html)
+    check("学情页可按学科删除错题记录（3.39.0）",
+          callable(getattr(learning, "delete_wrong_by_subject", None)) and
+          "data-delsub" in admin_html and
+          "/api/admin/learning/wrong/delete" in admin_html)
     check("题目搜索匹配整道题（题干/选项/答案/解析/知识点/章节/题号，3.38.0）",
           "function questionHaystack(" in admin_html and
           "if (Array.isArray(q.options)) parts = parts.concat(q.options);" in admin_html and

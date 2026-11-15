@@ -577,6 +577,16 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
         return 200, {"ok": True, "banks": rows,
                      "detail": learning.ability(which) if which else None}, None
 
+    if path == "/api/admin/learning/wrong/delete" and method == "POST":
+        data = _body(raw)
+        who = str(data.get("bank_id") or data.get("mac") or "").strip().lower()
+        subject = str(data.get("subject") or "").strip()
+        if not who:
+            return 400, {"ok": False, "detail": "请指定题库"}, None
+        removed = learning.delete_wrong_by_subject(who, subject)
+        return 200, {"ok": True, "removed": removed,
+                     "detail": (learning.ability(who) if who else {})}, None
+
     if path == "/api/admin/learning/clear" and method == "POST":
         data = _body(raw)
         who = str(data.get("bank_id") or data.get("mac") or "").strip().lower()

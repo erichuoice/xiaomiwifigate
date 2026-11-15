@@ -2186,7 +2186,9 @@
           ((s.weak_topics || []).length
             ? '　弱项：' + s.weak_topics.map(function (t) {
                 return '<span class="pill">' + escHtml(t) + '</span>';
-              }).join('') : '') + '</div>';
+              }).join('') : '') +
+          ' <button class="mini danger" data-delsub="' + escHtml(s.subject) +
+          '">删除该科错题</button></div>';
       });
       if (a.weakest_subject) {
         html += '<p class="hint">最需要加强：<b>' + escHtml(a.weakest_subject) +
@@ -2214,6 +2216,26 @@
     Array.prototype.forEach.call(box.querySelectorAll('button[data-qedit]'), function (b) {
       b.onclick = function () {
         openQuestionEditor(b.getAttribute('data-qedit'), currentBankId);
+      };
+    });
+    Array.prototype.forEach.call(box.querySelectorAll('button[data-delsub]'), function (b) {
+      b.onclick = function () {
+        var subj = b.getAttribute('data-delsub');
+        if (!confirm('确定删除「' + subj + '」的全部错题记录？\n\n' +
+                     '只会清掉这个人的错题本（以及对应的复习安排），' +
+                     '题库里的题目和答对记录都不受影响。')) return;
+        api('/api/admin/learning/wrong/delete', {
+          bank_id: currentBankId || el('learn-sel').value || '',
+          subject: subj
+        }).then(function (res) {
+          if (!requireAuth(res)) return;
+          if (!res.data.ok) { toast(res.data.detail || '删除失败'); return; }
+          toast('已删除「' + subj + '」错题 ' + (res.data.removed || 0) + ' 道');
+          loadLearning(currentBankId || el('learn-sel').value || '');
+          if (el('tab-mistakes') && el('tab-mistakes').style.display !== 'none') {
+            loadMistakes();
+          }
+        }).catch(function () { toast('删除请求失败'); });
       };
     });
   }

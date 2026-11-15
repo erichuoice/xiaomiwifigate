@@ -418,6 +418,34 @@ def record_round(who, all_ok, ts=None):
         _save(data)
 
 
+def delete_wrong_by_subject(who, subject):
+    """3.39.0：删掉某个人错题本里某个学科的全部错题记录（不动题库、不动答对记录）。
+
+    subject="" 或「未标注」→ 删除没有科目字段的错题。
+    返回实际删掉的道数。
+    """
+    key = str(who or "").strip().lower()
+    subject = str(subject or "").strip()
+    if subject == "未标注":
+        subject = ""
+    removed = 0
+    with _lock:
+        data = _load()
+        dev = (data.get("learners") or {}).get(key)
+        if not dev:
+            return 0
+        keep = []
+        for w in dev.get("wrong") or []:
+            if (str(w.get("subject") or "").strip() == subject):
+                removed += 1
+            else:
+                keep.append(w)
+        if removed:
+            dev["wrong"] = keep
+            _save(data)
+    return removed
+
+
 def clear(who):
     """清空某个学习者（题库/人）的学情（不影响题库和放行记录）。"""
     key = str(who or "").strip().lower()
