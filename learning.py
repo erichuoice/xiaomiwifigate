@@ -571,6 +571,9 @@ def subject_stats(who, now=None):
             row["topics"][topic] = row["topics"].get(topic, 0) + 1
     out = []
     for row in stats.values():
+        # 3.41.0：只显示「当前还有错题」的学科——某科错题删光后就不再出现在学科分析里
+        if row["wrong_count"] <= 0:
+            continue
         answered = row["total"]
         row["accuracy"] = round(row["correct"] / answered, 3) if answered else None
         row["weak_topics"] = [t for t, _n in sorted(

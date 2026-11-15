@@ -2190,9 +2190,10 @@
           ' <button class="mini danger" data-delsub="' + escHtml(s.subject) +
           '">删除该科错题</button></div>';
       });
+      html += '<p class="hint">只显示当前还有错题的学科；某科错题删光后，这里就不再显示这一科。</p>';
       if (a.weakest_subject) {
         html += '<p class="hint">最需要加强：<b>' + escHtml(a.weakest_subject) +
-          '</b>（按正确率最低、答过 ≥5 题的学科算）</p>';
+          '</b>（按正确率最低、答过 ≥5 题、且有错题的学科算）</p>';
       }
     } else {
       html += '<p class="hint">还没有分学科的答题数据。</p>';

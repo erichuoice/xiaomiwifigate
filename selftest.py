@@ -997,12 +997,12 @@ def main():
             "id": "subj%d" % _i, "text": "学科题%d" % _i, "type": "single",
             "options": ["A", "B"], "answer": 0,
             "subject": "数学" if _i < 6 else "英语",
-            "topic": "知识点%d" % _i}, _i < 6)
+            "topic": "知识点%d" % _i}, (_i < 6 and _i != 0))
     code, res = admin("/api/admin/learning?bank=bank_subj_test")
     _dsub = res.get("detail") or {}
-    check("学情按学科分析并指出最弱学科",
+    check("学情按学科分析并指出最弱学科（只列还有错题的学科）",
           code == 200 and _dsub.get("weakest_subject") == "英语" and
-          any(s.get("subject") == "数学" and s.get("accuracy") == 1.0
+          any(s.get("subject") == "数学" and s.get("wrong_count") == 1
               for s in _dsub.get("subjects") or []) and
           any(s.get("subject") == "英语" and s.get("accuracy") == 0.0
               for s in _dsub.get("subjects") or []))
@@ -1013,6 +1013,8 @@ def main():
     check("可以只删某个学科的错题记录",
           _removed >= 1 and _after.get("wrong_count") == _del_before - _removed and
           all(w.get("subject") != "英语" for w in _after.get("wrong") or []))
+    check("删光某科错题后，学科分析里不再显示这一科（3.41.0）",
+          all(s.get("subject") != "英语" for s in _after.get("subjects") or []))
     code, res = admin("/api/admin/learning/wrong/delete",
                       {"bank_id": "bank_subj_test", "subject": "数学"})
     check("删除某科错题接口可用（只删该科）",
