@@ -2541,15 +2541,15 @@ def main():
           "这里只显示<b>当前管理对象</b>的反馈" in admin_html and
           "loadFeedback()" in admin_html and
           "/api/admin/feedback' + (bid ?" in admin_html)
-    check("长说明收进可折叠的「说明」（3.43.0）",
-          "details.note {" in admin_html and
-          "function foldLongHints(" in admin_html and
-          "foldLongHints();" in admin_html and
+    check("说明收进标题旁的小 i 图标，点击才展开（3.44.0）",
+          ".info-btn {" in admin_html and ".notes-panel {" in admin_html and
+          "function buildInfoPanels(" in admin_html and
+          "buildInfoPanels();" in admin_html and
+          "node.classList.contains('hint') && !node.id" in admin_html and
           'id="bank-progress-box"' in admin_html and
           'id="tz-status-box"' in admin_html and
           'id="ai-scope-box"' in admin_html and
-          "题庄额度：剩 " in admin_html and
-          "教学进度：第 " in admin_html)
+          "details.note" not in admin_html)
     check("学情页可按学科删除错题记录（3.39.0）",
           callable(getattr(learning, "delete_wrong_by_subject", None)) and
           "data-delsub" in admin_html and

@@ -28,16 +28,19 @@
   .objswitch { display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--muted); }
   /* 3.22.0：管理对象统一在顶栏选，页内原来的「选题库」下拉都收起来 */
   .hidebank { display:none; }
-  /* 3.43.0：注解类内容收进可折叠的「说明」，页面更简洁 */
-  details.note { border:1px dashed var(--line); border-radius:10px; padding:7px 12px;
-    margin:8px 0; background:#fafbfc; }
-  details.note > summary { cursor:pointer; color:var(--accent); font-size:13px;
-    list-style:none; outline:none; }
-  details.note > summary::-webkit-details-marker { display:none; }
-  details.note > summary:before { content:"▸ "; }
-  details.note[open] > summary:before { content:"▾ "; }
-  details.note > p.hint, details.note > div { margin:8px 0 0; background:none;
+  /* 3.44.0：注解收进标题旁的小「i」图标，点击才展开 */
+  .info-btn { display:inline-flex; align-items:center; justify-content:center;
+    width:17px; height:17px; margin-left:6px; padding:0; border-radius:50%;
+    border:1px solid var(--line); background:#fff; color:var(--muted);
+    font-size:11px; font-weight:600; line-height:1; cursor:pointer;
+    vertical-align:middle; }
+  .info-btn:hover, .info-btn.on { border-color:var(--accent); color:var(--accent);
+    background:var(--soft); }
+  .notes-panel { display:none; margin:8px 0 4px; padding:10px 12px;
+    border-radius:10px; background:#f7f9fb; border:1px dashed var(--line); }
+  .notes-panel > p.hint, .notes-panel > div { margin:0 0 6px; background:none;
     border:0; padding:0; }
+  .notes-panel > *:last-child { margin-bottom:0; }
   /* 3.34.0：错题本 / 反馈里点「编辑题目」的弹层 */
   .qedit-mask { position:fixed; inset:0; background:rgba(15,23,42,.45); display:none;
     align-items:center; justify-content:center; padding:16px; z-index:60; }
@@ -241,10 +244,9 @@
           <select id="bank-grade"></select>
         </div>
       </div>
-      <details class="note" id="bank-progress-box">
-        <summary>教学进度 / 教材 / 已学章节（点击展开）</summary>
-        <p class="hint" id="bank-progress" style="margin-top:6px"></p>
-      </details>
+      <div class="notes-panel" id="bank-progress-box">
+        <p class="hint" id="bank-progress"></p>
+      </div>
       <div class="row" style="margin-top:10px"><button id="save-bank-settings">保存学生信息</button></div>
 
       <label class="fld">奖励档位：答对几道题 → 换多少分钟（分钟填 0 = 一直放行）</label>
@@ -376,10 +378,9 @@
       <p class="hint">题庄（tizhuang.qcscience.cc）是公开的中小学真题库：按「地区 → 教材 → 年级学期 →
         这学期已学章节」抽题，只抽无图、能自动判分的单选/判断。免费试用 50 题 / 24 小时，
         注册后每天 150 题；License 在「系统设置 → 题庄题库」里填。</p>
-      <details class="note" id="tz-status-box">
-        <summary>题庄额度与已学范围（点击展开）</summary>
-        <p class="hint" id="tz-status" style="margin-top:6px">正在读取题庄状态…</p>
-      </details>
+      <div class="notes-panel" id="tz-status-box">
+        <p class="hint" id="tz-status">正在读取题庄状态…</p>
+      </div>
       <div class="grid2">
         <div>
           <label class="fld" for="tz-subject">科目</label>
@@ -531,10 +532,9 @@
         <button type="button" id="ai-mode-manual" class="mini">手动出题</button>
         <button type="button" id="ai-mode-auto" class="mini ghost">自动补题</button>
       </div>
-      <details class="note" id="ai-scope-box">
-        <summary>当前管理对象 / 教学进度 / 已学章节（点击展开）</summary>
-        <p class="hint" id="ai-scope-line" style="margin-top:6px">正在读取当前管理对象的出题范围…</p>
-      </details>
+      <div class="notes-panel" id="ai-scope-box">
+        <p class="hint" id="ai-scope-line">正在读取当前管理对象的出题范围…</p>
+      </div>
       <p class="hint">API Key 在右上角「系统设置 → AI 出题连接」里配置。
         <button type="button" class="mini ghost" id="ai-goset">去系统设置</button></p>
 
@@ -1939,10 +1939,6 @@
     var who = [x.region, (x.stage || '') + (x.grade || ''),
                x.textbook ? '教材：' + x.textbook : '']
       .filter(function (v) { return !!v; }).join(' · ');
-    var asum = el('ai-scope-box') && el('ai-scope-box').querySelector('summary');
-    if (asum && x.bank_name) {
-      asum.textContent = '当前管理对象：' + x.bank_name + '（点击展开）';
-    }
     line.innerHTML = '当前管理对象：<b>' + escHtml(x.bank_name || '') + '</b>' +
       (who ? '（' + escHtml(who) + '）' : '') +
       '　教学进度：' + escHtml(p.label || '') +
@@ -1969,12 +1965,6 @@
             (d.learned_text ? '<br><b>已学章节（按课本章节推断）：</b>' + escHtml(d.learned_text) : '') +
             '<br><span style="color:var(--muted)">' + escHtml(p.note || '') + '</span>';
         }
-      }
-      var psum = el('bank-progress-box') &&
-        el('bank-progress-box').querySelector('summary');
-      if (psum && d.ok) {
-        var _p = d.progress || {};
-        psum.textContent = '教学进度：第 ' + (_p.week || '?') + ' 教学周 · 教材与已学章节（点击展开）';
       }
       updateAiScopeLine(d);
     }).catch(function () {});
@@ -2859,10 +2849,6 @@
         if (!requireAuth(res)) return;
         var d = res.data || {};
         var st = el('tz-status');
-        var tsum = el('tz-status-box') && el('tz-status-box').querySelector('summary');
-        if (tsum && d.quota && d.quota.remaining != null) {
-          tsum.textContent = '题庄额度：剩 ' + d.quota.remaining + ' 题（点击展开）';
-        }
         if (st) {
           st.innerHTML = (d.detail ? '<span style="color:var(--no)">' + escHtml(d.detail) + '</span><br>' : '') +
             (d.scope_text ? '<b>已学范围：</b>' + escHtml(d.scope_text) : '') +
@@ -3352,27 +3338,58 @@
     });
   };
 
-  // 3.43.0：把页面上「注解类」的长说明收进可折叠的「说明」，点击再展开
-  function foldLongHints() {
-    var nodes = document.querySelectorAll('p.hint');
-    Array.prototype.forEach.call(nodes, function (p) {
-      if (p.dataset && p.dataset.folded) return;
-      if (p.closest && p.closest('details.note')) return;
-      if (p.querySelector('button, a, input, select, textarea')) return;
-      var text = (p.textContent || '').replace(/\s+/g, ' ').trim();
-      if (text.length < 90) return;
-      var d = document.createElement('details');
-      d.className = 'note';
-      d.dataset.folded = '1';
-      var sum = document.createElement('summary');
-      sum.textContent = '说明';
-      p.parentNode.insertBefore(d, p);
-      d.appendChild(sum);
-      d.appendChild(p);
-      if (p.dataset) p.dataset.folded = '1';
+  // 3.44.0：注解统一收进「标题旁的小 i 图标」，点击才展开，页面只留正文
+  function buildInfoPanels() {
+    var SPECIAL = { 'bank-progress-box': 1, 'tz-status-box': 1, 'ai-scope-box': 1 };
+    Array.prototype.forEach.call(document.querySelectorAll('.card'), function (card) {
+      if (card.id === 'login') return;
+      var kids = Array.prototype.slice.call(card.children);
+      var sections = [], cur = null;
+      kids.forEach(function (node) {
+        if (!node.tagName) return;
+        var tag = node.tagName.toUpperCase();
+        if (tag === 'H2' || tag === 'H3') {
+          cur = { heading: node, nodes: [] };
+          sections.push(cur);
+          return;
+        }
+        if (!cur) return;
+        var special = node.id && SPECIAL[node.id];
+        if (special) {
+          Array.prototype.slice.call(node.children).forEach(function (ch) {
+            cur.nodes.push(ch);
+          });
+          if (node.parentNode) node.parentNode.removeChild(node);
+          return;
+        }
+        // 只收「静态说明」；带 id 的是动态状态/结果行，必须一直可见
+        if ((node.tagName === 'P' || node.tagName === 'DIV') &&
+            node.classList && node.classList.contains('hint') && !node.id) {
+          cur.nodes.push(node);
+        }
+      });
+      sections.forEach(function (sec) {
+        if (!sec.nodes.length) return;
+        var heading = sec.heading;
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'info-btn';
+        btn.title = '说明';
+        btn.textContent = 'i';
+        heading.appendChild(btn);
+        var panel = document.createElement('div');
+        panel.className = 'notes-panel';
+        heading.parentNode.insertBefore(panel, heading.nextSibling);
+        sec.nodes.forEach(function (n) { panel.appendChild(n); });
+        btn.onclick = function () {
+          var open = panel.style.display !== 'none';
+          panel.style.display = open ? 'none' : 'block';
+          btn.className = open ? 'info-btn' : 'info-btn on';
+        };
+      });
     });
   }
-  foldLongHints();
+  buildInfoPanels();
 
   api('/api/admin/session').then(function (res) {
     if (res.data.authed) loadState(); else showLogin();
