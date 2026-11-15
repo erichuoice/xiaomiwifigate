@@ -40,6 +40,7 @@ MAX_ENTRY_MINUTES = 1440        # 单次存入 / 释放上限（一天）
 LEDGER_KEEP = 60                # 每人最多留 60 条明细
 LEDGER_SHOWN = 12               # 接口最多回显 12 条
 PRESET_KEEP = 12                # 3.50.2：最近奖励行为最多留 12 个，做成下拉选项
+EVENTS_KEEP = 5000              # 3.50.3：全局时间记录（奖惩/获取/消费），给「时间记录」页用
 
 _lock = threading.RLock()
 
@@ -60,7 +61,7 @@ def _clamp(value):
 
 
 def _blank():
-    return {"version": VERSION, "banks": {}, "presets": []}
+    return {"version": VERSION, "banks": {}, "presets": [], "events": []}
 
 
 def _normalize(data):
@@ -103,14 +104,49 @@ def _normalize(data):
         if not reason or reason in seen:
             continue
         seen.add(reason)
+        _pm = _int(raw.get("minutes"))
+        _pm = max(-MAX_ENTRY_MINUTES, min(MAX_ENTRY_MINUTES, _pm)) or 10
         out["presets"].append({
             "reason": reason,
-            "minutes": max(1, min(MAX_ENTRY_MINUTES, _int(raw.get("minutes")))),
+            "minutes": _pm,
             "count": max(1, _int(raw.get("count"))),
             "last": _int(raw.get("last")),
         })
         if len(out["presets"]) >= PRESET_KEEP:
             break
+    # 3.50.3：全局时间记录（正数=获得，负数=扣除/消费）
+    for raw in (data.get("events") or [])[:EVENTS_KEEP]:
+        if not isinstance(raw, dict):
+            continue
+        mins = _int(raw.get("minutes"))
+        if not mins:
+            continue
+        out["events"].append({
+            "at": _int(raw.get("at")),
+            "bank": str(raw.get("bank") or "")[:40],
+            "minutes": mins,
+            "kind": str(raw.get("kind") or "")[:20],
+            "reason": str(raw.get("reason") or "")[:80],
+            "by": str(raw.get("by") or "")[:40],
+        })
+    # 3.50.4：老数据只有每人 60 条的 ledger，没有全局 events。
+    # 用 ledger 兜底补出时间记录（不覆盖已有 events，只在为空时补）。
+    if not out["events"]:
+        for bid, item in out["banks"].items():
+            for entry in item.get("ledger") or []:
+                mins = _int(entry.get("minutes"))
+                if not mins:
+                    continue
+                out["events"].append({
+                    "at": _int(entry.get("at")),
+                    "bank": bid,
+                    "minutes": mins,
+                    "kind": str(entry.get("kind") or "")[:20],
+                    "reason": str(entry.get("reason") or "")[:80],
+                    "by": str(entry.get("by") or "")[:40],
+                })
+        out["events"].sort(key=lambda e: e["at"], reverse=True)
+        out["events"] = out["events"][:EVENTS_KEEP]
     return out
 
 
@@ -163,6 +199,19 @@ def _push(rec, now, minutes, kind, reason, by):
         "by": str(by or "")[:40],
     })
     del rec["ledger"][LEDGER_KEEP:]
+
+
+def _event(data, now, bank_id, minutes, kind, reason, by):
+    """3.50.3：append 一条全局时间记录（不依赖每人 60 条的 ledger）。"""
+    data.setdefault("events", []).insert(0, {
+        "at": int(now),
+        "bank": str(bank_id or "")[:40],
+        "minutes": int(minutes),
+        "kind": str(kind or "")[:20],
+        "reason": str(reason or "")[:80],
+        "by": str(by or "")[:40],
+    })
+    del data["events"][EVENTS_KEEP:]
 
 
 def _public(rec):
@@ -225,6 +274,7 @@ def credit(bank_id, minutes, kind="quiz", reason="", by="", cap=0,
         if count_toward_day:
             rec["earned_today"] += added
         _push(rec, now, added, kind, reason, by)
+        _event(data, now, bank_id, added, kind, reason, by)
         _save(data)
         out = _public(rec)
         out.update({"ok": True, "added": added, "asked": minutes,
@@ -232,8 +282,12 @@ def credit(bank_id, minutes, kind="quiz", reason="", by="", cap=0,
         return out
 
 
-def debit(bank_id, minutes, kind="release", reason="", by=""):
-    """扣掉分钟数（释放上网时调用）。余额不足时不扣，返回 ok=False。"""
+def debit(bank_id, minutes, kind="release", reason="", by="", allow_partial=False):
+    """扣掉分钟数（释放上网 / 家长惩罚）。余额不足时不扣，返回 ok=False。
+
+    allow_partial=True 用于家长「扣时间」：余额不够时把余额扣到 0 为止，
+    返回 ok=True + spent=实际扣掉的分钟数，避免家长想扣却完全扣不动。
+    """
     minutes = _int(minutes)
     if minutes <= 0:
         return {"ok": False, "reason": "bad_request", "minutes": state_of(bank_id)["minutes"]}
@@ -241,22 +295,32 @@ def debit(bank_id, minutes, kind="release", reason="", by=""):
     with _lock:
         data = _load()
         rec = _rec(data, bank_id, now)
-        if rec["minutes"] < minutes:
+        if rec["minutes"] < minutes and not allow_partial:
             return {"ok": False, "reason": "insufficient",
                     "minutes": rec["minutes"], "needed": minutes}
-        rec["minutes"] -= minutes
-        rec["spent_today"] += minutes
-        _push(rec, now, -minutes, kind, reason, by)
+        spent = min(minutes, rec["minutes"])
+        if spent <= 0:
+            return {"ok": False, "reason": "insufficient", "minutes": 0,
+                    "needed": minutes, "spent": 0}
+        rec["minutes"] -= spent
+        rec["spent_today"] += spent
+        _push(rec, now, -spent, kind, reason, by)
+        _event(data, now, bank_id, -spent, kind, reason, by)
         _save(data)
         out = _public(rec)
-        out.update({"ok": True, "spent": minutes})
+        out.update({"ok": True, "spent": spent, "asked": minutes,
+                    "partial": spent < minutes})
         return out
 
 
 def remember_reward(reason, minutes):
-    """3.50.2：把「奖励原因 + 分钟数」记成下次可选的下拉项（同一个原因合并）。"""
+    """3.50.2：把「奖惩原因 + 分钟数」记成下次可选的下拉项（同一个原因合并）。
+
+    3.50.3：允许负数（扣时间），正负号一起记住。
+    """
     reason = str(reason or "").strip()[:40]
-    minutes = max(1, min(MAX_ENTRY_MINUTES, _int(minutes)))
+    minutes = _int(minutes)
+    minutes = max(-MAX_ENTRY_MINUTES, min(MAX_ENTRY_MINUTES, minutes)) or 10
     if not reason:
         return []
     now = int(time.time())
@@ -283,12 +347,114 @@ def presets():
     return [dict(p) for p in (data.get("presets") or [])]
 
 
+def log(period="day", bank_id=None, now=None, limit=400):
+    """3.50.3：时间记录（每天 / 每周 / 每月），给后台「时间记录」页用。
+
+    返回 buckets（每个周期的获得/扣除/净变化，再拆答题/奖励/消费/惩罚），
+    records（窗口内最近 limit 条事件，新的在前）和 totals。
+    """
+    period = period if period in ("day", "week", "month") else "day"
+    limit = max(1, min(2000, _int(limit) or 400))
+    now = float(now if now is not None else time.time())
+    bid = str(bank_id or "").strip()
+    with _lock:
+        data = _load()
+    events = [e for e in (data.get("events") or [])
+              if not bid or e.get("bank") == bid]
+
+    def blank(label, date):
+        return {"label": label, "date": date, "earned": 0, "spent": 0,
+                "net": 0, "quiz": 0, "reward": 0, "release": 0, "punish": 0}
+
+    def apply(row, e):
+        m = _int(e.get("minutes"))
+        kind = str(e.get("kind") or "")
+        if m >= 0:
+            row["earned"] += m
+            if kind == "quiz":
+                row["quiz"] += m
+            else:
+                row["reward"] += m
+        else:
+            loss = -m
+            row["spent"] += loss
+            if kind == "release":
+                row["release"] += loss
+            else:
+                row["punish"] += loss
+        row["net"] = row["earned"] - row["spent"]
+
+    lt = time.localtime(now)
+    if period == "day":
+        rows, index, earliest = [], {}, None
+        for i in range(29, -1, -1):
+            d = time.strftime("%Y-%m-%d", time.localtime(now - i * 86400))
+            row = blank(d[5:], d)
+            rows.append(row)
+            index[d] = row
+        earliest = rows[0]["date"]
+    elif period == "week":
+        rows, index = [], {}
+        monday = now - lt.tm_wday * 86400
+        for i in range(11, -1, -1):
+            start = monday - i * 7 * 86400
+            label = time.strftime("%m-%d", time.localtime(start)) + " 周"
+            date = time.strftime("%Y-%m-%d", time.localtime(start))
+            row = blank(label, date)
+            rows.append(row)
+            index[date] = row
+        earliest = rows[0]["date"]
+    else:
+        rows, index = [], {}
+        y, m = lt.tm_year, lt.tm_mon
+        for i in range(11, -1, -1):
+            yy, mm = y, m - i
+            while mm <= 0:
+                mm += 12
+                yy -= 1
+            label = "%d-%02d" % (yy, mm)
+            row = blank(label, label)
+            rows.append(row)
+            index[label] = row
+        earliest = rows[0]["date"] + "-01"
+
+    start_ts = time.mktime(time.strptime(earliest + " 00:00:00",
+                                         "%Y-%m-%d %H:%M:%S"))
+    kept = []
+    for e in events:
+        ts = _int(e.get("at"))
+        if ts < start_ts:
+            continue
+        lt2 = time.localtime(ts)
+        if period == "day":
+            key = time.strftime("%Y-%m-%d", lt2)
+        elif period == "week":
+            key = time.strftime("%Y-%m-%d",
+                                time.localtime(ts - lt2.tm_wday * 86400))
+        else:
+            key = time.strftime("%Y-%m", lt2)
+        row = index.get(key)
+        if row is not None:
+            apply(row, e)
+        kept.append(e)
+    kept.sort(key=lambda x: _int(x.get("at")), reverse=True)
+    totals = {"earned": 0, "spent": 0, "net": 0}
+    for r in rows:
+        totals["earned"] += r["earned"]
+        totals["spent"] += r["spent"]
+    totals["net"] = totals["earned"] - totals["spent"]
+    return {"period": period, "bank": bid,
+            "buckets": rows, "records": kept[:limit], "totals": totals,
+            "generated_at": now, "total_events": len(events)}
+
+
 def export_all():
     """3.50.1：整份备份 JSON 里带上储蓄，换 NAS 恢复不会丢余额。"""
     with _lock:
         data = _load()
     return {"version": VERSION, "banks": data["banks"],
-            "presets": data.get("presets") or []}
+            "presets": data.get("presets") or [],
+            "events": data.get("events") or []}
 
 
 def import_all(raw):

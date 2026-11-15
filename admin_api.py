@@ -231,22 +231,49 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
             minutes = int(data.get("minutes") or 0)
         except (TypeError, ValueError):
             minutes = 0
-        if not 1 <= minutes <= savings.MAX_ENTRY_MINUTES:
-            return 400, {"ok": False, "detail": "奖励分钟数需在 1-%s 之间"
-                         % savings.MAX_ENTRY_MINUTES}, None
+        if not minutes or abs(minutes) > savings.MAX_ENTRY_MINUTES:
+            return 400, {"ok": False,
+                         "detail": "分钟数需在 1-%s 或 -1 到 -%s 之间"
+                                   % (savings.MAX_ENTRY_MINUTES,
+                                      savings.MAX_ENTRY_MINUTES)}, None
         note = str(data.get("note") or data.get("reason") or "").strip()[:40]
         if not note:
-            return 400, {"ok": False, "detail": "请填写奖励原因（例如：做家务）"}, None
-        # 家长奖励是家长意志：不占孩子的每日答题额度（与手动放行同一套逻辑）
-        saved = savings.credit(bank["id"], minutes, kind="reward",
-                               reason=note, by="家长奖励", cap=0,
-                               count_toward_day=False)
-        if not saved.get("ok"):
-            return 400, {"ok": False, "detail": saved.get("detail") or "奖励失败"}, None
-        # 3.50.2：记住这次的行为，下次直接在「最近奖励」下拉里选
+            return 400, {"ok": False,
+                         "detail": "请填写原因（例如：做家务 / 超时未关机）"}, None
+        if minutes > 0:
+            # 家长奖励是家长意志：不占孩子的每日答题额度（与手动放行同一套逻辑）
+            saved = savings.credit(bank["id"], minutes, kind="reward",
+                                   reason=note, by="家长奖励", cap=0,
+                                   count_toward_day=False)
+            if not saved.get("ok"):
+                return 400, {"ok": False, "detail": saved.get("detail") or "奖励失败"}, None
+            action, amount = "add", minutes
+        else:
+            # 3.50.3：负数 = 扣时间；余额不够时扣到 0 为止
+            spent = savings.debit(bank["id"], abs(minutes), kind="punish",
+                                  reason=note, by="家长扣除", allow_partial=True)
+            if not spent.get("ok"):
+                return 400, {"ok": False,
+                             "detail": "该学生现在没有可扣的时间（余额 0）"}, None
+            saved = spent
+            action, amount = "deduct", spent.get("spent", 0)
+        # 3.50.2：记住这次的行为，下次直接在「最近奖惩」下拉里选
         presets = savings.remember_reward(note, minutes)
-        return 200, {"ok": True, "student": bank["name"], "saved": saved,
+        return 200, {"ok": True, "student": bank["name"], "action": action,
+                     "amount": amount, "saved": saved,
+                     "balance": savings.state_of(bank["id"])["minutes"],
                      "reward_presets": presets}, None
+
+    if path == "/api/admin/savings/log" and method == "GET":
+        period = str((query.get("period") or ["day"])[0]).strip().lower()
+        bid = str((query.get("bank") or ["all"])[0]).strip()
+        if bid in ("", "all"):
+            bid = ""
+        out = savings.log(period, bid or None)
+        banks = [{"id": b["id"], "name": b["name"]} for b in st.banks()]
+        out["banks"] = banks
+        out["bank_names"] = {b["id"]: b["name"] for b in banks}
+        return 200, dict(ok=True, **out), None
 
     if path == "/api/admin/update" and method == "GET":
         return 200, dict(ok=True, **updater.status()), None

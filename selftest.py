@@ -1444,6 +1444,25 @@ def main():
         check("奖励选项也随整份备份导出（3.50.2）",
               any(p.get("reason") == "做家务"
                   for p in (savings.export_all().get("presets") or [])))
+        _pn = savings.remember_reward("扣时间", -10)
+        check("储蓄单元：负数奖惩也记成下拉选项（3.50.3）",
+              any(p.get("reason") == "扣时间" and p.get("minutes") == -10
+                  for p in _pn))
+        _ev = savings.log("day", bank_id="bank_unit")
+        check("储蓄单元：时间记录按天汇总获得/扣除（3.50.3）",
+              len(_ev["buckets"]) == 30 and _ev["totals"]["earned"] >= 30 and
+              bool(_ev["records"]),
+              str(_ev["totals"]))
+        with open(savings.PATH, "w", encoding="utf-8") as _f:
+            json.dump({"banks": {"bank_old": {
+                "minutes": 10, "day": "", "earned_today": 0, "spent_today": 0,
+                "ledger": [{"at": int(time.time()), "minutes": 10,
+                            "kind": "reward", "reason": "旧奖励",
+                            "by": "家长"}]}}}, _f, ensure_ascii=False)
+        _oldlog = savings.log("day")
+        check("老账本自动补成时间记录（3.50.4）",
+              any(r.get("reason") == "旧奖励" for r in _oldlog["records"]) and
+              _oldlog["totals"]["earned"] == 10, str(_oldlog["totals"]))
     finally:
         savings.PATH = _sav_real_path
         shutil.rmtree(_sav_tmp, ignore_errors=True)
@@ -1574,6 +1593,40 @@ def main():
           str(res.get("detail"))[:40])
     if _other_bid:
         admin("/api/admin/bank/delete", {"id": _other_bid})
+
+    # 3.50.3：负数 = 扣除时间；余额不够时扣到 0 为止
+    admin("/api/admin/savings/reward", {
+        "bank": test_bank.get("id"), "minutes": 50, "note": "自检补余额"})
+    _bal = savings.state_of(test_bank.get("id", ""))["minutes"]
+    check("负数奖惩测试前先补 50 分钟余额", _bal >= 50, str(_bal))
+    code, res = admin("/api/admin/savings/reward", {
+        "bank": test_bank.get("id"), "minutes": -5, "note": "超时未关机"})
+    check("负分钟数=扣除时间（3.50.3）",
+          code == 200 and res.get("action") == "deduct" and
+          res.get("amount") == 5 and res.get("balance") == _bal - 5,
+          str({k: res.get(k) for k in ("action", "amount", "balance")}))
+    check("扣时间的负原因也进「最近奖惩」下拉（3.50.3）",
+          any(p.get("reason") == "超时未关机" and p.get("minutes") == -5
+              for p in (res.get("reward_presets") or [])))
+    code, res = admin("/api/admin/savings/reward", {
+        "bank": test_bank.get("id"), "minutes": -1440, "note": "全部扣掉"})
+    check("扣到余额 0 为止（不会扣成负数）（3.50.3）",
+          code == 200 and res.get("action") == "deduct" and
+          res.get("amount") == _bal - 5 and res.get("balance") == 0,
+          str({k: res.get(k) for k in ("amount", "balance")}))
+    code, res = admin("/api/admin/savings/log?period=day&bank=" +
+                      test_bank.get("id", ""))
+    _kinds = {e.get("kind") for e in res.get("records") or []}
+    check("时间记录接口返回天/周/月汇总与明细（3.50.3）",
+          code == 200 and res.get("ok") is True and
+          len(res.get("buckets") or []) == 30 and
+          "punish" in _kinds and "reward" in _kinds and
+          (res.get("totals") or {}).get("spent", 0) >= 5,
+          str({k: res.get(k) for k in ("period", "totals", "total_events")}))
+    code, res = admin("/api/admin/savings/log?period=month")
+    check("时间记录支持每月维度（3.50.3）",
+          code == 200 and len(res.get("buckets") or []) == 12 and
+          len(res.get("banks") or []) >= 1)
 
     # 切回 direct：保持原来的「答对直接放行」
     admin("/api/admin/unlock", {})
@@ -1813,10 +1866,17 @@ def main():
     check("答题页按「存入储蓄 / 直接放行」显示不同说明",
           "function earnMode(" in index_html and "存入储蓄" in index_html and
           "即可放行" in index_html and "savings_ledger" in index_html)
-    check("后台首页奖励表单带「最近奖励」下拉（3.50.2）",
-          "hrew-preset" in admin_html and "最近奖励" in admin_html and
+    check("后台首页奖惩表单带「最近奖惩」下拉（3.50.2 / 3.50.3）",
+          "hrew-preset" in admin_html and "最近奖惩" in admin_html and
           "rewardPresets" in admin_html and
-          "select[data-preset]" in admin_html)
+          "select[data-preset]" in admin_html and
+          "奖惩时间" in admin_html and 'min="-1440"' in admin_html)
+    check("后台有「时间记录」页签（每天/每周/每月）（3.50.3）",
+          'id="tabbtn-log"' in admin_html and 'id="tab-log"' in admin_html and
+          "function loadSavingsLog(" in admin_html and
+          "function renderSavingsLog(" in admin_html and
+          'data-logp="day"' in admin_html and 'data-logp="week"' in admin_html and
+          'data-logp="month"' in admin_html and "时间记录" in admin_html)
     check("后台首页有学生卡片、进入管理与奖励入口",
           'id="tabbtn-home"' in admin_html and 'id="tab-home"' in admin_html and
           'id="home-cards"' in admin_html and "function loadHome(" in admin_html and

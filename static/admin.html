@@ -208,6 +208,18 @@
   .homecard .hled b { font-variant-numeric:tabular-nums; }
   .homecard .hled b.plus { color:var(--ok); }
   .homecard .hled b.minus { color:var(--no); }
+  /* 3.50.3 时间记录 */
+  .logtable { border:1px solid var(--line); border-radius:10px; overflow:hidden; background:#fff; }
+  .logrow { display:flex; justify-content:space-between; gap:12px; padding:8px 12px;
+    border-top:1px solid var(--line); font-size:13px; align-items:baseline; }
+  .logrow:first-child { border-top:none; }
+  .logrow .lg { color:var(--muted); }
+  .logrow .plus { color:var(--ok); font-weight:600; }
+  .logrow .minus { color:var(--no); font-weight:600; }
+  .logrec { display:flex; justify-content:space-between; gap:10px; padding:7px 0;
+    border-bottom:1px dashed var(--line); font-size:13px; }
+  .logrec:last-child { border-bottom:none; }
+  .logrec .lm { color:var(--muted); font-size:12px; }
 </style>
 </head>
 <body>
@@ -243,6 +255,7 @@
       <button id="tabbtn-questions" data-tab="questions" class="off">题目</button>
       <button id="tabbtn-ai" data-tab="ai" class="off">AI 出题</button>
       <button id="tabbtn-learning" data-tab="learning" class="off">学习情况</button>
+      <button id="tabbtn-log" data-tab="log" class="off">时间记录</button>
       <button id="tabbtn-mistakes" data-tab="mistakes" class="off">错题分析</button>
       <button id="tabbtn-devices" data-tab="devices" class="off">管理设备</button>
     </div>
@@ -251,7 +264,8 @@
     <div id="tab-home" class="card">
       <h2>首页</h2>
       <p class="hint">每个学生一张卡：点「进入管理」切换到他的后台页面；
-        也可以直接奖励时间 —— 奖励会存进他的时间储蓄，等他在答题页点「消费」才变成上网时长。</p>
+        也可以直接奖惩时间 —— 正数奖励、负数扣时间，都会记进他的时间储蓄，
+        等他在答题页点「消费」才变成上网时长。</p>
       <div id="home-cards" class="homegrid"></div>
       <p class="hint" id="home-mode" style="display:none"></p>
       <p class="hint" id="home-tip" style="display:none"></p>
@@ -770,6 +784,25 @@
       <div class="row"><button class="mini ghost" id="fb-refresh">刷新反馈</button></div>
       <div id="fb-list"></div>
 
+    </div>
+
+    <!-- 3.50.3 时间记录：每天/每周/每月的奖惩、获取、消费 -->
+    <div id="tab-log" class="card" style="display:none">
+      <h2>时间记录</h2>
+      <p class="hint">按天 / 周 / 月查看时间变化：答题存入、家长奖惩（正数奖励、负数扣除）、
+        孩子消费释放。正数=获得，负数=扣除。</p>
+      <div class="row" style="flex-wrap:wrap;gap:8px">
+        <select id="log-bank" style="max-width:180px"></select>
+        <button class="mini" id="logp-day" data-logp="day">每天</button>
+        <button class="mini ghost" id="logp-week" data-logp="week">每周</button>
+        <button class="mini ghost" id="logp-month" data-logp="month">每月</button>
+        <button class="mini ghost" id="log-refresh">刷新</button>
+      </div>
+      <div id="log-summary" class="stats" style="margin-top:10px"></div>
+      <h3 style="margin-top:14px">按周期汇总</h3>
+      <div id="log-buckets"></div>
+      <h3>最近明细</h3>
+      <div id="log-records"></div>
     </div>
 
     <!-- 错题分析（3.36.0）-->
@@ -3126,6 +3159,95 @@
     try { localStorage.setItem('wifigate.ai_mode', aiMode); } catch (e) {}
   }
 
+  // ---------- 3.50.3 时间记录（每天 / 每周 / 每月） ----------
+
+  var logPeriod = 'day';
+
+  function loadSavingsLog() {
+    var bid = el('log-bank').value || 'all';
+    return api('/api/admin/savings/log?period=' + encodeURIComponent(logPeriod) +
+               '&bank=' + encodeURIComponent(bid)).then(function (res) {
+      if (!requireAuth(res)) return;
+      if (!res.data.ok) {
+        el('log-buckets').innerHTML = '<p class="hint warn">读取失败：' +
+          escHtml(res.data.detail || '请刷新重试') + '</p>';
+        return;
+      }
+      renderSavingsLog(res.data);
+    }).catch(function () {
+      el('log-buckets').innerHTML =
+        '<p class="hint warn">无法连接后台服务，请刷新重试。</p>';
+    });
+  }
+
+  function renderSavingsLog(data) {
+    var sel = el('log-bank');
+    var want = sel.value || 'all';
+    var banks = data.banks || [];
+    if (sel.options.length !== banks.length + 1) {
+      sel.innerHTML = '<option value="all">全部学生</option>' + banks.map(
+        function (b) {
+          return '<option value="' + escHtml(b.id) + '">' +
+            escHtml(b.name) + '</option>';
+        }).join('');
+    }
+    sel.value = want;
+    var t = data.totals || {};
+    el('log-summary').innerHTML =
+      '<div class="stat"><div class="n">+' + (t.earned || 0) +
+        '</div><div class="l">期间获得（分钟）</div></div>' +
+      '<div class="stat"><div class="n">-' + (t.spent || 0) +
+        '</div><div class="l">期间扣除（分钟）</div></div>' +
+      '<div class="stat"><div class="n">' + (t.net > 0 ? '+' : '') +
+        (t.net || 0) + '</div><div class="l">净变化（分钟）</div></div>';
+
+    var rows = (data.buckets || []).filter(function (r) {
+      return r.earned || r.spent;
+    });
+    if (!rows.length) {
+      el('log-buckets').innerHTML =
+        '<p class="hint">这段时间还没有记录：答题存入、家长奖惩、消费都会出现在这里。</p>';
+    } else {
+      el('log-buckets').innerHTML = '<div class="logtable">' + rows.map(
+        function (r) {
+          var gain = '获得 <b class="plus">+' + r.earned + '</b>';
+          if (r.earned) {
+            gain += ' <span class="lg">（答题 ' + r.quiz +
+              ' / 奖惩 ' + r.reward + '）</span>';
+          }
+          var loss = '扣除 <b class="minus">-' + r.spent + '</b>';
+          if (r.spent) {
+            loss += ' <span class="lg">（消费 ' + r.release +
+              ' / 惩罚 ' + r.punish + '）</span>';
+          }
+          return '<div class="logrow"><span>' + escHtml(r.label) + '</span>' +
+            '<span>' + gain + '</span><span>' + loss + '</span>' +
+            '<span>净 ' + (r.net > 0 ? '+' : '') + r.net + '</span></div>';
+        }).join('') + '</div>';
+    }
+
+    var kinds = { quiz: '答题存入', reward: '家长奖励',
+                  release: '消费释放', punish: '家长扣除' };
+    var names = data.bank_names || {};
+    var recs = data.records || [];
+    if (!recs.length) {
+      el('log-records').innerHTML = '<p class="hint">还没有明细记录。</p>';
+      return;
+    }
+    el('log-records').innerHTML = recs.map(function (e) {
+      var mins = Number(e.minutes || 0);
+      var d = new Date((e.at || 0) * 1000);
+      var when = (d.getMonth() + 1) + '-' + d.getDate() + ' ' +
+        ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+      return '<div class="logrec"><span>' + when + ' · ' +
+        escHtml(names[e.bank] || e.bank || '') + ' · ' +
+        escHtml(kinds[e.kind] || e.kind || '') +
+        (e.reason ? ' · ' + escHtml(e.reason) : '') + '</span>' +
+        '<b class="' + (mins >= 0 ? 'plus' : 'minus') + '">' +
+        (mins >= 0 ? '+' : '') + mins + ' 分钟</b></div>';
+    }).join('');
+  }
+
   // ---------- 3.49.0 首页：学生卡片 / 直接奖励时间（进储蓄） ----------
 
   function loadHome() {
@@ -3179,28 +3301,29 @@
         ' 分钟 · 已释放 ' + (s.spent_today || 0) + ' 分钟</div>';
       html += '<div class="hbtns">' +
         '<button class="mini" data-go="' + escHtml(s.bank) + '">进入管理</button>' +
-        '<button class="mini ghost" data-reward="' + escHtml(s.bank) + '">奖励时间</button>' +
+        '<button class="mini ghost" data-reward="' + escHtml(s.bank) + '">奖惩时间</button>' +
         '</div>';
       var presetHtml = '';
       (rewardPresets || []).forEach(function (p) {
+        var pm = Number(p.minutes || 10);
         presetHtml += '<option value="' + escHtml(p.reason) + '" data-min="' +
-          (p.minutes || 10) + '">' + escHtml(p.reason) + ' · ' +
-          (p.minutes || 10) + ' 分钟</option>';
+          pm + '">' + escHtml(p.reason) + ' · ' +
+          (pm > 0 ? '+' : '') + pm + ' 分钟</option>';
       });
       html += '<div class="hrew" id="hrew-' + escHtml(s.bank) + '" style="display:none">' +
         (presetHtml
           ? '<div class="hrow" style="margin-bottom:8px">' +
             '<select class="hrew-preset" data-preset="' + escHtml(s.bank) + '">' +
-            '<option value="">最近奖励…（选一个自动填入）</option>' +
+            '<option value="">最近奖惩…（选一个自动填入）</option>' +
             presetHtml + '</select></div>'
           : '') +
         '<div class="hrow">' +
-        '<input class="hrew-note" maxlength="40" placeholder="奖励原因，如：做家务">' +
-        '<input class="hrew-min" type="number" min="1" max="1440" value="10" ' +
-        'style="width:88px">' +
+        '<input class="hrew-note" maxlength="40" placeholder="原因，如：做家务 / 超时未关机">' +
+        '<input class="hrew-min" type="number" min="-1440" max="1440" value="10" ' +
+        'style="width:96px" title="正数=奖励，负数=扣除">' +
         '</div>' +
         '<div class="hrow" style="margin-top:8px;align-items:center">' +
-        '<button class="mini" data-save="' + escHtml(s.bank) + '">存入储蓄</button>' +
+        '<button class="mini" data-save="' + escHtml(s.bank) + '">保存</button>' +
         '<span class="hmeta" data-msg="' + escHtml(s.bank) + '"></span>' +
         '</div></div>';
       if ((s.ledger || []).length) {
@@ -3256,8 +3379,11 @@
     var note = (f.querySelector('.hrew-note').value || '').trim();
     var minutes = Number(f.querySelector('.hrew-min').value || 0);
     var tip = f.querySelector('[data-msg]');
-    if (!note) { if (tip) tip.textContent = '请先填奖励原因'; return; }
-    if (!(minutes >= 1)) { if (tip) tip.textContent = '分钟数要 ≥ 1'; return; }
+    if (!note) { if (tip) tip.textContent = '请先填原因'; return; }
+    if (!minutes || Math.abs(minutes) > 1440) {
+      if (tip) tip.textContent = '分钟数要在 1~1440 之间（负数=扣除）';
+      return;
+    }
     if (btn.disabled) return;
     btn.disabled = true;
     if (tip) tip.textContent = '保存中…';
@@ -3269,7 +3395,12 @@
         if (tip) tip.textContent = res.data.detail || '奖励失败';
         return;
       }
-      toast('已奖励「' + note + '」' + minutes + ' 分钟，存进时间储蓄');
+      if (res.data.action === 'deduct') {
+        toast('已扣除「' + note + '」' + (res.data.amount || 0) +
+              ' 分钟，剩余储蓄 ' + (res.data.balance || 0) + ' 分钟');
+      } else {
+        toast('已奖励「' + note + '」' + minutes + ' 分钟，存进时间储蓄');
+      }
       loadHome();
     }).catch(function () {
       btn.disabled = false;
@@ -3279,13 +3410,14 @@
 
   function switchTab(name) {
     // 「首页」+ 5 个「管理对象」页签 + 右上角「系统设置」（没有页签按钮，从顶栏进入）
-    ['home', 'quiz', 'questions', 'ai', 'learning', 'mistakes', 'devices',
-     'settings'].forEach(function (n) {
+    ['home', 'quiz', 'questions', 'ai', 'learning', 'log', 'mistakes',
+     'devices', 'settings'].forEach(function (n) {
       el('tab-' + n).style.display = n === name ? 'block' : 'none';
       var btn = el('tabbtn-' + n);
       if (btn) btn.className = n === name ? '' : 'off';
     });
     if (name === 'home') loadHome();
+    if (name === 'log') loadSavingsLog();
     if (name === 'devices') refreshDevices();
     if (name === 'quiz') syncImportBank();
     if (name === 'questions') {
@@ -3325,7 +3457,8 @@
   el('open-settings').onclick = function () { switchTab('settings'); };
   el('ai-goset').onclick = function () { switchTab('settings'); };
   el('obj-sel').onchange = function () { setCurrentBank(el('obj-sel').value); };
-  ['home', 'quiz', 'questions', 'ai', 'learning', 'mistakes', 'devices'].forEach(function (n) {
+  ['home', 'quiz', 'questions', 'ai', 'learning', 'log', 'mistakes',
+   'devices'].forEach(function (n) {
     el('tabbtn-' + n).onclick = function () { switchTab(n); };
   });
   el('save-bank-settings').onclick = saveBank;
@@ -3336,6 +3469,19 @@
   };
   el('fb-refresh').onclick = loadFeedback;
   el('mk-refresh').onclick = loadMistakes;
+  el('log-refresh').onclick = loadSavingsLog;
+  el('log-bank').onchange = loadSavingsLog;
+  Array.prototype.forEach.call(
+    document.querySelectorAll('button[data-logp]'), function (b) {
+      b.onclick = function () {
+        logPeriod = b.getAttribute('data-logp');
+        Array.prototype.forEach.call(
+          document.querySelectorAll('button[data-logp]'), function (x) {
+            x.className = 'mini' + (x === b ? '' : ' ghost');
+          });
+        loadSavingsLog();
+      };
+    });
   el('trusted-save').onclick = saveTrustedDevices;
   el('trusted-refresh').onclick = loadTrustedDevices;
   Array.prototype.forEach.call(el('lstat-range').querySelectorAll('button'),
