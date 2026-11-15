@@ -165,6 +165,7 @@ def _home_payload(st, adapter):
     return {
         "ok": True,
         "students": students,
+        "reward_presets": savings.presets(),   # 3.50.2：最近奖励行为，做成下拉选项
         "server_now": time.time(),
         "savings_mode": mode,
         "daily_cap_minutes": int(cfg["settings"].get("daily_cap_minutes", 0) or 0),
@@ -242,7 +243,10 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
                                count_toward_day=False)
         if not saved.get("ok"):
             return 400, {"ok": False, "detail": saved.get("detail") or "奖励失败"}, None
-        return 200, {"ok": True, "student": bank["name"], "saved": saved}, None
+        # 3.50.2：记住这次的行为，下次直接在「最近奖励」下拉里选
+        presets = savings.remember_reward(note, minutes)
+        return 200, {"ok": True, "student": bank["name"], "saved": saved,
+                     "reward_presets": presets}, None
 
     if path == "/api/admin/update" and method == "GET":
         return 200, dict(ok=True, **updater.status()), None

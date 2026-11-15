@@ -39,6 +39,7 @@ MAX_MINUTES = 100000            # 单账户余额上限，防手滑
 MAX_ENTRY_MINUTES = 1440        # 单次存入 / 释放上限（一天）
 LEDGER_KEEP = 60                # 每人最多留 60 条明细
 LEDGER_SHOWN = 12               # 接口最多回显 12 条
+PRESET_KEEP = 12                # 3.50.2：最近奖励行为最多留 12 个，做成下拉选项
 
 _lock = threading.RLock()
 
@@ -59,7 +60,7 @@ def _clamp(value):
 
 
 def _blank():
-    return {"version": VERSION, "banks": {}}
+    return {"version": VERSION, "banks": {}, "presets": []}
 
 
 def _normalize(data):
@@ -93,6 +94,23 @@ def _normalize(data):
                 "by": str(entry.get("by") or "")[:40],
             })
         out["banks"][bid] = item
+    # 3.50.2：最近用过的奖励行为（下拉选项），坏数据直接忽略
+    seen = set()
+    for raw in (data.get("presets") or [])[:PRESET_KEEP * 2]:
+        if not isinstance(raw, dict):
+            continue
+        reason = str(raw.get("reason") or "").strip()[:40]
+        if not reason or reason in seen:
+            continue
+        seen.add(reason)
+        out["presets"].append({
+            "reason": reason,
+            "minutes": max(1, min(MAX_ENTRY_MINUTES, _int(raw.get("minutes")))),
+            "count": max(1, _int(raw.get("count"))),
+            "last": _int(raw.get("last")),
+        })
+        if len(out["presets"]) >= PRESET_KEEP:
+            break
     return out
 
 
@@ -235,11 +253,42 @@ def debit(bank_id, minutes, kind="release", reason="", by=""):
         return out
 
 
+def remember_reward(reason, minutes):
+    """3.50.2：把「奖励原因 + 分钟数」记成下次可选的下拉项（同一个原因合并）。"""
+    reason = str(reason or "").strip()[:40]
+    minutes = max(1, min(MAX_ENTRY_MINUTES, _int(minutes)))
+    if not reason:
+        return []
+    now = int(time.time())
+    with _lock:
+        data = _load()
+        presets = [p for p in data.get("presets") or []
+                   if p.get("reason") != reason]
+        presets.insert(0, {"reason": reason, "minutes": minutes,
+                           "count": 1, "last": now})
+        # 老原因再次使用时，把次数加回去
+        old = next((p for p in data.get("presets") or []
+                    if p.get("reason") == reason), None)
+        if old:
+            presets[0]["count"] = _int(old.get("count")) + 1
+        data["presets"] = presets[:PRESET_KEEP]
+        _save(data)
+        return data["presets"]
+
+
+def presets():
+    """3.50.2：后台首页奖励下拉要用的最近行为列表（新的在前）。"""
+    with _lock:
+        data = _load()
+    return [dict(p) for p in (data.get("presets") or [])]
+
+
 def export_all():
     """3.50.1：整份备份 JSON 里带上储蓄，换 NAS 恢复不会丢余额。"""
     with _lock:
         data = _load()
-    return {"version": VERSION, "banks": data["banks"]}
+    return {"version": VERSION, "banks": data["banks"],
+            "presets": data.get("presets") or []}
 
 
 def import_all(raw):

@@ -1433,6 +1433,17 @@ def main():
               savings.state_of("bank_unit")["minutes"] == 33 and
               _imp.get("banks") == 1,
               str(savings.state_of("bank_unit")["minutes"]))
+        savings.remember_reward("做家务", 10)
+        savings.remember_reward("倒垃圾", 10)
+        _ps = savings.remember_reward("做家务", 15)
+        check("奖励行为记成下拉选项、重复的合并次数（3.50.2）",
+              len(_ps) == 2 and _ps[0].get("reason") == "做家务" and
+              _ps[0].get("minutes") == 15 and _ps[0].get("count") == 2,
+              str([(p.get("reason"), p.get("minutes"), p.get("count"))
+                   for p in _ps]))
+        check("奖励选项也随整份备份导出（3.50.2）",
+              any(p.get("reason") == "做家务"
+                  for p in (savings.export_all().get("presets") or [])))
     finally:
         savings.PATH = _sav_real_path
         shutil.rmtree(_sav_tmp, ignore_errors=True)
@@ -1510,6 +1521,9 @@ def main():
           str(_row and _row.get("savings_minutes")))
     check("后台首页带奖励明细",
           any(e.get("kind") == "reward" for e in (_row or {}).get("ledger") or []))
+    check("奖励后自动记住行为，首页下拉能选到（3.50.2）",
+          any(p.get("reason") == "做家务"
+              for p in (home.get("reward_presets") or [])))
     code, res = admin("/api/savings/release", {"minutes": 999})
     check("释放超过余额被拒绝",
           code == 409 and res.get("reason") == "insufficient" and
@@ -1799,6 +1813,10 @@ def main():
     check("答题页按「存入储蓄 / 直接放行」显示不同说明",
           "function earnMode(" in index_html and "存入储蓄" in index_html and
           "即可放行" in index_html and "savings_ledger" in index_html)
+    check("后台首页奖励表单带「最近奖励」下拉（3.50.2）",
+          "hrew-preset" in admin_html and "最近奖励" in admin_html and
+          "rewardPresets" in admin_html and
+          "select[data-preset]" in admin_html)
     check("后台首页有学生卡片、进入管理与奖励入口",
           'id="tabbtn-home"' in admin_html and 'id="tab-home"' in admin_html and
           'id="home-cards"' in admin_html and "function loadHome(" in admin_html and
