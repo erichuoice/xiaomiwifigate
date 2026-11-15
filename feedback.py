@@ -62,11 +62,13 @@ def add(mac="", bank_id="", qid="", text="", note=""):
     return item
 
 
-def listing(status=None):
+def listing(status=None, bank=None):
     with _lock:
         items = _load()
     if status:
         items = [x for x in items if x.get("status") == status]
+    if bank:
+        items = [x for x in items if x.get("bank_id") == bank]
     items.sort(key=lambda x: x.get("ts", 0), reverse=True)
     return items
 

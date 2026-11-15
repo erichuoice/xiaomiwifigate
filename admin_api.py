@@ -605,7 +605,8 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
 
     # ---- 3.34.0：学生答题页的「题目有异议」反馈 ----
     if path == "/api/admin/feedback" and method == "GET":
-        items = feedback.listing()
+        bid = str((query.get("bank") or [""])[0]).strip()
+        items = feedback.listing(bank=bid or None)
         known = {b["id"]: b["name"] for b in st.banks()}
         for item in items:
             item["bank_name"] = known.get(item.get("bank_id") or "", "")

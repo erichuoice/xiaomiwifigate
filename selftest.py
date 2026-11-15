@@ -26,6 +26,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 import ai_bank  # noqa: E402
 import auto_bank  # noqa: E402
+import feedback  # noqa: E402
 import importer  # noqa: E402
 import learning  # noqa: E402
 import mistakes  # noqa: E402
@@ -1080,6 +1081,20 @@ def main():
           str(_res2)[:80])
     if _empty:
         admin("/api/admin/feedback/delete", {"id": _empty["id"]})
+    # 3.42.0：反馈按管理对象过滤
+    _fb_a = feedback.add(mac="", bank_id="bank_fb_a", qid="q", text="A题", note="")
+    _fb_b = feedback.add(mac="", bank_id="bank_fb_b", qid="q", text="B题", note="")
+    _only_a = feedback.listing(bank="bank_fb_a")
+    check("题目反馈按管理对象过滤（3.42.0）",
+          bool(_only_a) and all(x.get("bank_id") == "bank_fb_a" for x in _only_a) and
+          any(x.get("id") == _fb_a["id"] for x in _only_a) and
+          all(x.get("id") != _fb_b["id"] for x in _only_a))
+    code, res = admin("/api/admin/feedback?bank=bank_fb_a")
+    check("后台反馈接口支持按管理对象查询",
+          code == 200 and bool(res.get("items")) and
+          all(f.get("bank_id") == "bank_fb_a" for f in res.get("items") or []))
+    feedback.delete(_fb_a["id"])
+    feedback.delete(_fb_b["id"])
 
     # 3.36.0：错题分析页（原因/学科/知识点/题型）
     _old_l3 = learning.PATH
@@ -2522,7 +2537,10 @@ def main():
           "id=\"qedit-mask\"" in admin_html and
           "/api/feedback" in index_html and "这题是不是出错了" in index_html and
           "function addDispute(" in index_html and
-          "note: ''" in index_html and "已反馈，家长会在后台看到" in index_html)
+          "note: ''" in index_html and "已反馈，家长会在后台看到" in index_html and
+          "这里只显示<b>当前管理对象</b>的反馈" in admin_html and
+          "loadFeedback()" in admin_html and
+          "/api/admin/feedback' + (bid ?" in admin_html)
     check("学情页可按学科删除错题记录（3.39.0）",
           callable(getattr(learning, "delete_wrong_by_subject", None)) and
           "data-delsub" in admin_html and

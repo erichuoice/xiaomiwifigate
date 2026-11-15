@@ -678,9 +678,9 @@
         解析、错次数、下次复习时间；JSON 是原始明细，适合备份或自己处理。</p>
 
       <h3 style="margin-top:22px">题目反馈<span id="fb-count" class="count"></span></h3>
-      <p class="hint">孩子在答题页答错后，可以点「这题是不是出错了？点这里反馈」写说明；
-        这里能看到所有反馈。觉得题目确实有问题，可以直接点「编辑题目」改掉，
-        改完错题本里的对应题目也会同步更新。</p>
+      <p class="hint">孩子在答题页答错后，可以点「这题是不是出错了？点这里反馈」一键提交；
+        这里只显示<b>当前管理对象</b>的反馈（切换上方学生就跟着换）。觉得题目确实有问题，
+        可以直接点「编辑题目」改掉，改完错题本里的对应题目也会同步更新。</p>
       <div class="row"><button class="mini ghost" id="fb-refresh">刷新反馈</button></div>
       <div id="fb-list"></div>
 
@@ -905,7 +905,10 @@
       }
     }
     loadBankProgress(b.id);
-    if (el('tab-learning').style.display !== 'none') loadLearning(b.id);
+    if (el('tab-learning').style.display !== 'none') {
+      loadLearning(b.id);
+      loadFeedback();
+    }
     if (el('tab-mistakes') && el('tab-mistakes').style.display !== 'none') loadMistakes();
     if (el('tab-devices').style.display !== 'none') {
       refreshDevices();
@@ -2443,7 +2446,9 @@
   }
 
   function loadFeedback() {
-    return api('/api/admin/feedback').then(function (res) {
+    var bid = currentBankId || '';
+    return api('/api/admin/feedback' + (bid ? '?bank=' + encodeURIComponent(bid) : ''))
+      .then(function (res) {
       if (!requireAuth(res)) return;
       feedbackItems = (res.data && res.data.items) || [];
       var n = (res.data && res.data.open) || 0;
