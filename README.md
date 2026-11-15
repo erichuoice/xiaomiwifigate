@@ -39,6 +39,22 @@ wifi-gate 跑在**小米路由器**（XiaoQiang / OpenWrt 系，支持 Docker �
 
 ---
 
+## 截图
+
+> 下面 3 张是**占位图**：把 `docs/screenshots/` 里的同名文件替换成你自己的截图即可（文件名不变，链接就不用改）；
+> 想换文件名的话，改一下下面的图片路径就行。截图时记得遮住孩子姓名、设备 MAC、内网 IP 等隐私信息。
+
+| 答题页（孩子） | 学生信息（家长后台） |
+| :---: | :---: |
+| <img src="docs/screenshots/answer-page.png" width="300" alt="答题页"> | <img src="docs/screenshots/student-info.png" width="520" alt="学生信息"> |
+
+<p align="center">
+  <img src="docs/screenshots/learning-stats.png" width="760" alt="学习情况与统计图表"><br>
+  <sub>学习情况：正确率、弱项、每天/每周/每月趋势图与每科正确率</sub>
+</p>
+
+---
+
 ## 一、先确认的前提（已实测，不是推测）
 
 | 事项 | 结论 | 依据 |
