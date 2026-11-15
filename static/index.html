@@ -103,6 +103,37 @@
   .chip.plain { background: #f0f2f5; color: var(--muted); }
   .chip.star { background: #fdf3e2; color: #8a5a00; letter-spacing: 1px; }
 
+  /* 时间储蓄（3.49.0）：答对存入 / 家长奖励，点「消费」才释放成上网时间 */
+  .savcard .savline { font-size: 14px; color: var(--muted); }
+  .savcard .savline b {
+    font-size: 22px; color: var(--accent); margin: 0 2px;
+    font-variant-numeric: tabular-nums;
+  }
+  .savcard .savmode { font-weight: 400; font-size: 12px; color: var(--muted); margin-left: 6px; }
+  .savrow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .savbtn {
+    width: auto;                     /* 覆盖全局 button 的 100% */
+    border: 1.5px solid var(--accent); background: var(--accent); color: #fff;
+    border-radius: 999px; padding: 8px 18px; font-size: 14px; font-weight: 600;
+    font-family: inherit; cursor: pointer;
+  }
+  .savbtn.ghost { background: #fff; color: var(--accent); }
+  .savbtn:disabled { opacity: .45; cursor: default; }
+  .savpicker { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 4px; }
+  .savcustom { display: flex; gap: 8px; margin-top: 10px; }
+  .savcustom input {
+    flex: 1; min-width: 0; border: 1.5px solid var(--line); border-radius: 10px;
+    padding: 9px 12px; font-size: 15px; font-family: inherit; color: var(--text);
+  }
+  .savledger {
+    margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px;
+    font-size: 12.5px; color: var(--muted);
+  }
+  .savledger div { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+  .savledger b { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+  .savledger .plus { color: var(--ok); }
+  .savledger .minus { color: var(--no); }
+
   .qtext { font-size: 18px; font-weight: 600; line-height: 1.55; margin-bottom: 16px; white-space: pre-wrap; }
 
   .opt {
@@ -170,6 +201,27 @@
 
   <div class="status" id="status" style="display:none"></div>
 
+  <!-- 时间储蓄：答题所得与家长奖励先存这里，点「消费」才变成上网时间 -->
+  <div class="card savcard" id="sav-card" style="display:none">
+    <div class="ptitle">时间储蓄<span class="savmode" id="sav-mode"></span></div>
+    <div class="savline">现在可以消费 <b id="sav-min">0</b> 分钟</div>
+    <div class="savrow">
+      <button type="button" class="savbtn" id="sav-use">消费</button>
+      <button type="button" class="savbtn ghost" id="sav-reload">刷新</button>
+    </div>
+    <div class="savpicker" id="sav-picker" style="display:none">
+      <div class="tlabel">要释放多少分钟？</div>
+      <div class="devrow" id="sav-chips"></div>
+      <div class="savcustom">
+        <input id="sav-custom" type="number" inputmode="numeric" min="1"
+               placeholder="自定义分钟数">
+        <button type="button" class="savbtn" id="sav-go">释放</button>
+      </div>
+      <p class="hint" id="sav-tip" style="margin:8px 0 0"></p>
+    </div>
+    <div class="savledger" id="sav-ledger"></div>
+  </div>
+
   <div id="result" class="panel"></div>
 
   <!-- 选档位 -->
@@ -219,6 +271,7 @@
     picked: [], locked: false, busy: false, answered: false,
     next: null, tier: 0, timer: null, target: null, targetName: '',
     cdTimer: null, clockSkew: 0, schTimer: null, focus: [],
+    savings: 0, savTarget: '', savBusy: false,
     autoTimer: null          // 答对后 1 秒自动下一题的定时器
   };
   var LETTERS = 'ABCDEFGH';
@@ -370,6 +423,7 @@
         S.targetName = label(t);
         renderTargets(info);
         renderTiers(t);
+        renderSavings(t, info);
         if (sch.limited && !sch.allowed) {
           el('pick-card').style.display = 'none';
           showPanel('info', '这台设备现在不是答题时间',
@@ -410,15 +464,24 @@
     return '当前是限速模式：答对后解除限速 ' + (r.kbps || 20) + ' KB/s 的限速。';
   }
 
+  function earnMode() {
+    return (S.info && S.info.savings_mode === 'direct') ? 'direct' : 'savings';
+  }
+
   function renderTiers(t) {
     var box = el('tiers');
     box.innerHTML = '';
     var bankName = t.bank ? t.bank.name : '';
     el('pick-title').textContent = bankName ? bankName + ' · 选一个目标开始答题'
                                            : '选一个目标开始答题';
-    var who = S.target ? '答对后将放行「' + label(t) + '」。' : '';
+    var who = S.target
+      ? (earnMode() === 'savings'
+          ? '答对后的时间会先存进储蓄，点「消费」才变成上网时间。'
+          : '答对后将放行「' + label(t) + '」。')
+      : '';
     el('pick-desc').textContent = who + passRuleText(t) + ' ' + limitText(t);
     var rule = ruleOf(t);
+    var saveTime = earnMode() === 'savings';
     (t.tiers || []).forEach(function (tier, i) {
       var b = document.createElement('button');
       b.type = 'button';
@@ -431,9 +494,16 @@
       var b1 = document.createElement('b');
       b1.textContent = tier.minutes === 0 ? '一直可以上网' : tier.minutes + ' 分钟';
       var s1 = document.createElement('span');
-      s1.textContent = tier.minutes === 0 ? '答对就长期有效'
-        : (rule.mode === 'strict' ? '答对 ' + tier.questions + ' 道全部正确'
-                                  : '正确率 ≥ ' + (rule.rate || 80) + '% 即可放行');
+      if (tier.minutes === 0) {
+        s1.textContent = '答对就长期有效';
+      } else if (rule.mode === 'strict') {
+        s1.textContent = saveTime ? '全对后存入 ' + tier.minutes + ' 分钟储蓄'
+                                  : '答对 ' + tier.questions + ' 道全部正确';
+      } else {
+        s1.textContent = saveTime
+          ? '正确率 ≥ ' + (rule.rate || 80) + '% 存入储蓄'
+          : '正确率 ≥ ' + (rule.rate || 80) + '% 即可放行';
+      }
       txt.appendChild(b1); txt.appendChild(s1);
       var go = document.createElement('div');
       go.className = 'go';
@@ -660,11 +730,106 @@
     S.schTimer = setTimeout(loadInfo, delay);
   }
 
+  /* ---------- 时间储蓄（3.49.0） ---------- */
+
+  function renderSavChips(min) {
+    var box = el('sav-chips');
+    box.innerHTML = '';
+    var vals = [10, 20, 30, 45, 60].filter(function (v) { return v < min; });
+    vals.push(min);
+    vals.forEach(function (v) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'dev';
+      b.textContent = v === min ? '全部 ' + v + ' 分钟' : v + ' 分钟';
+      b.onclick = function () {
+        Array.prototype.forEach.call(box.children, function (n) { n.className = 'dev'; });
+        b.className = 'dev on';
+        el('sav-custom').value = v;
+      };
+      box.appendChild(b);
+    });
+    el('sav-custom').value = min;
+    el('sav-custom').max = min;
+  }
+
+  function renderSavings(target, info) {
+    var card = el('sav-card');
+    if (!target) { card.style.display = 'none'; return; }
+    var min = Number(target.savings_minutes || 0);
+    S.savings = min;
+    S.savTarget = target.mac || '';
+    card.style.display = 'block';
+    el('sav-min').textContent = min;
+    el('sav-mode').textContent = (info && info.savings_mode === 'direct')
+      ? '（已设成答对直接放行）' : '';
+    el('sav-use').disabled = min <= 0;
+    el('sav-picker').style.display = 'none';
+    el('sav-tip').textContent = '';
+    renderSavChips(min);
+    var box = el('sav-ledger');
+    var ledger = (target.is_self && info && info.savings_ledger) || [];
+    if (!ledger.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.style.display = 'block';
+    box.innerHTML = ledger.map(function (e) {
+      var kind = e.kind === 'quiz' ? '答题存入'
+        : (e.kind === 'reward' ? '家长奖励' : '释放上网');
+      var label = e.reason ? kind + '：' + e.reason : kind;
+      return '<div><span>' + esc(label) + '</span>' +
+        '<b class="' + (e.minutes >= 0 ? 'plus' : 'minus') + '">' +
+        (e.minutes >= 0 ? '+' : '') + e.minutes + ' 分钟</b></div>';
+    }).join('');
+  }
+
+  function releaseSavings() {
+    var minutes = Number(el('sav-custom').value || 0);
+    if (!(minutes > 0)) { el('sav-tip').textContent = '请填要释放的分钟数'; return; }
+    if (S.savBusy) return;
+    S.savBusy = true;
+    el('sav-go').disabled = true;
+    el('sav-tip').textContent = '正在释放…';
+    fetch('/api/savings/release', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ minutes: minutes, target: S.savTarget || '' })
+    }).then(function (r) {
+      return r.json().then(function (j) { return { status: r.status, data: j }; });
+    }).then(function (res) {
+      S.savBusy = false;
+      el('sav-go').disabled = false;
+      var d = res.data || {};
+      if (!d.ok) {
+        el('sav-tip').textContent = d.detail || '释放失败，请刷新后重试';
+        if (typeof d.savings_minutes === 'number') {
+          el('sav-min').textContent = d.savings_minutes;
+        }
+        return;
+      }
+      showQuiz(false);
+      el('pick-card').style.display = 'none';
+      showPanel('ok', '已释放 ' + d.minutes + ' 分钟',
+        '<div class="big">+' + d.minutes + ' 分钟</div>' +
+        '<p>' + esc(d.message || '') + '</p>' +
+        (d.expire_at
+          ? '<p>到 ' + hhmm(d.expire_at) + ' 自动断开，到时可以再消费或再答题。</p>' +
+            '<div class="cd" id="cd"></div>'
+          : '<p>不会再自动断开。</p>') +
+        '<p style="margin-top:6px">储蓄还剩 <b>' + d.savings_minutes + '</b> 分钟。</p>');
+      if (d.expire_at) startCountdown(d.expire_at, d.now);
+    }).catch(function () {
+      S.savBusy = false;
+      el('sav-go').disabled = false;
+      el('sav-tip').textContent = '网络断了，请刷新页面重试。';
+    });
+  }
+
   function loadInfo() {
     if (S.schTimer) { clearTimeout(S.schTimer); S.schTimer = null; }
     hidePanel();
     showQuiz(false);
     el('pick-card').style.display = 'none';
+    el('sav-card').style.display = 'none';
     el('loading').textContent = '正在读取题目…';
     el('loading').style.display = 'block';
     fetch('/api/quiz', { credentials: 'same-origin' })
@@ -717,6 +882,7 @@
         if (data.pick_target) el('status').style.display = 'none';
         renderTargets(data);
         renderTiers(chosen);
+        renderSavings(chosen, data);
         var blocked = chosen.schedule && chosen.schedule.limited &&
                       !chosen.schedule.allowed;
         var freeNow = chosen.schedule && chosen.schedule.limited &&
@@ -747,6 +913,7 @@
     S.busy = true;
     S.tier = tier;
     el('pick-card').style.display = 'none';
+    el('sav-card').style.display = 'none';
     el('loading').style.display = 'block';
     el('loading').textContent = '正在出题…';
     fetch('/api/start', {
@@ -826,7 +993,29 @@
           '<p>请管理员在小米 WiFi App 里手动允许本机联网，或查看服务日志。</p>');
         return;
       }
+      if (d.reason === 'save_error') {
+        showQuiz(false);
+        showPanel('no', '答案对了，但存入储蓄失败',
+          '<p>' + esc(d.detail || '请稍后重试。') + '</p>');
+        return;
+      }
       if (!d.ok) { setMain('确认答案', true); return; }
+
+      // 3.49.0：答对后时间进储蓄（不立刻放行），回首页点「消费」才变上网时间
+      if (d.saved) {
+        showQuiz(false);
+        showPanel('ok', '已存入时间储蓄',
+          '<div class="big">+' + d.saved_minutes + ' 分钟</div>' +
+          '<p>现在有 ' + d.savings_minutes +
+          ' 分钟可以消费，回首页点「消费」就能上网。</p>' +
+          (d.today_minutes
+            ? '<p style="margin-top:6px">今日已得 ' + d.today_minutes +
+              (d.daily_cap_minutes ? ' / ' + d.daily_cap_minutes : '') + ' 分钟。</p>'
+            : ''));
+        setMain('回到首页消费', true);
+        el('main').onclick = loadInfo;
+        return;
+      }
 
       S.results = d.results || S.results;
       S.index = d.index;
@@ -913,6 +1102,15 @@
     el('main').onclick = submit;
     renderQuestion(payload);
   }
+
+  el('sav-use').onclick = function () {
+    var picker = el('sav-picker');
+    var open = picker.style.display !== 'none';
+    picker.style.display = open ? 'none' : 'block';
+    if (!open) el('sav-custom').focus();
+  };
+  el('sav-go').onclick = releaseSavings;
+  el('sav-reload').onclick = loadInfo;
 
   el('main').onclick = submit;
   loadInfo();

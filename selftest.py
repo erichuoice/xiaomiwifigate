@@ -32,6 +32,7 @@ import learning  # noqa: E402
 import mistakes  # noqa: E402
 import progress  # noqa: E402
 import router_adapter  # noqa: E402
+import savings  # noqa: E402
 import schedule  # noqa: E402
 import store  # noqa: E402
 import tizhuang  # noqa: E402
@@ -513,7 +514,8 @@ def main():
 
     # 3.6.0：自检会触碰 AI 配置与学情文件，跑完按原始字节还原
     extra_paths = {}
-    for _name in ("ai.json", "learning.json", "auto_bank.json"):
+    for _name in ("ai.json", "learning.json", "auto_bank.json",
+                  "savings.json"):
         _p = os.path.join(BASE, "state", _name)
         extra_paths[_p] = (open(_p, "rb").read()
                            if os.path.exists(_p) else None)
@@ -579,6 +581,12 @@ def main():
                       {"mac": mac, "bank_id": test_bank.get("id", "")})
     check("设备分配到题库", code == 200 and res.get("result", {}).get("bank_id"),
           res.get("result", {}).get("bank_name", ""))
+
+    # 3.49.0：老流程按「答对直接放行」验证；时间储蓄有单独一段自检（见文件末尾）
+    code, res = admin("/api/admin/settings",
+                      {"settings": {"savings_mode": "direct"}})
+    check("把答题所得切回直接放行（老流程沿用）",
+          code == 200 and (res.get("settings") or {}).get("savings_mode") == "direct")
 
     # ---- 手动断网 / 放行（后台设备页按钮与 gatectl 的服务端接口）----
     code, res = admin("/api/admin/device/wan")
@@ -1375,6 +1383,138 @@ def main():
     # 自检结束前明确关闭，避免残留一个开启的规则
     admin("/api/admin/auto-bank", {"enabled": False, "bank_id": ai_bank_id})
 
+    # ---- 3.49.0 时间储蓄：答题存入 / 消费释放 / 家长奖励 ----
+    _sav_real_path = savings.PATH
+    _sav_tmp = tempfile.mkdtemp(prefix="wg-savings-")
+    savings.PATH = os.path.join(_sav_tmp, "savings.json")
+    try:
+        _s1 = savings.credit("bank_unit", 20, reason="答对 2 题")
+        check("储蓄单元：存入按分钟累加",
+              _s1.get("ok") is True and _s1.get("minutes") == 20,
+              str(_s1.get("minutes")))
+        _s2 = savings.credit("bank_unit", 20, reason="答对 2 题", cap=30)
+        check("储蓄单元：每日上限只补剩下的额度",
+              _s2.get("added") == 10 and _s2.get("minutes") == 30 and
+              _s2.get("clamped") is True, str(_s2.get("added")))
+        _s3 = savings.credit("bank_unit", 5, reason="再答一轮", cap=30)
+        check("储蓄单元：额度用完后再存被拒",
+              _s3.get("ok") is False and _s3.get("reason") == "daily_cap")
+        _s4 = savings.debit("bank_unit", 12, reason="释放 12 分钟")
+        check("储蓄单元：释放扣减余额",
+              _s4.get("ok") is True and _s4.get("minutes") == 18,
+              str(_s4.get("minutes")))
+        _s5 = savings.debit("bank_unit", 999, reason="超支")
+        check("储蓄单元：余额不足时拒绝释放",
+              _s5.get("ok") is False and _s5.get("reason") == "insufficient" and
+              _s5.get("minutes") == 18)
+        _s6 = savings.credit("bank_unit", 15, kind="reward", reason="做家务",
+                             count_toward_day=False)
+        check("储蓄单元：家长奖励不占孩子的每日额度",
+              _s6.get("ok") is True and _s6.get("minutes") == 33 and
+              _s6.get("earned_today") == 30, str(_s6.get("earned_today")))
+        check("储蓄单元：明细按时间倒序（新的在前）",
+              [e.get("kind") for e in (_s6.get("ledger") or [])[:3]] ==
+              ["reward", "release", "quiz"],
+              str([e.get("kind") for e in (_s6.get("ledger") or [])[:3]]))
+        savings.drop_bank("bank_unit")
+        check("储蓄单元：删除学生清掉其余额",
+              savings.state_of("bank_unit")["minutes"] == 0)
+        check("储蓄单元：非法分钟数被拒绝",
+              savings.credit("bank_unit", 0).get("ok") is False and
+              savings.debit("bank_unit", -5).get("ok") is False)
+    finally:
+        savings.PATH = _sav_real_path
+        shutil.rmtree(_sav_tmp, ignore_errors=True)
+        try:
+            savings.drop_bank("bank_unit")
+        except Exception:
+            pass
+
+    # 用自检题库跑一遍完整闭环（先把它恢复成已知档位：1 题 = 30 分钟）
+    code, res = admin("/api/admin/bank",
+                      dict(TEST_BANK, id=test_bank.get("id")))
+    check("储蓄测试前重置自检题库", code == 200)
+    admin("/api/admin/bank/assign",
+          {"mac": mac, "bank_id": test_bank.get("id", "")})
+    code, res = admin("/api/admin/settings", {"settings": {
+        "savings_mode": "savings", "daily_cap_minutes": 0}})
+    check("后台可切换「答题所得先进时间储蓄」",
+          code == 200 and (res.get("settings") or {}).get("savings_mode") == "savings")
+    code, res = admin("/api/admin/settings", {"settings": {"savings_mode": "乱填"}})
+    check("非法答题所得去向被拒绝", code == 400)
+
+    admin("/api/admin/unlock", {})
+    savings.drop_bank(test_bank.get("id", ""))
+    admin("/api/admin/device/wan", {"mac": mac, "wan": False})
+    code, info = admin("/api/quiz")
+    check("储蓄模式下发到答题页（余额 0）",
+          info.get("savings_mode") == "savings" and info.get("savings_minutes") == 0,
+          str(info.get("savings_minutes")))
+
+    _right = answers_of(test_bank.get("id", ""))
+    code, rnd = start(0)
+    last = play(rnd, _right)
+    check("答对后先存进时间储蓄，不直接放行",
+          last.get("saved") is True and last.get("saved_minutes") == 30 and
+          not last.get("expire_at"),
+          str({k: last.get(k) for k in ("saved", "saved_minutes", "expire_at")}))
+    code, info = admin("/api/quiz")
+    check("答题页/接口读到可消费余额", info.get("savings_minutes") == 30,
+          str(info.get("savings_minutes")))
+    _tgt = next((t for t in info.get("targets") or []
+                 if t.get("mac") == mac), {})
+    check("受控设备列表带各自学生的储蓄余额",
+          _tgt.get("savings_minutes") == 30, str(_tgt.get("savings_minutes")))
+
+    code, res = admin("/api/savings/release", {"minutes": 10})
+    check("消费 10 分钟：放行并扣减余额",
+          code == 200 and res.get("ok") is True and res.get("minutes") == 10 and
+          res.get("savings_minutes") == 20 and bool(res.get("expire_at")),
+          str(res.get("savings_minutes")))
+    code, res = admin("/api/savings/release", {"minutes": 10})
+    check("设备在线时拒绝重复消费",
+          code == 409 and res.get("reason") == "already", str(res.get("reason")))
+    code, res = admin("/api/savings/release", {"minutes": 0})
+    check("消费 0 分钟被拒绝", code == 400)
+
+    code, res = admin("/api/admin/savings/reward",
+                      {"bank": test_bank.get("id"), "minutes": 15,
+                       "note": "做家务"})
+    check("后台可自定义行为奖励并存入储蓄",
+          code == 200 and (res.get("saved") or {}).get("minutes") == 35,
+          str((res.get("saved") or {}).get("minutes")))
+    code, res = admin("/api/admin/savings/reward",
+                      {"bank": test_bank.get("id"), "minutes": 5, "note": ""})
+    check("奖励必须写原因", code == 400)
+    code, res = admin("/api/admin/savings/reward",
+                      {"bank": "bank_不存在", "minutes": 5, "note": "x"})
+    check("给不存在的学生奖励被拒绝", code == 400)
+
+    code, home = admin("/api/admin/home")
+    _row = next((s for s in home.get("students") or []
+                 if s.get("bank") == test_bank.get("id")), None)
+    check("后台首页按学生列出余额与设备",
+          code == 200 and bool(_row) and _row.get("savings_minutes") == 35 and
+          bool(_row.get("devices")),
+          str(_row and _row.get("savings_minutes")))
+    check("后台首页带奖励明细",
+          any(e.get("kind") == "reward" for e in (_row or {}).get("ledger") or []))
+    code, res = admin("/api/savings/release", {"minutes": 999})
+    check("释放超过余额被拒绝",
+          code == 409 and res.get("reason") == "insufficient" and
+          res.get("savings_minutes") == 35, str(res.get("detail"))[:40])
+
+    # 切回 direct：保持原来的「答对直接放行」
+    admin("/api/admin/unlock", {})
+    admin("/api/admin/settings", {"settings": {"savings_mode": "direct"}})
+    admin("/api/admin/device/wan", {"mac": mac, "wan": False})
+    code, rnd = start(0)
+    last = play(rnd, _right)
+    check("切回直接放行模式后答对立刻放行",
+          last.get("all_correct") is True and not last.get("saved") and
+          bool(last.get("expire_at")), str(last.get("expire_at")))
+    savings.drop_bank(test_bank.get("id", ""))
+
     # ---- 还原 ----
     code, res = admin("/api/admin/backup/import", {"data": orig_backup})
     check("备份整份还原", code == 200 and res.get("ok") is True,
@@ -1504,6 +1644,37 @@ def main():
           "outside_schedule" in index_html and
           "scheduleAutoRefresh" in index_html and
           "现在不是答题时间" in index_html)
+
+    # ---- 3.49.0 时间储蓄：答题页 / 后台首页 / 服务端 ----
+    check("答题页有时间储蓄卡片与消费入口",
+          'id="sav-card"' in index_html and 'id="sav-min"' in index_html and
+          'id="sav-use"' in index_html and 'id="sav-custom"' in index_html and
+          "function renderSavings(" in index_html and
+          "function releaseSavings(" in index_html and
+          "/api/savings/release" in index_html and "存入时间储蓄" in index_html)
+    check("答题页按「存入储蓄 / 直接放行」显示不同说明",
+          "function earnMode(" in index_html and "存入储蓄" in index_html and
+          "即可放行" in index_html and "savings_ledger" in index_html)
+    check("后台首页有学生卡片、进入管理与奖励入口",
+          'id="tabbtn-home"' in admin_html and 'id="tab-home"' in admin_html and
+          'id="home-cards"' in admin_html and "function loadHome(" in admin_html and
+          "function enterStudent(" in admin_html and
+          "function saveReward(" in admin_html and "进入管理" in admin_html and
+          "/api/admin/savings/reward" in admin_html and "/api/admin/home" in admin_html)
+    check("后台首页是默认页签",
+          'id="tab-quiz" class="card" style="display:none"' in admin_html and
+          "if (name === 'home') loadHome();" in admin_html and
+          "'home', 'quiz', 'questions'" in admin_html)
+    check("系统设置可切换答题所得去向",
+          'id="earn-mode"' in admin_html and
+          "savings_mode: el('earn-mode').value" in admin_html)
+    with open(os.path.join(BASE, "server.py"), encoding="utf-8") as _f:
+        _srv_src = _f.read()
+    check("服务端接入时间储蓄并支持消费",
+          "import savings" in _srv_src and
+          "savings.credit(" in _srv_src and "savings.debit(" in _srv_src and
+          "/api/savings/release" in _srv_src and "count_cap=False" in _srv_src and
+          "earned_today_for(" in _srv_src)
 
     # ---- device_list_raw 登录态失效自动重登（离线单元测试，不碰真实路由器）----
     real_get, real_post = router_adapter._get, router_adapter._post

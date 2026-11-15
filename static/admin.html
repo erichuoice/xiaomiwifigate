@@ -187,6 +187,26 @@
   .learncard .ln { font-size:14px; font-weight:600; }
   .wrong-line { font-size:12.5px; color:#444; border-left:2px solid var(--line);
     padding:3px 0 3px 9px; margin:5px 0; }
+
+  /* 3.49.0 首页：每个学生一张卡 + 直接奖励时间（进储蓄） */
+  .homegrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:12px; }
+  .homecard { border:1px solid var(--line); border-radius:12px; padding:14px; background:#fff; }
+  .homecard .hn { font-size:16px; font-weight:600; }
+  .homecard .hmeta { font-size:12.5px; color:var(--muted); margin-top:2px; }
+  .homecard .hsav { display:flex; align-items:baseline; gap:6px; margin:10px 0 2px;
+    font-size:13px; color:var(--muted); }
+  .homecard .hsav b { font-size:22px; color:var(--accent); font-variant-numeric:tabular-nums; }
+  .homecard .hdev { font-size:12.5px; color:#444; }
+  .homecard .hbtns { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+  .homecard .hrew { margin-top:10px; border-top:1px dashed var(--line); padding-top:10px; }
+  .homecard .hrew .hrow { display:flex; gap:8px; align-items:center; }
+  .homecard .hrew .hrow .hrew-note { flex:1 1 auto; }
+  .homecard .hrew input { min-width:0; }
+  .homecard .hled { font-size:12px; color:var(--muted); margin-top:8px; }
+  .homecard .hled div { display:flex; justify-content:space-between; gap:8px; }
+  .homecard .hled b { font-variant-numeric:tabular-nums; }
+  .homecard .hled b.plus { color:var(--ok); }
+  .homecard .hled b.minus { color:var(--no); }
 </style>
 </head>
 <body>
@@ -217,7 +237,8 @@
       </span>
     </div>
     <div class="tabs">
-      <button id="tabbtn-quiz" data-tab="quiz">学生信息</button>
+      <button id="tabbtn-home" data-tab="home">首页</button>
+      <button id="tabbtn-quiz" data-tab="quiz" class="off">学生信息</button>
       <button id="tabbtn-questions" data-tab="questions" class="off">题目</button>
       <button id="tabbtn-ai" data-tab="ai" class="off">AI 出题</button>
       <button id="tabbtn-learning" data-tab="learning" class="off">学习情况</button>
@@ -225,8 +246,17 @@
       <button id="tabbtn-devices" data-tab="devices" class="off">管理设备</button>
     </div>
 
+    <!-- 3.49.0：首页 —— 选学生进入他的页面，或直接奖励时间（进储蓄） -->
+    <div id="tab-home" class="card">
+      <h2>首页</h2>
+      <p class="hint">每个学生一张卡：点「进入管理」切换到他的后台页面；
+        也可以直接奖励时间 —— 奖励会存进他的时间储蓄，等他在答题页点「消费」才变成上网时长。</p>
+      <div id="home-cards" class="homegrid"></div>
+      <p class="hint" id="home-tip" style="display:none"></p>
+    </div>
+
     <!-- 题库 -->
-    <div id="tab-quiz" class="card">
+    <div id="tab-quiz" class="card" style="display:none">
       <h2>学生信息</h2>
       <select id="bank-sel" class="hidebank"></select>
 
@@ -489,6 +519,15 @@
       <input id="cap" type="number" min="0" max="1440" value="0">
       <p class="hint" style="margin-top:10px">防止反复答题无限加时。到上限后答题会提示「今天额度已用完」。
         放行规则（正确率阈值、答错加题数）不在这里，已挪到「题库」页签，按每套题库各自配置。</p>
+
+      <label class="fld" for="earn-mode" style="margin-top:14px">答对之后，时间怎么给</label>
+      <select id="earn-mode">
+        <option value="savings">先存进时间储蓄，孩子点「消费」才放行（3.49.0 默认）</option>
+        <option value="direct">直接放行，马上能上网（原来的行为）</option>
+      </select>
+      <p class="hint" style="margin-top:10px">选「时间储蓄」时：答对只增加可消费分钟数，
+        设备保持限制；孩子在答题页点「消费」并选分钟数，才真正放行。
+        这样可以把时间攒到想用的时候再花，家长奖励的时间也进同一个储蓄。</p>
 
       <label class="fld" for="note" style="margin-top:14px">答题页底部提示语</label>
       <textarea id="note" rows="3"></textarea>
@@ -1317,6 +1356,8 @@
       badge.className = 'badge';
     }
     el('cap').value = state.settings.daily_cap_minutes;
+    el('earn-mode').value = state.settings.savings_mode === 'direct'
+      ? 'direct' : 'savings';
     el('note').value = state.settings.note || '';
     el('upd-auto').checked = state.settings.update_auto_check !== false;
     el('upd-auto-apply').checked = !!state.settings.update_auto_apply;
@@ -1332,6 +1373,7 @@
     setAiMode(_aiMode);
     loadAiConfig();      // 学段/年级/教材下拉要用到 AI 配置里的选项
     loadQuestionStats(); // 3.47.0：题目页要显示每道题做过/对/错次数
+    loadHome();          // 3.49.0：首页学生卡片（储蓄余额 / 奖励入口）
   }
 
   function loadState() {
@@ -3078,13 +3120,134 @@
     try { localStorage.setItem('wifigate.ai_mode', aiMode); } catch (e) {}
   }
 
+  // ---------- 3.49.0 首页：学生卡片 / 直接奖励时间（进储蓄） ----------
+
+  function loadHome() {
+    return api('/api/admin/home').then(function (res) {
+      if (!requireAuth(res)) return;
+      if (!res.data.ok) {
+        el('home-cards').innerHTML = '<p class="hint warn">读取失败：' +
+          escHtml(res.data.detail || '请刷新重试') + '</p>';
+        return;
+      }
+      renderHome(res.data);
+    }).catch(function () {
+      el('home-cards').innerHTML =
+        '<p class="hint warn">无法连接后台服务，请刷新重试。</p>';
+    });
+  }
+
+  function renderHome(data) {
+    var box = el('home-cards');
+    var list = data.students || [];
+    box.innerHTML = '';
+    var tip = el('home-tip');
+    if (!list.length) {
+      if (tip) { tip.style.display = 'block'; tip.textContent = '还没有学生：用顶栏「+ 新建学生」创建。'; }
+      return;
+    }
+    if (tip) tip.style.display = 'none';
+    list.forEach(function (s) {
+      var card = document.createElement('div');
+      card.className = 'homecard';
+      var devNames = (s.devices || []).map(function (d) { return d.name || d.mac; });
+      var meta = [s.stage, s.grade].filter(Boolean).join(' · ');
+      var html = '';
+      html += '<div class="hn">' + escHtml(s.name) + '</div>';
+      html += '<div class="hmeta">' + escHtml(meta || '未填年级') + ' · ' +
+        (s.questions || 0) + ' 道题</div>';
+      html += '<div class="hsav">可消费 <b>' + (s.savings_minutes || 0) + '</b> 分钟</div>';
+      html += '<div class="hdev">设备：' +
+        (devNames.length ? escHtml(devNames.join('、')) : '还没有设备') + '</div>';
+      html += '<div class="hdev">今日已得 ' + (s.earned_today || 0) +
+        ' 分钟 · 已释放 ' + (s.spent_today || 0) + ' 分钟</div>';
+      html += '<div class="hbtns">' +
+        '<button class="mini" data-go="' + escHtml(s.bank) + '">进入管理</button>' +
+        '<button class="mini ghost" data-reward="' + escHtml(s.bank) + '">奖励时间</button>' +
+        '</div>';
+      html += '<div class="hrew" id="hrew-' + escHtml(s.bank) + '" style="display:none">' +
+        '<div class="hrow">' +
+        '<input class="hrew-note" maxlength="40" placeholder="奖励原因，如：做家务">' +
+        '<input class="hrew-min" type="number" min="1" max="1440" value="10" ' +
+        'style="width:88px">' +
+        '</div>' +
+        '<div class="hrow" style="margin-top:8px;align-items:center">' +
+        '<button class="mini" data-save="' + escHtml(s.bank) + '">存入储蓄</button>' +
+        '<span class="hmeta" data-msg="' + escHtml(s.bank) + '"></span>' +
+        '</div></div>';
+      if ((s.ledger || []).length) {
+        html += '<div class="hled">';
+        (s.ledger || []).slice(0, 3).forEach(function (e) {
+          var kind = e.kind === 'quiz' ? '答题' :
+            (e.kind === 'reward' ? '奖励' : '释放');
+          html += '<div><span>' + kind + '：' + escHtml(e.reason || '') + '</span>' +
+            '<b class="' + (e.minutes >= 0 ? 'plus' : 'minus') + '">' +
+            (e.minutes >= 0 ? '+' : '') + e.minutes + ' 分钟</b></div>';
+        });
+        html += '</div>';
+      }
+      card.innerHTML = html;
+      box.appendChild(card);
+    });
+    Array.prototype.forEach.call(box.querySelectorAll('button[data-go]'), function (b) {
+      b.onclick = function () { enterStudent(b.getAttribute('data-go')); };
+    });
+    Array.prototype.forEach.call(box.querySelectorAll('button[data-reward]'), function (b) {
+      b.onclick = function () {
+        var f = el('hrew-' + b.getAttribute('data-reward'));
+        if (!f) return;
+        f.style.display = f.style.display === 'none' ? 'block' : 'none';
+      };
+    });
+    Array.prototype.forEach.call(box.querySelectorAll('button[data-save]'), function (b) {
+      b.onclick = function () { saveReward(b.getAttribute('data-save'), b); };
+    });
+  }
+
+  function enterStudent(bid) {
+    if (!banks.length) return;
+    var b = banks.filter(function (x) { return x.id === bid; })[0];
+    setCurrentBank(bid);
+    switchTab('quiz');
+    toast('已进入「' + ((b && b.name) || '学生') + '」的页面');
+  }
+
+  function saveReward(bid, btn) {
+    var f = el('hrew-' + bid);
+    if (!f) return;
+    var note = (f.querySelector('.hrew-note').value || '').trim();
+    var minutes = Number(f.querySelector('.hrew-min').value || 0);
+    var tip = f.querySelector('[data-msg]');
+    if (!note) { if (tip) tip.textContent = '请先填奖励原因'; return; }
+    if (!(minutes >= 1)) { if (tip) tip.textContent = '分钟数要 ≥ 1'; return; }
+    if (btn.disabled) return;
+    btn.disabled = true;
+    if (tip) tip.textContent = '保存中…';
+    api('/api/admin/savings/reward',
+        { bank: bid, minutes: minutes, note: note }).then(function (res) {
+      btn.disabled = false;
+      if (!requireAuth(res)) return;
+      if (!res.data.ok) {
+        if (tip) tip.textContent = res.data.detail || '奖励失败';
+        return;
+      }
+      toast('已奖励「' + note + '」' + minutes + ' 分钟，存进时间储蓄');
+      loadHome();
+    }).catch(function () {
+      btn.disabled = false;
+      if (tip) tip.textContent = '请求失败，请重试';
+    });
+  }
+
   function switchTab(name) {
-    // 5 个「管理对象」页签 + 右上角「系统设置」（没有页签按钮，从顶栏进入）
-    ['quiz', 'questions', 'ai', 'learning', 'mistakes', 'devices', 'settings'].forEach(function (n) {
+    // 「首页」+ 5 个「管理对象」页签 + 右上角「系统设置」（没有页签按钮，从顶栏进入）
+    ['home', 'quiz', 'questions', 'ai', 'learning', 'mistakes', 'devices',
+     'settings'].forEach(function (n) {
       el('tab-' + n).style.display = n === name ? 'block' : 'none';
       var btn = el('tabbtn-' + n);
       if (btn) btn.className = n === name ? '' : 'off';
     });
+    if (name === 'home') loadHome();
     if (name === 'devices') refreshDevices();
     if (name === 'quiz') syncImportBank();
     if (name === 'questions') {
@@ -3124,7 +3287,7 @@
   el('open-settings').onclick = function () { switchTab('settings'); };
   el('ai-goset').onclick = function () { switchTab('settings'); };
   el('obj-sel').onchange = function () { setCurrentBank(el('obj-sel').value); };
-  ['quiz', 'questions', 'ai', 'learning', 'mistakes', 'devices'].forEach(function (n) {
+  ['home', 'quiz', 'questions', 'ai', 'learning', 'mistakes', 'devices'].forEach(function (n) {
     el('tabbtn-' + n).onclick = function () { switchTab(n); };
   });
   el('save-bank-settings').onclick = saveBank;
@@ -3367,6 +3530,7 @@
     api('/api/admin/settings', {
       settings: {
         daily_cap_minutes: Number(el('cap').value),
+        savings_mode: el('earn-mode').value,
         note: el('note').value,
         update_auto_check: el('upd-auto').checked,
         update_auto_apply: el('upd-auto-apply').checked

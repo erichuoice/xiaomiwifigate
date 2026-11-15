@@ -348,8 +348,15 @@ def validate_settings(settings, current):
     # 3.48.0：允许免密进入后台的手机（按 MAC），空列表 = 关闭
     trusted = validate_macs(
         settings.get("admin_trusted", current.get("admin_trusted", []) or []))
+    # 3.49.0：答题所得去哪 —— savings（先进时间储蓄，消费时才放行）/ direct（答对直接放行）
+    earn = str(settings.get("savings_mode",
+                            current.get("savings_mode", "savings")))
+    earn = earn.strip().lower()
+    if earn not in ("savings", "direct"):
+        raise StoreError("答题所得去向只能是 savings（存入储蓄）或 direct（直接放行）")
     return {"note": note, "daily_cap_minutes": cap,
             "admin_trusted": trusted,
+            "savings_mode": earn,
             "pass_mode": rule["pass_mode"],
             "pass_rate_percent": rule["pass_rate_percent"],
             "wrong_add_questions": rule["wrong_add_questions"],
@@ -635,6 +642,7 @@ class Store:
             "settings": {
                 "note": str(s.get("note", "")),
                 "daily_cap_minutes": int(s.get("daily_cap_minutes", 0) or 0),
+                "savings_mode": "savings",
                 "pass_mode": DEFAULT_PASS_RULE["pass_mode"],
                 "pass_rate_percent": DEFAULT_PASS_RULE["pass_rate_percent"],
                 "wrong_add_questions": DEFAULT_PASS_RULE["wrong_add_questions"],

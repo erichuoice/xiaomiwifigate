@@ -31,6 +31,7 @@ import feedback
 import mistakes
 import learning
 import router_adapter
+import savings
 import schedule
 import store
 import updater
@@ -133,6 +134,28 @@ def granted_today(rec):
     if not rec or rec.get("day") != today():
         return 0
     return int(rec.get("today_minutes", 0) or 0)
+
+
+def earned_today_for(bank_id, rec=None):
+    """今日已获得分钟数（每日上限的口径）。
+
+    3.49.0 起答题所得默认先进时间储蓄，所以也要算储蓄里今天存入的部分；
+    direct 模式（答对直接放行）照旧只看放行记录，两者取大以防升级当天的过渡。
+    """
+    by_grant = granted_today(rec)
+    by_savings = 0
+    if bank_id:
+        try:
+            by_savings = int(savings.today_earned(bank_id) or 0)
+        except Exception:
+            by_savings = 0
+    return max(by_grant, by_savings)
+
+
+def earn_mode():
+    """当前答题所得的去向：savings（默认，先进储蓄）/ direct（直接放行）。"""
+    mode = str(STORE.snapshot()["settings"].get("savings_mode", "savings"))
+    return "direct" if mode == "direct" else "savings"
 
 
 def schedule_public(st):
@@ -398,11 +421,14 @@ def note_wrong(ip):
 
 # ---- 放行 ----
 
-def grant(ip, mac, bank_id, bank_name, minutes):
+def grant(ip, mac, bank_id, bank_name, minutes, count_cap=True):
     """放行并重新计时：从现在起算本次档位时长，不在原有到期时间上叠加。
 
     设备设了答题时段时，本次放行最多到「当前时段结束」，不会跨进禁止时段；
     若答题过程中刚好跨过时段边界，则拒绝放行（不碰路由器）。
+
+    count_cap=False 用于「消费储蓄」：这些分钟在存入时已经计入每日上限，
+    释放时不再重复扣额度。
     """
     cap = int(STORE.snapshot()["settings"].get("daily_cap_minutes", 0) or 0)
     now = time.time()
@@ -413,7 +439,7 @@ def grant(ip, mac, bank_id, bank_name, minutes):
         rec = dict(grants.get(mac) or {})
         today_before = granted_today(rec)
         granted = int(minutes)
-        if cap > 0 and granted > 0:
+        if count_cap and cap > 0 and granted > 0:
             granted = max(0, min(granted, cap - today_before))
             if granted == 0:
                 raise DailyCap("今天的 %s 分钟额度已用完，明天再来" % cap)
@@ -434,7 +460,7 @@ def grant(ip, mac, bank_id, bank_name, minutes):
         rec.update({
             "ip": ip, "mac": mac, "at": now, "expire_at": expire,
             "minutes": granted, "bank": bank_id, "bank_name": bank_name,
-            "day": day, "today_minutes": today_before + granted,
+            "day": day, "today_minutes": (today_before + granted) if count_cap else today_before,
             "reblocked": False,
             # 答题放行不是家长手动破例，要受时段规则自动回收
             "manual": False,
@@ -1060,8 +1086,12 @@ class Handler(BaseHTTPRequestHandler):
             "mode": cfg["router"]["mode"], "locked_for": locked_seconds(ip),
             "pass_rule": pass_rule(),
             "limit_rule": limit_rule(),
+            "savings_mode": earn_mode(),
             "server_now": time.time(),
         }
+        # 3.49.0：时间储蓄按「人」（题库）记账；本机没归属时不显示余额
+        base["savings_minutes"] = 0
+        base["savings_ledger"] = []
         try:
             mac, bank, rec = device_context(ip)
         except Exception as exc:
@@ -1088,7 +1118,8 @@ class Handler(BaseHTTPRequestHandler):
                 "limit_rule": limit_rule({"limit_mode": t.get("limit_mode"),
                                           "throttle_kbps": t.get("throttle_kbps")}),
                 "remaining_minutes": minutes_left(trec),
-                "today_minutes": granted_today(trec),
+                "today_minutes": earned_today_for(t["bank_id"], trec),
+                "savings_minutes": savings.state_of(t["bank_id"])["minutes"],
                 "is_self": t["mac"] == mac,
                 "schedule": schedule_public(
                     schedule.window_state(scheds.get(t["mac"]), now)),
@@ -1109,7 +1140,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(base)
 
         cap = int(cfg["settings"].get("daily_cap_minutes", 0) or 0)
-        used = granted_today(rec)
+        used = earned_today_for(bank["id"], rec)
+        sav = savings.state_of(bank["id"])
         rule = limit_rule(bank)
         base.update({
             "need": True,
@@ -1121,6 +1153,8 @@ class Handler(BaseHTTPRequestHandler):
             "remaining_minutes": minutes_left(rec),
             "today_minutes": used,
             "daily_cap_minutes": cap,
+            "savings_minutes": sav["minutes"],
+            "savings_ledger": sav["ledger"],
             "today_left": (max(0, cap - used) if cap else None),
             "schedule": schedule_public(
                 schedule.window_state(scheds.get(mac), now)),
@@ -1135,6 +1169,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/api/savings/release":
+            return self._release_savings()
         if path == "/api/setup":
             return self._setup()
         if not STORE.configured:
@@ -1279,7 +1315,7 @@ class Handler(BaseHTTPRequestHandler):
         cap = int(STORE.snapshot()["settings"].get("daily_cap_minutes", 0) or 0)
         tier = bank["tiers"][tier_index]
         if cap and tier["minutes"] > 0:
-            room = cap - granted_today(rec)
+            room = cap - earned_today_for(bank["id"], rec)
             if room <= 0:
                 return self._json({
                     "ok": False, "reason": "daily_cap",
@@ -1407,6 +1443,51 @@ class Handler(BaseHTTPRequestHandler):
             feedback["pass_rate_percent"] = int(rule.get("rate") or 80)
             feedback["accuracy_percent"] = accuracy
         if passed:
+            # 3.49.0：默认「答题所得先进时间储蓄」，孩子在答题页点「消费」才放行；
+            # 设置里切成 direct 则保持原来的「答对立刻放行」。
+            cfg_s = STORE.snapshot()["settings"]
+            if earn_mode() == "savings" and int(sess["minutes"]) > 0:
+                cap = int(cfg_s.get("daily_cap_minutes", 0) or 0)
+                try:
+                    names = ADAPTER.names_by_mac()
+                except Exception:
+                    names = {}
+                try:
+                    saved = savings.credit(
+                        sess["bank_id"], int(sess["minutes"]), kind="quiz",
+                        reason="答对 %s 题" % total,
+                        by=names.get(sess["mac"], "") or sess["mac"], cap=cap)
+                except Exception as exc:
+                    log("SAVE-FAIL ip=%s err=%s" % (ip, exc))
+                    return self._json({"ok": False, "reason": "save_error",
+                                       "detail": "存入储蓄失败：%s" % exc}, 500)
+                if not saved.get("ok"):
+                    log("DAILY-CAP ip=%s 储蓄额度已用完" % ip)
+                    return self._json({
+                        "ok": False, "reason": "daily_cap",
+                        "detail": "今天的 %s 分钟额度已经用完，明天再来" % cap,
+                    }, 409)
+                log("SAVE ip=%s mac=%s bank=%s +%smin 余额=%s"
+                    % (ip, sess["mac"], sess["bank_id"],
+                       saved["added"], saved["minutes"]))
+                with _mutex:
+                    _wrong.pop(ip, None)
+                    _sessions.pop(ip, None)
+                feedback.update({
+                    "all_correct": True,
+                    "saved": True,
+                    "saved_minutes": saved["added"],
+                    "savings_minutes": saved["minutes"],
+                    "today_minutes": saved["earned_today"],
+                    "daily_cap_minutes": cap,
+                    "message": (
+                        "已存入时间储蓄 %s 分钟（今日额度只剩 %s 分钟），现在有 %s 分钟可以消费"
+                        % (saved["added"], cap - saved["earned_today"], saved["minutes"])
+                        if saved.get("clamped") else
+                        "已存入时间储蓄 %s 分钟，现在有 %s 分钟可以消费"
+                        % (saved["added"], saved["minutes"])),
+                })
+                return self._json(feedback)
             try:
                 rec = grant(ip, sess["mac"], sess["bank_id"],
                             sess["bank_name"], sess["minutes"])
@@ -1461,6 +1542,103 @@ class Handler(BaseHTTPRequestHandler):
         feedback["remain"] = remain
         feedback["locked_for"] = locked_seconds(ip)
         return self._json(feedback)
+
+    def _release_savings(self):
+        """把储蓄里的分钟数「消费」成上网时长（孩子在答题页点消费）。
+
+        target 缺省 = 本机；也可以代答那样指定一台受控设备。
+        储蓄按「人」（题库）记账，所以释放扣的是那台设备所属学生的余额。
+        """
+        ip = client_ip(self)
+        payload = self._payload()
+        if payload is None:
+            return self._json({"ok": False, "reason": "bad json"}, 400)
+        try:
+            minutes = int(payload.get("minutes") or 0)
+        except (TypeError, ValueError):
+            minutes = 0
+        if minutes <= 0:
+            return self._json({"ok": False, "reason": "bad_request",
+                               "detail": "请选择要释放的分钟数"}, 400)
+        target = str(payload.get("target") or "").strip().lower()
+        try:
+            if target:
+                mac = target
+                bank = STORE.bank_for_mac(mac)
+            else:
+                mac, bank, _rec = device_context(ip)
+        except Exception as exc:
+            log("MAC-FAIL ip=%s err=%s" % (ip, exc))
+            return self._json({"ok": False, "reason": "router_error",
+                               "detail": str(exc)}, 502)
+        if not bank:
+            return self._json({"ok": False, "reason": "not_managed",
+                               "detail": "这台设备不在受控清单里"}, 403)
+        bank_id = bank["id"]
+        sav = savings.state_of(bank_id)
+        if sav["minutes"] <= 0:
+            return self._json({"ok": False, "reason": "insufficient",
+                               "detail": "储蓄里还没有可消费的时间：先答题，或让家长奖励",
+                               "savings_minutes": 0}, 409)
+        if minutes > sav["minutes"]:
+            return self._json({"ok": False, "reason": "insufficient",
+                               "detail": "储蓄里只有 %s 分钟" % sav["minutes"],
+                               "savings_minutes": sav["minutes"]}, 409)
+        st = schedule_of(mac)
+        if st.get("limited") and st.get("free"):
+            return self._json({"ok": False, "reason": "free_window",
+                               "detail": "现在是自由上网时段，不用消费储蓄",
+                               "savings_minutes": sav["minutes"]}, 409)
+        left = minutes_left(load_grants().get(mac) or {})
+        if left is None:
+            return self._json({"ok": False, "reason": "already",
+                               "detail": "这台设备已经永久放行，不用再消费",
+                               "savings_minutes": sav["minutes"]}, 409)
+        if left > 0:
+            return self._json({"ok": False, "reason": "already",
+                               "detail": "这台设备现在还有 %s 分钟，用完再消费" % left,
+                               "savings_minutes": sav["minutes"]}, 409)
+        try:
+            rec = grant(ip, mac, bank_id, bank["name"], minutes, count_cap=False)
+        except NotManaged as exc:
+            return self._json({"ok": False, "reason": "not_managed",
+                               "detail": str(exc)}, 403)
+        except schedule.OutsideSchedule as exc:
+            return self._json({"ok": False, "reason": "outside_schedule",
+                               "detail": str(exc)}, 403)
+        except Exception as exc:
+            log("RELEASE-FAIL ip=%s mac=%s err=%s" % (ip, exc))
+            return self._json({"ok": False, "reason": "router_error",
+                               "detail": str(exc)}, 502)
+        granted = int(rec.get("minutes") or 0)
+        try:
+            names = ADAPTER.names_by_mac()
+        except Exception:
+            names = {}
+        spent = savings.debit(bank_id, granted, kind="release",
+                              reason="释放 %s 分钟上网" % granted,
+                              by=names.get(mac, "") or mac)
+        if not spent.get("ok"):
+            log("RELEASE-DEBIT-FAIL ip=%s mac=%s want=%s err=%s"
+                % (ip, mac, granted, spent.get("reason")))
+        balance = spent.get("minutes", 0) if spent.get("ok") else savings.state_of(bank_id)["minutes"]
+        log("RELEASE ip=%s mac=%s bank=%s -%smin 余额=%s expire=%s"
+            % (ip, mac, bank_id, granted, balance,
+               rec.get("expire_at") or "永久"))
+        msg = ("已放行到 %s（本时段结束），可用 %s 分钟"
+               % (rec.get("ends_hhmm"), rec.get("minutes_left"))
+               if rec.get("ends_hhmm") else
+               ("已永久放行" if rec.get("expire_at") == 0
+                else "已放行 %s 分钟，可用 %s 分钟"
+                     % (granted, rec.get("minutes_left"))))
+        return self._json({
+            "ok": True, "mac": mac, "minutes": granted,
+            "expire_at": rec.get("expire_at"), "now": int(time.time()),
+            "remaining_minutes": rec.get("minutes_left"),
+            "ends_hhmm": rec.get("ends_hhmm"),
+            "savings_minutes": balance,
+            "message": msg,
+        })
 
 
 def restore_all():

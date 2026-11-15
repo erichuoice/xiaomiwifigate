@@ -19,6 +19,7 @@ import learning
 import mistakes
 import progress
 import router_adapter
+import savings
 import schedule
 import feedback
 import store
@@ -122,6 +123,43 @@ def _bank_id(st, data):
     return st.first_bank()["id"]
 
 
+def _home_payload(st, adapter):
+    """后台首页：每个学生一张卡（储蓄余额 / 今日获得 / 设备 / 最近明细）。"""
+    try:
+        names = adapter.names_by_mac()
+    except Exception:
+        names = {}
+    states = savings.all_states()
+    cfg = st.snapshot()
+    students = []
+    for b in st.banks():
+        sav = states.get(b["id"]) or {"minutes": 0, "earned_today": 0,
+                                      "spent_today": 0, "ledger": []}
+        students.append({
+            "bank": b["id"],
+            "name": b["name"],
+            "stage": b.get("stage", ""),
+            "grade": b.get("grade", ""),
+            "region": b.get("region", ""),
+            "enabled": b.get("enabled", True),
+            "questions": len(b.get("questions") or []),
+            "tiers": b.get("tiers") or [],
+            "devices": [{"mac": m, "name": names.get(m, "")}
+                        for m in (b.get("devices") or [])],
+            "savings_minutes": sav["minutes"],
+            "earned_today": sav["earned_today"],
+            "spent_today": sav["spent_today"],
+            "ledger": sav["ledger"],
+        })
+    return {
+        "ok": True,
+        "students": students,
+        "server_now": time.time(),
+        "savings_mode": cfg["settings"].get("savings_mode", "savings"),
+        "daily_cap_minutes": int(cfg["settings"].get("daily_cap_minutes", 0) or 0),
+    }
+
+
 def dispatch(st, adapter, method, path, headers, raw, peer):
     token = cookie_token(headers)
     authed = st.check_session(token)
@@ -168,6 +206,33 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
             "summary": st.summary(),
         }, None
 
+    if path == "/api/admin/home" and method == "GET":
+        return 200, _home_payload(st, adapter), None
+
+    if path == "/api/admin/savings/reward" and method == "POST":
+        data = _body(raw)
+        bid = str(data.get("bank") or data.get("bank_id") or "").strip()
+        bank = st.bank(bid)
+        if not bank:
+            return 400, {"ok": False, "detail": "学生不存在，刷新后再试"}, None
+        try:
+            minutes = int(data.get("minutes") or 0)
+        except (TypeError, ValueError):
+            minutes = 0
+        if not 1 <= minutes <= savings.MAX_ENTRY_MINUTES:
+            return 400, {"ok": False, "detail": "奖励分钟数需在 1-%s 之间"
+                         % savings.MAX_ENTRY_MINUTES}, None
+        note = str(data.get("note") or data.get("reason") or "").strip()[:40]
+        if not note:
+            return 400, {"ok": False, "detail": "请填写奖励原因（例如：做家务）"}, None
+        # 家长奖励是家长意志：不占孩子的每日答题额度（与手动放行同一套逻辑）
+        saved = savings.credit(bank["id"], minutes, kind="reward",
+                               reason=note, by="家长奖励", cap=0,
+                               count_toward_day=False)
+        if not saved.get("ok"):
+            return 400, {"ok": False, "detail": saved.get("detail") or "奖励失败"}, None
+        return 200, {"ok": True, "student": bank["name"], "saved": saved}, None
+
     if path == "/api/admin/update" and method == "GET":
         return 200, dict(ok=True, **updater.status()), None
 
@@ -196,10 +261,13 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
                      "summary": st.summary()}, None
 
     if path == "/api/admin/bank/delete" and method == "POST":
+        bid = _body(raw).get("id", "")
         try:
-            summary = st.delete_bank(_body(raw).get("id", ""))
+            summary = st.delete_bank(bid)
         except store.StoreError as exc:
             return 400, {"ok": False, "detail": str(exc)}, None
+        # 3.49.0：学生删掉后，他的时间储蓄也一起清掉
+        savings.drop_bank(bid)
         return 200, {"ok": True, "summary": summary, "banks": st.banks(),
                      "stats": st.summary()}, None
 
