@@ -16,6 +16,7 @@ import ai_bank
 import auto_bank
 import importer
 import learning
+import mistakes
 import progress
 import router_adapter
 import schedule
@@ -583,6 +584,14 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
             return 400, {"ok": False, "detail": "请指定要清空的题库"}, None
         learning.clear(who)
         return 200, {"ok": True}, None
+
+    # ---- 3.36.0：错题分析（按学科/知识点/题型归类 + 原因建议）----
+    if path == "/api/admin/mistakes" and method == "GET":
+        bid = str((query.get("bank") or [""])[0]).strip()
+        bank = st.bank(bid) if bid else st.first_bank()
+        if not bank:
+            return 404, {"ok": False, "detail": "题库不存在"}, None
+        return 200, dict(mistakes.analyze(bank), ok=True), None
 
     # ---- 3.34.0：学生答题页的「题目有异议」反馈 ----
     if path == "/api/admin/feedback" and method == "GET":

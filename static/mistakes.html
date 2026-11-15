@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>我的错题本 · 上网答题</title>
+<style>
+  :root { --bg:#f4f6f8; --card:#fff; --line:#e2e6ea; --text:#171b21; --muted:#6b7280;
+    --accent:#1a6fd4; --soft:#eaf2fd; --ok:#0f7a5a; --oksoft:#e4f6ee;
+    --warn:#b45309; --warnsoft:#fff6e5; --no:#b03030; --nosoft:#fdeaea; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:16px 14px 48px; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    font-size:15px; line-height:1.6; }
+  .wrap { max-width:720px; margin:0 auto; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:13px; margin:0 0 14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px;
+    padding:16px; margin-bottom:12px; }
+  h2 { font-size:16px; margin:0 0 10px; }
+  h3 { font-size:14.5px; margin:0 0 8px; }
+  .stats { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px; }
+  .stat { background:var(--soft); border-radius:10px; padding:8px 12px; font-size:13px; }
+  .stat b { display:block; font-size:20px; line-height:1.2; color:var(--accent); }
+  .pill { display:inline-block; padding:1px 8px; border-radius:99px; font-size:12px;
+    background:#eef1f5; color:var(--muted); margin:0 4px 4px 0; }
+  .pill.no { background:var(--nosoft); color:var(--no); }
+  .pill.ok { background:var(--oksoft); color:var(--ok); }
+  .pill.warn { background:var(--warnsoft); color:var(--warn); }
+  .row { padding:8px 0; border-bottom:1px dashed var(--line); font-size:14px; }
+  .row:last-child { border-bottom:0; }
+  .row .muted { color:var(--muted); font-size:13px; }
+  .cause { padding:6px 0; font-size:14px; }
+  .cause:before { content:"· "; color:var(--accent); }
+  .q { padding:10px 0; border-bottom:1px dashed var(--line); }
+  .q:last-child { border-bottom:0; }
+  .qtext { font-weight:600; margin-bottom:6px; }
+  .opt { padding:3px 0; color:var(--text); }
+  .opt.correct { color:var(--ok); font-weight:600; }
+  .answer { margin-top:6px; font-size:13px; color:var(--ok); }
+  .explain { margin-top:4px; font-size:13px; color:var(--muted); }
+  .meta { margin-top:6px; }
+  .foot { text-align:center; color:var(--muted); font-size:12.5px; margin-top:18px; }
+  a { color:var(--accent); text-decoration:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>我的错题本</h1>
+  <p class="sub" id="sub">正在读取…</p>
+
+  <div class="card">
+    <div class="stats" id="stats"></div>
+    <h2 style="margin-top:12px">错题原因与建议</h2>
+    <div id="causes"><p class="muted">正在分析…</p></div>
+  </div>
+
+  <div class="card">
+    <h2>按学科 / 知识点 / 题型</h2>
+    <div id="breakdown"><p class="muted">—</p></div>
+  </div>
+
+  <div class="card">
+    <h2>错题清单</h2>
+    <div id="list"><p class="muted">—</p></div>
+  </div>
+
+  <p class="foot"><a href="/">← 回去继续答题</a></p>
+</div>
+<script>
+(function () {
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  var LETTERS = 'ABCDEFGH';
+  function answerText(q) {
+    if (q.type === 'multi') {
+      return (q.answer || []).map(function (i) { return LETTERS[i]; }).join('、');
+    }
+    if (q.type === 'judge') return q.answer === 1 ? '错误' : '正确';
+    return LETTERS[q.answer] || '';
+  }
+  function render(q) {
+    document.getElementById('sub').textContent =
+      (q.bank_name || '') + ' · ' + new Date().toLocaleDateString('zh-CN');
+    var s = q.summary || {};
+    document.getElementById('stats').innerHTML =
+      '<div class="stat">错题<b>' + (s.total || 0) + '</b></div>' +
+      '<div class="stat">待复习<b>' + (s.due || 0) + '</b></div>' +
+      '<div class="stat">反复错<b>' + (s.high_freq || 0) + '</b></div>' +
+      '<div class="stat">涉及知识点<b>' + (s.topics || 0) + '</b></div>';
+    var causes = q.causes || [];
+    document.getElementById('causes').innerHTML = causes.length
+      ? causes.map(function (c) { return '<div class="cause">' + esc(c) + '</div>'; }).join('')
+      : '<p class="muted">没有明显集中的错题，保持练习即可。</p>';
+    var html = '';
+    (q.subjects || []).forEach(function (x) {
+      html += '<div class="row"><b>' + esc(x.subject) + '</b>　错题 ' + x.wrong_count +
+        '　待复习 ' + x.due +
+        (x.accuracy == null ? '' : '　正确率 ' + Math.round(x.accuracy * 100) + '%') + '</div>';
+    });
+    (q.topics || []).slice(0, 12).forEach(function (t) {
+      html += '<div class="row"><span class="pill">知识点</span>' + esc(t.topic) +
+        '　错 ' + t.wrong_count + ' 次' + (t.due ? '　<span class="pill no">待复习</span>' : '') +
+        '</div>';
+    });
+    (q.types || []).forEach(function (t) {
+      html += '<div class="row"><span class="pill">' + esc(t.name) + '</span> ' + t.count + ' 道</div>';
+    });
+    document.getElementById('breakdown').innerHTML = html || '<p class="muted">—</p>';
+
+    var items = q.wrong || [];
+    if (!items.length) {
+      document.getElementById('list').innerHTML =
+        '<p class="muted">还没有错题记录，继续保持。</p>';
+      return;
+    }
+    document.getElementById('list').innerHTML = items.map(function (it) {
+      var opts = (it.options || []).map(function (o, i) {
+        var correct = Array.isArray(it.answer)
+          ? (it.answer || []).indexOf(i) >= 0
+          : it.answer === i;
+        return '<div class="opt' + (correct ? ' correct' : '') + '">' +
+          LETTERS[i] + '. ' + esc(o) + '</div>';
+      }).join('');
+      var due = it.due ? '<span class="pill no">该复习了</span>'
+                       : (it.due_at ? '<span class="pill">已安排复习</span>' : '');
+      return '<div class="q"><div class="qtext">' + esc(it.text) + '</div>' + opts +
+        '<div class="answer">答案：' + esc(answerText(it)) + '（错 ' + it.count + ' 次）</div>' +
+        (it.explain ? '<div class="explain">解析：' + esc(it.explain) + '</div>' : '') +
+        '<div class="meta"><span class="pill">' + esc(it.topic || '知识点未标注') + '</span>' +
+        (it.chapter ? '<span class="pill">' + esc(it.chapter) + '</span>' : '') +
+        due + '</div></div>';
+    }).join('');
+  }
+  fetch('/api/mistakes', { credentials: 'same-origin' })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d || !d.ok) {
+        document.getElementById('sub').textContent = (d && d.detail) || '这台设备没有错题本。';
+        document.getElementById('causes').innerHTML = '<p class="muted">' +
+          esc((d && d.detail) || '它不在受控清单里。') + '</p>';
+        return;
+      }
+      render(d);
+    })
+    .catch(function () {
+      document.getElementById('sub').textContent = '读取失败，请刷新页面重试。';
+    });
+})();
+</script>
+</body>
+</html>

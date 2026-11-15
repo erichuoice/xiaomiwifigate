@@ -203,6 +203,9 @@
     <div id="devinfo"></div>
     <div id="note"></div>
     <div style="margin-top:8px">打开的是本机固定地址，断网也能用；建议「添加到主屏幕」。</div>
+    <div style="margin-top:8px">
+      <a href="/mistakes" style="color:var(--accent);text-decoration:none">看看我的错题本 ›</a>
+    </div>
   </div>
 </div>
 
@@ -532,6 +535,8 @@
     S.busy = false;
     clearTimeout(S.autoTimer);
     S.autoTimer = null;
+    // 3.36.0：换下一题时回到页面最上面，不用再手动往上滑
+    try { window.scrollTo(0, 0); } catch (e) {}
     hidePanel();
     el('pick-card').style.display = 'none';
     showQuiz(true);

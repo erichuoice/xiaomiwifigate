@@ -187,6 +187,7 @@
       <button id="tabbtn-questions" data-tab="questions" class="off">题目</button>
       <button id="tabbtn-ai" data-tab="ai" class="off">AI 出题</button>
       <button id="tabbtn-learning" data-tab="learning" class="off">学习情况</button>
+      <button id="tabbtn-mistakes" data-tab="mistakes" class="off">错题分析</button>
       <button id="tabbtn-devices" data-tab="devices" class="off">管理设备</button>
     </div>
 
@@ -647,6 +648,7 @@
       <div id="learn-detail" style="margin-top:12px"></div>
       <div class="row">
         <button class="mini ghost" id="learn-refresh">刷新</button>
+        <button class="mini ghost" id="learn-gomk">错题分析 ›</button>
         <a id="learn-dl" href="#" style="text-decoration:none">
           <button type="button" class="mini ghost">下载错题本（CSV）</button>
         </a>
@@ -664,6 +666,24 @@
         改完错题本里的对应题目也会同步更新。</p>
       <div class="row"><button class="mini ghost" id="fb-refresh">刷新反馈</button></div>
       <div id="fb-list"></div>
+
+    <!-- 错题分析（3.36.0）-->
+    <div id="tab-mistakes" class="card" style="display:none">
+      <h2>错题分析</h2>
+      <p class="hint">把错题本按<b>学科 / 知识点 / 题型</b>归类，自动给出可能的原因和建议，
+        家长可以和孩子一起看；孩子设备上打开「我的错题本」（答题页底部链接）看到的是同一份内容。</p>
+      <div id="mk-summary" class="stats"></div>
+      <h3 style="margin-top:14px">错题原因与建议</h3>
+      <div id="mk-causes"></div>
+      <h3>按学科 / 知识点 / 题型</h3>
+      <div id="mk-breakdown"></div>
+      <h3>错题清单</h3>
+      <div class="row">
+        <button class="mini ghost" id="mk-refresh">刷新分析</button>
+        <span class="hint" id="mk-note"></span>
+      </div>
+      <div id="mk-list"></div>
+    </div>
     </div>
   </div>
 
@@ -868,6 +888,7 @@
     }
     loadBankProgress(b.id);
     if (el('tab-learning').style.display !== 'none') loadLearning(b.id);
+    if (el('tab-mistakes') && el('tab-mistakes').style.display !== 'none') loadMistakes();
     if (el('tab-devices').style.display !== 'none') {
       refreshDevices();
     }
@@ -2285,6 +2306,84 @@
 
   var feedbackItems = [];
 
+  // ---------- 3.36.0：错题分析 ----------
+
+  function loadMistakes() {
+    var bid = currentBankId || '';
+    return api('/api/admin/mistakes' + (bid ? '?bank=' + encodeURIComponent(bid) : ''))
+      .then(function (res) {
+        if (!requireAuth(res)) return;
+        renderMistakes(res.data || {});
+      }).catch(function () {});
+  }
+
+  function renderMistakes(d) {
+    var s = d.summary || {};
+    el('mk-summary').innerHTML =
+      '<div class="stat">错题<b>' + (s.total || 0) + '</b></div>' +
+      '<div class="stat">待复习<b>' + (s.due || 0) + '</b></div>' +
+      '<div class="stat">反复错<b>' + (s.high_freq || 0) + '</b></div>' +
+      '<div class="stat">涉及知识点<b>' + (s.topics || 0) + '</b></div>';
+    var causes = d.causes || [];
+    el('mk-causes').innerHTML = causes.length
+      ? causes.map(function (c) {
+          return '<div class="wrong-line">· ' + escHtml(c) + '</div>';
+        }).join('')
+      : '<p class="hint">没有明显集中的错题，保持练习即可。</p>';
+
+    var html = '';
+    (d.subjects || []).forEach(function (x) {
+      html += '<div class="wrong-line"><b>' + escHtml(x.subject) + '</b>　错题 ' +
+        x.wrong_count + '　待复习 ' + x.due +
+        (x.accuracy == null ? '' : '　正确率 ' + Math.round(x.accuracy * 100) + '%') +
+        '</div>';
+    });
+    (d.topics || []).slice(0, 15).forEach(function (t) {
+      html += '<div class="wrong-line"><span class="pill">知识点</span>' +
+        escHtml(t.topic) + '　错 ' + t.wrong_count + ' 次' +
+        (t.due ? '　<span class="pill no">待复习</span>' : '') + '</div>';
+    });
+    (d.types || []).forEach(function (t) {
+      html += '<div class="wrong-line"><span class="pill">' + escHtml(t.name) +
+        '</span> ' + t.count + ' 道</div>';
+    });
+    el('mk-breakdown').innerHTML = html || '<p class="hint">还没有错题数据。</p>';
+
+    var items = d.wrong || [];
+    el('mk-note').textContent = items.length
+      ? '（显示前 ' + items.length + ' 道，按错次数排序）' : '';
+    if (!items.length) {
+      el('mk-list').innerHTML = '<p class="hint">还没有错题记录。</p>';
+      return;
+    }
+    el('mk-list').innerHTML = items.map(function (it) {
+      var opts = (it.options || []).map(function (o, i) {
+        var correct = Array.isArray(it.answer)
+          ? (it.answer || []).indexOf(i) >= 0
+          : it.answer === i;
+        return '<span class="' + (correct ? 'pill ok' : 'pill') + '">' +
+          String.fromCharCode(65 + i) + '. ' + escHtml(String(o).slice(0, 40)) +
+          '</span>';
+      }).join(' ');
+      var tag = it.due ? '<span class="pill no">该复习了</span>'
+                       : (it.due_at ? '<span class="pill">已安排复习</span>' : '');
+      return '<div class="wrong-line">' +
+        '<b>错 ' + it.count + ' 次</b>　' + escHtml(it.text) +
+        (opts ? '<br>' + opts : '') +
+        '<br><span class="hint">答案：' + escHtml(answerTextOf(it)) +
+        (it.explain ? '　解析：' + escHtml(it.explain) : '') + '</span>' +
+        '<br><span class="pill">' + escHtml(it.topic || '知识点未标注') + '</span>' +
+        (it.chapter ? '<span class="pill">' + escHtml(it.chapter) + '</span>' : '') + tag +
+        ' <button class="mini ghost" data-mkedit="' + escHtml(it.qid) + '">编辑题目</button>' +
+        '</div>';
+    }).join('');
+    Array.prototype.forEach.call(el('mk-list').querySelectorAll('button[data-mkedit]'), function (b) {
+      b.onclick = function () {
+        openQuestionEditor(b.getAttribute('data-mkedit'), currentBankId);
+      };
+    });
+  }
+
   function loadFeedback() {
     return api('/api/admin/feedback').then(function (res) {
       if (!requireAuth(res)) return;
@@ -2768,7 +2867,7 @@
 
   function switchTab(name) {
     // 5 个「管理对象」页签 + 右上角「系统设置」（没有页签按钮，从顶栏进入）
-    ['quiz', 'questions', 'ai', 'learning', 'devices', 'settings'].forEach(function (n) {
+    ['quiz', 'questions', 'ai', 'learning', 'mistakes', 'devices', 'settings'].forEach(function (n) {
       el('tab-' + n).style.display = n === name ? 'block' : 'none';
       var btn = el('tabbtn-' + n);
       if (btn) btn.className = n === name ? '' : 'off';
@@ -2790,6 +2889,7 @@
       loadLearning(currentBankId || el('learn-sel').value || '');
       loadFeedback();
     }
+    if (name === 'mistakes') loadMistakes();
     if (name === 'settings') {
       loadAiConfig();                          // 3.23.0：AI 连接配置挪到系统设置
       loadTizhuangStatus();                    // 3.32.0：题庄 License / 额度
@@ -2808,7 +2908,7 @@
   el('open-settings').onclick = function () { switchTab('settings'); };
   el('ai-goset').onclick = function () { switchTab('settings'); };
   el('obj-sel').onchange = function () { setCurrentBank(el('obj-sel').value); };
-  ['quiz', 'questions', 'ai', 'learning', 'devices'].forEach(function (n) {
+  ['quiz', 'questions', 'ai', 'learning', 'mistakes', 'devices'].forEach(function (n) {
     el('tabbtn-' + n).onclick = function () { switchTab(n); };
   });
   el('save-bank-settings').onclick = saveBank;
@@ -2818,6 +2918,8 @@
     if (ev.target === el('qedit-mask')) closeQuestionEditor();
   };
   el('fb-refresh').onclick = loadFeedback;
+  el('mk-refresh').onclick = loadMistakes;
+  el('learn-gomk').onclick = function () { switchTab('mistakes'); };
   el('ai-mode-manual').onclick = function () { setAiMode('manual'); };
   el('tz-preview').onclick = tzPreview;
   el('tz-license-save').onclick = function () {

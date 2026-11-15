@@ -28,6 +28,7 @@ import ai_bank  # noqa: E402
 import auto_bank  # noqa: E402
 import importer  # noqa: E402
 import learning  # noqa: E402
+import mistakes  # noqa: E402
 import progress  # noqa: E402
 import router_adapter  # noqa: E402
 import schedule  # noqa: E402
@@ -1053,6 +1054,48 @@ def main():
           code == 200 and any(f.get("id") == _fid and f.get("status") == "done"
                               for f in res.get("items") or []))
     admin("/api/admin/feedback/delete", {"id": _fid})
+
+    # 3.36.0：错题分析页（原因/学科/知识点/题型）
+    _old_l3 = learning.PATH
+    try:
+        learning.PATH = os.path.join(tempfile.mkdtemp(prefix="wg-mk-"),
+                                     "learning.json")
+        if os.path.exists(learning.PATH):
+            os.remove(learning.PATH)
+        _mkq1 = {"id": "mkq1", "text": "1+1=?", "type": "single",
+                 "options": ["2", "3"], "answer": 0, "subject": "数学",
+                 "topic": "加法", "chapter": "第1章 加法", "star": 1}
+        _mkq2 = {"id": "mkq2", "text": "英语题", "type": "judge",
+                 "options": ["正确", "错误"], "answer": 0, "subject": "英语",
+                 "topic": "时态", "star": 2}
+        learning.record_answer("bank_mk", _mkq1, False)
+        learning.record_answer("bank_mk", _mkq1, False)
+        learning.record_answer("bank_mk", _mkq2, False)
+        import mistakes as _mk
+        _an = _mk.analyze({"id": "bank_mk", "name": "错题分析库",
+                           "questions": [_mkq1, _mkq2]})
+        check("错题分析：汇总 / 学科 / 知识点 / 原因",
+              _an["summary"]["total"] == 2 and _an["summary"]["high_freq"] == 1 and
+              any(x["subject"] == "数学" for x in _an["subjects"]) and
+              any(x["topic"] == "加法" and x["wrong_count"] == 2 for x in _an["topics"]) and
+              any("「加法」" in c for c in _an["causes"]) and
+              _an["wrong"][0]["qid"] == "mkq1")
+    finally:
+        learning.PATH = _old_l3
+
+    code, res = admin("/api/admin/mistakes?bank=" + _lb)
+    check("后台错题分析接口返回汇总与建议",
+          code == 200 and res.get("ok") is True and
+          isinstance(res.get("summary"), dict) and
+          isinstance(res.get("causes"), list))
+    code, raw_mk = call("/api/mistakes")
+    _pub = _maybe_json(raw_mk)
+    check("学生端错题本接口可用（设备不在清单时如实说明）",
+          code == 200 and ("ok" in _pub) and
+          (_pub.get("ok") is True or _pub.get("reason") == "not_managed"))
+    code, raw_mkpage = call("/mistakes")
+    check("学生端「我的错题本」页面可访问",
+          code == 200 and "我的错题本" in raw_mkpage and "/api/mistakes" in raw_mkpage)
 
     code, res = admin("/api/admin/learning/clear", {"bank_id": _lb})
     check("清空指定题库（人）学情接口可用",
@@ -2419,6 +2462,14 @@ def main():
           "按模式走会漏清" in server_html)
 
     # ---- 3.20.0 导航按「管理对象」组织 ----
+    check("错题分析页 + 学生错题本入口 + 换题回到顶部（3.36.0）",
+          "function loadMistakes(" in admin_html and
+          "function renderMistakes(" in admin_html and
+          'id="tabbtn-mistakes"' in admin_html and
+          'id="tab-mistakes"' in admin_html and
+          "错题原因与建议" in admin_html and
+          "window.scrollTo(0, 0);" in index_html and
+          'href="/mistakes"' in index_html)
     check("答题页单选/判断选中即提交、答对 1 秒自动下一题（3.35.0）",
           "选中答案就提交" in index_html and
           "S.picked = [idx];" in index_html and

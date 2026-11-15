@@ -28,6 +28,7 @@ from urllib.parse import urlparse
 import admin_api
 import auto_bank
 import feedback
+import mistakes
 import learning
 import router_adapter
 import schedule
@@ -985,6 +986,21 @@ class Handler(BaseHTTPRequestHandler):
                 }, 428)
         if path in ("/", "/index.html"):
             return self._static("index.html", "text/html; charset=utf-8")
+        if path in ("/mistakes", "/mistakes.html"):
+            return self._static("mistakes.html", "text/html; charset=utf-8")
+        if path == "/api/mistakes":
+            try:
+                mac, bank, _rec = device_context(client_ip(self))
+            except Exception as exc:
+                log("MISTAKES-CTX err=%s" % exc)
+                mac, bank = "", None
+            if bank is None:
+                return self._json({"ok": False, "reason": "not_managed",
+                                   "detail": "这台设备不在受控清单里，没有错题本。"})
+            data = mistakes.analyze(bank)
+            data["ok"] = True
+            data["mac"] = mac
+            return self._json(data)
         if path in ("/admin", "/admin.html"):
             return self._static("admin.html", "text/html; charset=utf-8")
         if path == "/favicon.ico":
