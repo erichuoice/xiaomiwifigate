@@ -67,11 +67,16 @@ DEFAULTS = {
 STAGES = ["小学", "初中", "高中"]
 GRADES = ["一年级", "二年级", "三年级", "四年级", "五年级", "六年级",
           "七年级", "八年级", "九年级"]
-SUBJECTS = ["语文", "数学", "英语", "科学", "物理", "化学", "生物", "历史", "地理"]
+SUBJECTS = ["语文", "数学", "英语", "道法", "科学", "物理", "化学", "生物", "历史", "地理"]
 TYPES = {"single": "单选题", "multi": "多选题", "judge": "判断题"}
-# 一次最多混合几个科目：直接按科目表长度（语文/数学/英语/科学/物理/化学/生物/历史/地理），
+# 一次最多混合几个科目：直接按科目表长度（语文/数学/英语/道法/科学/物理/化学/生物/历史/地理），
 # 3.14.4 起不再卡 6 科——之前选第 7 科会被静默截掉，看起来像「勾不上」。
 MAX_SUBJECTS = len(SUBJECTS)
+# 3.37.0：同一个科目的不同写法统一收敛（道德与法治 / 政治 → 道法）
+SUBJECT_ALIASES = {
+    "道德与法治": "道法", "道德": "道法", "道法": "道法", "政治": "道法",
+    "品德": "道法", "思想品德": "道法",
+}
 
 
 class AIError(Exception):
@@ -92,6 +97,7 @@ def normalize_subjects(value, default=("数学",)):
     out = []
     for part in parts:
         name = str(part).strip()[:16]
+        name = SUBJECT_ALIASES.get(name, name)
         if not name or name in out:
             continue
         out.append(name)

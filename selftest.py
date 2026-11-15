@@ -1522,9 +1522,12 @@ def main():
               ai_bank.normalize_subjects(["数学", "数学", "科学"]) == ["数学", "科学"] and
               ai_bank.normalize_subjects("") == ["数学"] and
               ai_bank.normalize_subjects(["科学", "历史"]) == ["科学", "历史"])
-        # 3.14.4：科目上限不再卡 6 科，9 科可以全选（之前第 7 科会被静默截掉）
-        check("9 个科目可以全部勾选（不再卡 6 科）",
-              ai_bank.MAX_SUBJECTS >= len(ai_bank.SUBJECTS) == 9 and
+        # 3.14.4：科目上限不再卡 6 科；3.37.0 加「道法」，现在 10 科可以全选
+        check("10 个科目可以全部勾选（含道法，不再卡科数）",
+              "道法" in ai_bank.SUBJECTS and
+              ai_bank.MAX_SUBJECTS == len(ai_bank.SUBJECTS) and
+              ai_bank.normalize_subjects(["道德与法治"]) == ["道法"] and
+              ai_bank.normalize_subjects("政治、语文") == ["道法", "语文"] and
               ai_bank.normalize_subjects(ai_bank.SUBJECTS) == ai_bank.SUBJECTS,
               str(len(ai_bank.normalize_subjects(ai_bank.SUBJECTS))))
         check("多科目题量平均分配",

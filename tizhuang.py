@@ -240,30 +240,35 @@ REGION_SUBJECT_EDITIONS = {
         2: ["人教新版", "人教版2024", "人教版"],
         3: ["教科版（广州）", "教科版2024", "粤教沪外版2024", "人教版(PEP)"],
         10: ["教科版", "粤教版", "人教新版"],
+        11: ["部编版", "人教部编2024"],
     },
     "shanghai": {
         1: ["部编版", "人教部编2024"],
         2: ["沪教新版", "沪教版"],
         3: ["牛津上海版（试用本）", "新版-牛津上海版（深圳用）", "沪教(牛津深圳)版2024"],
         10: ["沪教新版", "沪教版"],
+        11: ["部编版", "人教部编2024"],
     },
     "beijing": {
         1: ["人教部编2024", "部编版"],
         2: ["北京新版", "北京版2024", "北京版"],
         3: ["北京版", "北京版2024"],
         10: ["北京版"],
+        11: ["部编版", "人教部编2024"],
     },
     "jiangsu": {
         1: ["部编版", "人教部编2024"],
         2: ["苏教新版", "苏教版", "苏教版2024"],
         3: ["牛津译林版(三起)2024", "新版-牛津译林版"],
         10: ["苏教版"],
+        11: ["部编版", "人教部编2024"],
     },
     "zhejiang": {
         1: ["部编版", "人教部编2024"],
         2: ["浙教版", "浙教新版"],
         3: ["人教版(PEP)", "人教版(三起pep)2024"],
         10: ["浙教版"],
+        11: ["部编版", "人教部编2024"],
     },
 }
 DEFAULT_SUBJECT_EDITIONS = {
@@ -271,6 +276,7 @@ DEFAULT_SUBJECT_EDITIONS = {
     2: ["人教新版", "人教版2024", "人教版"],
     3: ["人教版(PEP)", "人教版(三起pep)2024", "人教大同版2024"],
     10: ["教科版", "人教新版"],
+    11: ["部编版", "人教部编2024"],
 }
 STAGE_PHASE = {"小学": 1, "初中": 2, "高中": 3}
 
@@ -397,8 +403,9 @@ def scope_for_bank(bank, progress=None):
     out["grade_name"] = re.sub(r"[上下]$", "", str(row["name"]))
     for subj in subjects():
         sid = subj["id"]
-        if sid not in (1, 2, 3, 10):    # 语文 / 数学 / 英语 / 科学
+        if sid not in (1, 2, 3, 10, 11):    # 语文 / 数学 / 英语 / 科学 / 道法
             continue
+        display = "道法" if sid == 11 else subj["name"]
         try:
             ed = pick_edition(region, sid, row["id"])
             if not ed:
@@ -406,13 +413,13 @@ def scope_for_bank(bank, progress=None):
             plan = chapter_plan(sid, row["id"], ed["id"])
             learned = learned_chapters(plan, week)
             out["subjects"].append({
-                "subject_id": sid, "subject": subj["name"],
+                "subject_id": sid, "subject": display,
                 "edition_id": ed["id"], "edition": ed["name"],
                 "chapters": [{"id": c["id"], "name": c["name"]} for c in plan],
                 "learned": [{"id": c["id"], "name": c["name"]} for c in learned],
             })
         except TzError as exc:
-            out["errors"].append("%s：%s" % (subj["name"], exc))
+            out["errors"].append("%s：%s" % (display, exc))
     return out
 
 
