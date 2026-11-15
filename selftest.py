@@ -1946,9 +1946,12 @@ def main():
           "select[data-preset]" in admin_html and
           "奖惩时间" in admin_html and 'min="-1440"' in admin_html)
     check("后台每档有独立放行规则控件（3.50.7）",
-          "tier-rule" in admin_html and "pass_mode" in admin_html and
-          "答错加" in admin_html and
+          "tier-rule" in admin_html and "答错加" in admin_html and
           "tiers[i].pass_rate_percent = rule.rate" in admin_html)
+    check("档位规则不再有模式下拉，100% 就等于必须全对（3.50.8）",
+          "正确率达标" not in admin_html and
+          "正确率 ≥" in admin_html and
+          "rule.mode === 'strict' || Number(rule.rate) >= 100" in index_html)
     check("答题页按档位显示各自放行规则（3.50.7）",
           "function tierRule(" in index_html and
           "function tiersVary(" in index_html and
@@ -2872,7 +2875,7 @@ def main():
 
     # ---- 3.12.0 放行规则：按题库配置（答错加题 + 正确率达标）----
     check("放行规则放在「题库」页签，且每档可单独设置，不再是全局设置",
-          "放行规则<span class=\"count\">每个档位单独设置</span>" in admin_html and
+          "每档可以单独设放行正确率" in admin_html and
           'id="tier-list"' in admin_html and
           "tier-rule" in admin_html and
           all(w in admin_html for w in

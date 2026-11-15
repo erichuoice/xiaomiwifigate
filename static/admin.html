@@ -101,7 +101,6 @@
   .tier-row .unit { font-size:12.5px; color:var(--muted); margin-right:2px; }
   .tier-rule { display:flex; gap:6px; align-items:center; flex-wrap:wrap;
     margin:-2px 0 12px 0; font-size:12.5px; color:var(--muted); }
-  .tier-rule select { padding:4px 6px; font-size:12.5px; }
   .tier-rule input[type=number] { width:64px; }
   .filters { display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap; }
   .filters select, .filters input { width:auto; flex:1 1 120px; }
@@ -312,13 +311,11 @@
       <div class="row" style="margin-top:10px"><button id="save-bank-settings">保存学生信息</button></div>
 
       <label class="fld">奖励档位：答对几道题 → 换多少分钟（分钟填 0 = 一直放行）</label>
+      <p class="hint" style="margin:2px 0 8px">每档可以单独设放行正确率（<b>100% = 必须全对</b>）
+        和答错追加题数；新加的档位默认沿用上一档。</p>
       <div id="tier-list"></div>
       <div class="row"><button class="mini" id="tier-add">+ 加一档</button></div>
 
-      <h2 style="margin-top:22px">放行规则<span class="count">每个档位单独设置</span></h2>
-      <p class="hint">上面每个奖励档位下面可以单独选「一轮全对」或「正确率≥X%」，以及答错当场加几题；
-        不同档位可以不一样（比如 10 题档要求 80%、20 题档要求全对）。新加的档位默认沿用上一档，
-        答这个档位时按它自己的规则判卷。改完记得保存。</p>
       <div style="display:none">
         <select id="bank-pass-mode">
           <option value="rate">正确率达到阈值就放行（答错当场加题，默认）</option>
@@ -1112,35 +1109,44 @@
       row.appendChild(a); row.appendChild(lab1); row.appendChild(sep);
       row.appendChild(b); row.appendChild(lab2); row.appendChild(del);
 
-      // 3.50.7：每个档位自己的放行规则
-      var rule = {
-        mode: t.pass_mode === 'strict' ? 'strict' : 'rate',
-        rate: t.pass_rate_percent == null ? 80 : t.pass_rate_percent,
-        add: t.wrong_add_questions == null ? 2 : t.wrong_add_questions
-      };
-      tiers[i].pass_mode = rule.mode;
+      // 3.50.8：档位规则只有「正确率 + 答错加题」，100% 就等于必须全对
+      var bankMode = el('bank-pass-mode').value;
+      var bankRate = Number(el('bank-pass-rate').value) || 80;
+      var bankAdd = Number(el('bank-wrong-add').value) || 0;
+      var rule;
+      if (t.pass_mode === 'strict') {
+        rule = { rate: 100, add: 0 };
+      } else {
+        rule = {
+          rate: t.pass_rate_percent == null
+            ? (bankMode === 'strict' ? 100 : bankRate) : t.pass_rate_percent,
+          add: t.wrong_add_questions == null
+            ? (bankMode === 'strict' ? 0 : bankAdd) : t.wrong_add_questions
+        };
+      }
+      tiers[i].pass_mode = 'rate';
       tiers[i].pass_rate_percent = rule.rate;
       tiers[i].wrong_add_questions = rule.add;
       var rrow = document.createElement('div');
       rrow.className = 'tier-rule';
-      var rlab = document.createElement('span'); rlab.textContent = '放行：';
-      var modeSel = document.createElement('select');
-      modeSel.innerHTML = '<option value="rate">正确率达标</option>' +
-                          '<option value="strict">一轮全对</option>';
-      modeSel.value = rule.mode;
-      modeSel.onchange = function () { tiers[i].pass_mode = modeSel.value; };
-      var rateLab = document.createElement('span'); rateLab.textContent = '正确率 ≥';
+      var rlab = document.createElement('span'); rlab.textContent = '放行：正确率 ≥';
       var rateInp = numInput(rule.rate, 50, 100, function (v) {
         tiers[i].pass_rate_percent = v;
+        tiers[i].pass_mode = 'rate';
+        if (v >= 100) {
+          tiers[i].wrong_add_questions = 0;
+          addInp.value = 0;
+        }
       });
       var ratePct = document.createElement('span'); ratePct.textContent = '%';
-      var addLab = document.createElement('span'); addLab.textContent = '答错加';
+      var addLab = document.createElement('span'); addLab.textContent = '　答错加';
       var addInp = numInput(rule.add, 0, 10, function (v) {
         tiers[i].wrong_add_questions = v;
+        tiers[i].pass_mode = 'rate';
       });
+      if (rule.rate >= 100) addInp.disabled = true;
       var addUnit = document.createElement('span'); addUnit.textContent = '题';
-      rrow.appendChild(rlab); rrow.appendChild(modeSel);
-      rrow.appendChild(rateLab); rrow.appendChild(rateInp); rrow.appendChild(ratePct);
+      rrow.appendChild(rlab); rrow.appendChild(rateInp); rrow.appendChild(ratePct);
       rrow.appendChild(addLab); rrow.appendChild(addInp); rrow.appendChild(addUnit);
       box.appendChild(row);
       box.appendChild(rrow);
@@ -3694,11 +3700,13 @@
     if (last) {
       tiers.push({ questions: Math.min(50, last.questions + 2),
                    minutes: Math.min(1440, last.minutes + 30),
-                   pass_mode: last.pass_mode || 'rate',
-                   pass_rate_percent: last.pass_rate_percent == null
-                     ? 80 : last.pass_rate_percent,
-                   wrong_add_questions: last.wrong_add_questions == null
-                     ? 2 : last.wrong_add_questions });
+                   pass_mode: 'rate',
+                   pass_rate_percent: last.pass_mode === 'strict'
+                     ? 100 : (last.pass_rate_percent == null
+                              ? 80 : last.pass_rate_percent),
+                   wrong_add_questions: last.pass_mode === 'strict'
+                     ? 0 : (last.wrong_add_questions == null
+                            ? 2 : last.wrong_add_questions) });
     } else {
       tiers.push({ questions: 3, minutes: 30, pass_mode: 'rate',
                    pass_rate_percent: 80, wrong_add_questions: 2 });

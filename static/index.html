@@ -490,8 +490,8 @@
 
   function passRuleText(t) {
     var rule = ruleOf(t);
-    if (rule.mode === 'strict')
-      return '一轮全部答对才生效，答错一道要重来。';
+    if (rule.mode === 'strict' || Number(rule.rate) >= 100)
+      return '一轮全部答对才生效（100%），答错一道要重来。';
     var rate = rule.rate || 80, add = rule.add || 0;
     return (add > 0
       ? '答错一题当场加做 ' + add + ' 题，'
@@ -526,6 +526,7 @@
     var saveTime = earnMode() === 'savings';
     (t.tiers || []).forEach(function (tier, i) {
       var rule = tierRule(t, tier);
+      var allCorrect = rule.mode === 'strict' || Number(rule.rate) >= 100;
       var b = document.createElement('button');
       b.type = 'button';
       b.className = 'tier';
@@ -539,7 +540,7 @@
       var s1 = document.createElement('span');
       if (tier.minutes === 0) {
         s1.textContent = '答对就长期有效';
-      } else if (rule.mode === 'strict') {
+      } else if (allCorrect) {
         s1.textContent = saveTime ? '全对后存入 ' + tier.minutes + ' 分钟储蓄'
                                   : '答对 ' + tier.questions + ' 道全部正确';
       } else {
