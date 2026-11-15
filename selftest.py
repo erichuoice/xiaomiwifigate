@@ -990,6 +990,70 @@ def main():
           code == 200 and detail.get("learner") == _lb and
           all(k in detail for k in
               ("accuracy", "weak", "wrong", "due_count")))
+    # 3.34.0：学科分析（哪一门更弱）
+    for _i in range(12):
+        learning.record_answer("bank_subj_test", {
+            "id": "subj%d" % _i, "text": "学科题%d" % _i, "type": "single",
+            "options": ["A", "B"], "answer": 0,
+            "subject": "数学" if _i < 6 else "英语",
+            "topic": "知识点%d" % _i}, _i < 6)
+    code, res = admin("/api/admin/learning?bank=bank_subj_test")
+    _dsub = res.get("detail") or {}
+    check("学情按学科分析并指出最弱学科",
+          code == 200 and _dsub.get("weakest_subject") == "英语" and
+          any(s.get("subject") == "数学" and s.get("accuracy") == 1.0
+              for s in _dsub.get("subjects") or []) and
+          any(s.get("subject") == "英语" and s.get("accuracy") == 0.0
+              for s in _dsub.get("subjects") or []))
+    learning.clear("bank_subj_test")
+
+    # 3.34.0：错题本里编辑题目 + 学生异议反馈
+    _b34 = (cur_state.get("banks") or [{}])[0]
+    _q34 = (_b34.get("questions") or [{}])[0]
+    _qid34 = _q34.get("id")
+    learning.record_answer(_b34["id"], {
+        "id": _qid34, "text": _q34.get("text", ""),
+        "type": _q34.get("type", "single"),
+        "options": _q34.get("options") or [],
+        "answer": _q34.get("answer", 0),
+        "subject": _q34.get("subject", ""), "topic": _q34.get("topic", "")}, False)
+    code, res = admin("/api/admin/question/update", {
+        "bank_id": _b34["id"], "qid": _qid34,
+        "question": {"text": _q34.get("text", "") + "（已改）",
+                     "explain": "改过的解析", "topic": "自检考点",
+                     "chapter": "第1章 自检"}})
+    _upd = res.get("question") or {}
+    check("后台可修改单道题（错题本编辑用）",
+          code == 200 and _upd.get("text", "").endswith("（已改）") and
+          _upd.get("topic") == "自检考点", str(res)[:120])
+    _wrong34 = next((w for w in (learning.ability(_b34["id"]).get("wrong") or [])
+                     if w.get("qid") == _qid34), None)
+    check("改题目会同步更新错题本里的题面",
+          _wrong34 is not None and "已改" in (_wrong34.get("text") or ""))
+    admin("/api/admin/question/update", {
+        "bank_id": _b34["id"], "qid": _qid34,
+        "question": {"text": _q34.get("text", ""),
+                     "explain": _q34.get("explain", ""),
+                     "topic": _q34.get("topic", ""),
+                     "chapter": _q34.get("chapter", "")}})
+
+    code, _raw_fb = call("/api/feedback", {"id": _qid34, "text": "测试题",
+                                            "note": "答案好像不对"})
+    res = _maybe_json(_raw_fb)
+    check("答题页可提交题目异议反馈", code == 200 and res.get("ok") is True,
+          str(res)[:120])
+    code, res = admin("/api/admin/feedback")
+    _fb = res.get("items") or []
+    check("后台能看到题目反馈（含学生/题目/说明）",
+          code == 200 and any(f.get("note") == "答案好像不对" for f in _fb) and
+          any(f.get("qid") == _qid34 for f in _fb))
+    _fid = next((f["id"] for f in _fb if f.get("note") == "答案好像不对"), "")
+    code, res = admin("/api/admin/feedback/resolve", {"id": _fid, "status": "done"})
+    check("反馈可标记已处理",
+          code == 200 and any(f.get("id") == _fid and f.get("status") == "done"
+                              for f in res.get("items") or []))
+    admin("/api/admin/feedback/delete", {"id": _fid})
+
     code, res = admin("/api/admin/learning/clear", {"bank_id": _lb})
     check("清空指定题库（人）学情接口可用",
           code == 200 and res.get("ok") is True)
@@ -2355,6 +2419,15 @@ def main():
           "按模式走会漏清" in server_html)
 
     # ---- 3.20.0 导航按「管理对象」组织 ----
+    check("学情页有学科分析 / 错题编辑 / 题目反馈（3.34.0）",
+          "学科分析" in admin_html and "最需要加强" in admin_html and
+          callable(getattr(learning, "subject_stats", None)) and
+          callable(getattr(learning, "patch_wrong", None)) and
+          "data-qedit" in admin_html and "function openQuestionEditor(" in admin_html and
+          "题目反馈" in admin_html and "function loadFeedback(" in admin_html and
+          "id=\"qedit-mask\"" in admin_html and
+          "/api/feedback" in index_html and "这题是不是出错了" in index_html and
+          "function addDispute(" in index_html)
     check("题目卡片显示知识点/章节并标已学未学（3.33.0）",
           "function qScopeTag(" in admin_html and
           "function qScopeBits(" in admin_html and
@@ -2449,7 +2522,7 @@ def main():
     # ---- 3.18.0 学情按题库（人）：界面与服务端 ----
     check("学情页不再重复统计：卡片是总览，明细只放弱项与错题（3.29.0）",
           "r.rounds || 0" in admin_html and "r.perfect || 0" in admin_html and
-          "<h3 style=\"margin-top:0\">薄弱知识点</h3>" in admin_html and
+          "<h3>薄弱知识点</h3>" in admin_html and
           "<h3>错题本与弱项</h3>" in admin_html and
           "这里不再重复一遍统计数字" in admin_html)
     check("学情页只显示当前管理对象（3.27.0）",

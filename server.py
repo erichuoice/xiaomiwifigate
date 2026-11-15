@@ -27,6 +27,7 @@ from urllib.parse import urlparse
 
 import admin_api
 import auto_bank
+import feedback
 import learning
 import router_adapter
 import schedule
@@ -220,6 +221,7 @@ def public_question(q):
         "type": q["type"], "stage": q.get("stage", ""),
         "grade": q.get("grade", ""), "subject": q.get("subject", ""),
         "star": q.get("star", 2), "topic": learning.topic_of(q),
+        "chapter": q.get("chapter", ""), "source": q.get("source", ""),
     }
 
 
@@ -1107,9 +1109,46 @@ class Handler(BaseHTTPRequestHandler):
             return self._admin("POST")
         if path == "/api/start":
             return self._start()
+        if path == "/api/feedback":
+            return self._feedback()
         if path != "/api/answer":
             return self._json({"error": "not found"}, 404)
         return self._answer()
+
+    def _feedback(self):
+        """3.34.0：答题页「这题有问题」反馈（不需要登录，限长度 + 简单节流）。"""
+        payload = self._payload()
+        if payload is None:
+            return self._json({"ok": False, "detail": "请求格式不正确"}, 400)
+        note = str(payload.get("note") or "").strip()
+        if not note:
+            return self._json({"ok": False, "detail": "请写下问题说明"}, 400)
+        if len(note) > 300:
+            return self._json({"ok": False, "detail": "说明太长了（最多 300 字）"}, 400)
+        ip = client_ip(self)
+        mac, bank = "", None
+        try:
+            mac, bank, _rec = device_context(ip)
+        except Exception as exc:
+            log("FEEDBACK-CTX ip=%s err=%s" % (ip, exc))
+        if not mac:
+            mac = str(payload.get("mac") or "").strip().lower()
+        if bank is None and payload.get("bank_id"):
+            bank = STORE.bank(str(payload.get("bank_id")))
+        # 简单节流：同一台设备 1 分钟内最多 3 条
+        now = time.time()
+        recent = [x for x in feedback.listing() if x.get("mac") == mac
+                  and now - float(x.get("ts") or 0) < 60]
+        if mac and len(recent) >= 3:
+            return self._json({"ok": False, "detail": "反馈太频繁，请稍后再试"}, 429)
+        item = feedback.add(mac=mac, bank_id=(bank or {}).get("id", ""),
+                            qid=payload.get("id") or payload.get("qid") or "",
+                            text=payload.get("text") or "",
+                            note=note)
+        log("FEEDBACK mac=%s bank=%s qid=%s note=%s"
+            % (mac, (bank or {}).get("id", ""), item.get("qid") if item else "",
+               note[:40]))
+        return self._json({"ok": True, "id": (item or {}).get("id", "")})
 
     def _setup(self):
         """首次配置：接收路由器密码，写 config.json 并立即生效。"""

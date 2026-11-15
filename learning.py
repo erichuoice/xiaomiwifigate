@@ -494,6 +494,70 @@ def weak_topics_for(who, limit=3):
     return [w["topic"] for w in weak_topics(dev, limit)]
 
 
+def patch_wrong(qid, q, fields=("text", "options", "answer", "explain", "topic",
+                                "subject", "type")):
+    """3.34.0：后台改了题目后，把所有孩子错题本里这道题的副本一起更新。"""
+    qid = str(qid or "").strip()
+    if not qid:
+        return 0
+    patch = {k: q[k] for k in fields if k in q}
+    if not patch:
+        return 0
+    changed = 0
+    with _lock:
+        data = _load()
+        for dev in data.get("learners", {}).values():
+            for w in dev.get("wrong") or []:
+                if w.get("qid") == qid:
+                    w.update(patch)
+                    changed += 1
+        if changed:
+            _save(data)
+    return changed
+
+
+def subject_stats(who, now=None):
+    """3.34.0：按学科统计正确率 / 错题，找最弱的一门。"""
+    now = float(now or time.time())
+    with _lock:
+        dev = dict(_dev(_load(), who, create=False))
+    stats = {}
+    for h in dev.get("history") or []:
+        subject = str(h.get("subject") or "").strip() or "未标注"
+        row = stats.setdefault(subject, {"subject": subject, "total": 0,
+                                         "correct": 0, "wrong_count": 0,
+                                         "due_count": 0, "topics": {}})
+        row["total"] += 1
+        if h.get("ok"):
+            row["correct"] += 1
+    for w in dev.get("wrong") or []:
+        subject = str(w.get("subject") or "").strip() or "未标注"
+        row = stats.setdefault(subject, {"subject": subject, "total": 0,
+                                         "correct": 0, "wrong_count": 0,
+                                         "due_count": 0, "topics": {}})
+        row["wrong_count"] += 1
+        if w.get("due_at", 0) <= now:
+            row["due_count"] += 1
+        topic = str(w.get("topic") or "").strip()
+        if topic:
+            row["topics"][topic] = row["topics"].get(topic, 0) + 1
+    out = []
+    for row in stats.values():
+        answered = row["total"]
+        row["accuracy"] = round(row["correct"] / answered, 3) if answered else None
+        row["weak_topics"] = [t for t, _n in sorted(
+            row["topics"].items(), key=lambda kv: -kv[1])[:3]]
+        del row["topics"]
+        out.append(row)
+    out.sort(key=lambda x: (x["accuracy"] if x["accuracy"] is not None else 2.0,
+                            -x["wrong_count"]))
+    weakest = None
+    graded = [x for x in out if x["total"] >= 5]
+    if graded:
+        weakest = graded[0]["subject"]
+    return {"subjects": out, "weakest": weakest}
+
+
 def ability(who, now=None):
     """后台「学情」页用的汇总（who = 题库 id / 人）。"""
     now = float(now or time.time())
@@ -513,6 +577,7 @@ def ability(who, now=None):
         })
     topics.sort(key=lambda x: (x["mastery"], -x["samples"]))
     diff, star = difficulty_of(dev)
+    _ss = subject_stats(who, now)
     return {
         "learner": str(who or "").strip().lower(),
         "total": len(hist), "correct": correct,
@@ -527,6 +592,8 @@ def ability(who, now=None):
         "wrong_count": len(wrong),
         "due_count": sum(1 for w in wrong if w.get("due_at", 0) <= now),
         "weak": weak_topics(dev),
+        "subjects": _ss["subjects"],
+        "weakest_subject": _ss["weakest"],
         "topics": topics,
         "wrong": [{
             "qid": w.get("qid", ""), "text": w.get("text", "")[:120],

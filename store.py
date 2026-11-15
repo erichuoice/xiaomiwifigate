@@ -973,6 +973,31 @@ class Store:
         return {"added": added, "total": len(merged),
                 "skipped": len(clean) - added, "tiers": tiers}
 
+    def update_question(self, bank_id, qid, patch):
+        """3.34.0：改题库里某一题（错题本 / 反馈里点「编辑」用）。
+
+        只接受题目字段，题号不变；改完立即校验，非法就抛错、不落盘。
+        """
+        fields = ("type", "stage", "grade", "subject", "text", "options",
+                  "answer", "explain", "star", "topic", "chapter", "source")
+        with self._lock:
+            target = next((b for b in self._runtime["banks"]
+                           if b["id"] == bank_id), None)
+            if not target:
+                raise StoreError("题库不存在")
+            idx = next((i for i, q in enumerate(target["questions"])
+                        if q.get("id") == qid), None)
+            if idx is None:
+                raise StoreError("题目不存在（可能已被删除）")
+            merged = dict(target["questions"][idx])
+            merged.update({k: v for k, v in (patch or {}).items() if k in fields})
+            merged["id"] = qid
+            clean = validate_question(merged, 1)
+            clean["id"] = qid
+            target["questions"][idx] = clean
+            self._write(self._runtime)
+        return clean
+
     def prune_auto_questions(self, bank_id, keep):
         """只淘汰「定时自动出题」加进来的题（source 以 auto- 开头）中最旧的，
         内置题、手动预览入库的题一律不动；返回实际删掉的道数。

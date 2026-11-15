@@ -19,6 +19,7 @@ import learning
 import progress
 import router_adapter
 import schedule
+import feedback
 import store
 import tizhuang
 import updater
@@ -554,6 +555,7 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
                 "last": a["last"],
                 "wrong_count": a["wrong_count"], "due_count": a["due_count"],
                 "weak": [w["topic"] for w in a["weak"][:3]],
+                "weakest_subject": a.get("weakest_subject") or "",
             })
         known = {b["id"] for b in st.banks()}
         for who in learning.all_learners():
@@ -569,6 +571,7 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
                 "last": a["last"],
                 "wrong_count": a["wrong_count"], "due_count": a["due_count"],
                 "weak": [w["topic"] for w in a["weak"][:3]],
+                "weakest_subject": a.get("weakest_subject") or "",
             })
         return 200, {"ok": True, "banks": rows,
                      "detail": learning.ability(which) if which else None}, None
@@ -580,6 +583,49 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
             return 400, {"ok": False, "detail": "请指定要清空的题库"}, None
         learning.clear(who)
         return 200, {"ok": True}, None
+
+    # ---- 3.34.0：学生答题页的「题目有异议」反馈 ----
+    if path == "/api/admin/feedback" and method == "GET":
+        items = feedback.listing()
+        known = {b["id"]: b["name"] for b in st.banks()}
+        for item in items:
+            item["bank_name"] = known.get(item.get("bank_id") or "", "")
+        return 200, {"ok": True, "items": items,
+                     "open": sum(1 for x in items if x.get("status") == "open")}, None
+
+    if path == "/api/admin/feedback/resolve" and method == "POST":
+        data = _body(raw)
+        ok = feedback.resolve(str(data.get("id") or ""),
+                              "open" if data.get("status") == "open" else "done")
+        if not ok:
+            return 404, {"ok": False, "detail": "反馈不存在"}, None
+        return 200, {"ok": True, "items": feedback.listing(),
+                     "open": feedback.open_count()}, None
+
+    if path == "/api/admin/feedback/delete" and method == "POST":
+        data = _body(raw)
+        ok = feedback.delete(str(data.get("id") or ""))
+        if not ok:
+            return 404, {"ok": False, "detail": "反馈不存在"}, None
+        return 200, {"ok": True, "items": feedback.listing(),
+                     "open": feedback.open_count()}, None
+
+    # ---- 3.34.0：错题本 / 反馈里直接改题目 ----
+    if path == "/api/admin/question/update" and method == "POST":
+        data = _body(raw)
+        bank = st.bank(str(data.get("bank_id") or "")) or st.first_bank()
+        if not bank:
+            return 404, {"ok": False, "detail": "题库不存在"}, None
+        qid = str(data.get("qid") or "").strip()
+        if not qid:
+            return 400, {"ok": False, "detail": "缺少题号"}, None
+        patch = data.get("question") if isinstance(data.get("question"), dict) else data
+        try:
+            clean = st.update_question(bank["id"], qid, patch)
+        except (store.StoreError, TypeError, ValueError) as exc:
+            return 400, {"ok": False, "detail": str(exc)}, None
+        learning.patch_wrong(qid, clean)
+        return 200, {"ok": True, "question": clean, "banks": st.banks()}, None
 
     # ---- 自动补充新题（3.10.0：每个题库可以设置不同的自动出题要求）----
     if path.startswith("/api/admin/auto-bank"):
