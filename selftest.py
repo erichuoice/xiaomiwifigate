@@ -2496,6 +2496,12 @@ def main():
           "id=\"qedit-mask\"" in admin_html and
           "/api/feedback" in index_html and "这题是不是出错了" in index_html and
           "function addDispute(" in index_html)
+    check("题目搜索匹配整道题（题干/选项/答案/解析/知识点/章节/题号，3.38.0）",
+          "function questionHaystack(" in admin_html and
+          "if (Array.isArray(q.options)) parts = parts.concat(q.options);" in admin_html and
+          "parts.push(answerTextOf(q));" in admin_html and
+          "terms.every(function (t) { return hay.indexOf(t) >= 0; })" in admin_html and
+          "搜索整道题" in admin_html)
     check("题目卡片显示知识点/章节并标已学未学（3.33.0）",
           "function qScopeTag(" in admin_html and
           "function qScopeBits(" in admin_html and

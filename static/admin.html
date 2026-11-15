@@ -304,8 +304,10 @@
       <div class="filters">
         <select id="f-stage"><option value="">全部学段</option></select>
         <select id="f-subject"><option value="">全部科目</option></select>
-        <input id="f-kw" type="text" placeholder="搜索题干关键词">
+        <input id="f-kw" type="text" placeholder="搜索整道题：题干 / 选项 / 答案 / 解析 / 知识点 / 章节">
       </div>
+      <p class="hint" style="margin:6px 0 0">搜索会匹配整道题的内容（题干、选项、答案、解析、知识点、章节、科目、题号）；
+        多个关键词用空格分开，会同时匹配。</p>
       <div id="qlist"></div>
       <div class="pager">
         <button class="mini" id="prev">上一页</button>
@@ -975,13 +977,27 @@
     });
   }
 
+  // 3.38.0：搜索「整道题」——题干、选项、答案、解析、知识点、章节、科目、学段、年级、题号
+  function questionHaystack(q) {
+    var parts = [q.text, q.topic, q.chapter, q.explain, q.subject,
+                 q.grade, q.stage, q.id];
+    if (Array.isArray(q.options)) parts = parts.concat(q.options);
+    parts.push(answerTextOf(q));
+    return parts.filter(Boolean).join(' ').toLowerCase();
+  }
+
   function filtered() {
     var st = el('f-stage').value, su = el('f-subject').value;
     var kw = el('f-kw').value.trim().toLowerCase();
+    var terms = kw ? kw.split(/\s+/).filter(Boolean) : [];
     return Q.map(function (q, i) { return { q: q, i: i }; }).filter(function (x) {
       if (st && x.q.stage !== st) return false;
       if (su && x.q.subject !== su) return false;
-      if (kw && (x.q.text || '').toLowerCase().indexOf(kw) < 0) return false;
+      if (terms.length) {
+        var hay = questionHaystack(x.q);
+        var hit = terms.every(function (t) { return hay.indexOf(t) >= 0; });
+        if (!hit) return false;
+      }
       return true;
     });
   }
