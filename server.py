@@ -963,11 +963,32 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(
                     {"ok": False, "detail": "路由器接口失败：%s" % exc}, 502)
             return self._json({"ok": True, "record": rec})
+        # 3.48.0：家长自己的手机（按 MAC 信任）打开后台免密直接进
+        ip = client_ip(self)
+        headers = self.headers
+        auto_cookie = ""
+        if (STORE.admin_trusted() and
+                not STORE.check_session(admin_api.cookie_token(self.headers))):
+            try:
+                admin_mac = resolve_mac(ip)
+            except Exception as exc:
+                admin_mac = ""
+                log("ADMIN-TRUST mac 解析失败 ip=%s err=%s" % (ip, exc))
+            if admin_mac and STORE.is_trusted_admin(admin_mac):
+                token = STORE.issue_session()
+                auto_cookie = ("%s=%s; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800"
+                               % (admin_api.COOKIE, token))
+                hdrs = dict(self.headers.items())
+                old_cookie = hdrs.get("Cookie", "")
+                hdrs["Cookie"] = ((old_cookie + "; ") if old_cookie else "") + \
+                    "%s=%s" % (admin_api.COOKIE, token)
+                headers = hdrs
+                log("ADMIN 免密登录 ip=%s mac=%s" % (ip, admin_mac))
         status, obj, cookie = admin_api.dispatch(
-            STORE, ADAPTER, method, self.path, self.headers, raw, client_ip(self))
+            STORE, ADAPTER, method, self.path, headers, raw, ip)
         if isinstance(obj, admin_api.Raw):
             return self._raw(obj.body, obj.ctype, obj.filename)
-        return self._json(obj, status, cookie)
+        return self._json(obj, status, cookie or auto_cookie)
 
     def do_GET(self):
         path = urlparse(self.path).path

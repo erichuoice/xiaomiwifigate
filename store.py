@@ -345,7 +345,11 @@ def validate_settings(settings, current):
         raise StoreError("每日累计上限需在 0-%s 分钟之间（0 = 不限）" % MAX_MINUTES)
     # ---- 放行规则：3.12.0 起按题库各自配置，全局这份只作为新题库的默认值 ----
     rule = validate_pass_rule(settings, current)
+    # 3.48.0：允许免密进入后台的手机（按 MAC），空列表 = 关闭
+    trusted = validate_macs(
+        settings.get("admin_trusted", current.get("admin_trusted", []) or []))
     return {"note": note, "daily_cap_minutes": cap,
+            "admin_trusted": trusted,
             "pass_mode": rule["pass_mode"],
             "pass_rate_percent": rule["pass_rate_percent"],
             "wrong_add_questions": rule["wrong_add_questions"],
@@ -1106,6 +1110,22 @@ class Store:
             self._sessions[token] = time.time() + SESSION_TTL
             self._login_fail.pop(ip, None)
         return token
+
+    def issue_session(self):
+        """3.48.0：给「已信任的设备」直接发一个会话（免密登录后台）。"""
+        token = secrets.token_urlsafe(24)
+        with self._lock:
+            self._sessions[token] = time.time() + SESSION_TTL
+        return token
+
+    def admin_trusted(self):
+        """当前允许免密进后台的 MAC 列表。"""
+        with self._lock:
+            return list(self._runtime.get("settings", {}).get("admin_trusted") or [])
+
+    def is_trusted_admin(self, mac):
+        mac = str(mac or "").strip().lower()
+        return bool(mac) and mac in self.admin_trusted()
 
     def check_session(self, token):
         if not token:

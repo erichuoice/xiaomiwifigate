@@ -702,6 +702,44 @@ def main():
           {"settings": {"daily_cap_minutes": orig_cap,
                         "note": orig_settings["note"]}})
 
+    # 3.48.0：免密进入后台的手机（信任 MAC）
+    code, res = admin("/api/admin/settings", {
+        "settings": {"admin_trusted": ["AA:BB:CC:DD:EE:FF"],
+                     "daily_cap_minutes": orig_cap,
+                     "note": orig_settings["note"]}})
+    _trusted = (res.get("settings") or {}).get("admin_trusted") or []
+    check("可以设置免密进入后台的手机（MAC 列表）",
+          code == 200 and _trusted == ["aa:bb:cc:dd:ee:ff"])
+    code, st_now = admin("/api/admin/state")
+    check("免密手机列表回读到设置里",
+          (st_now.get("settings") or {}).get("admin_trusted") ==
+          ["aa:bb:cc:dd:ee:ff"])
+    _old_rt3 = store.RUNTIME_PATH
+    try:
+        store.RUNTIME_PATH = os.path.join(tempfile.mkdtemp(prefix="wg-trust-"),
+                                          "runtime.json")
+        with open(store.RUNTIME_PATH, "w", encoding="utf-8") as f:
+            json.dump({"version": 3, "banks": [{
+                "id": "bank_trust", "name": "信任测试", "enabled": True,
+                "devices": [], "tiers": [{"questions": 1, "minutes": 30}],
+                "questions": [{"id": "t1", "type": "single", "text": "1+1=?",
+                               "options": ["2", "3"], "answer": 0, "explain": "",
+                               "stage": "", "grade": "", "subject": "",
+                               "star": 2, "topic": "", "chapter": "", "source": ""}],
+            }], "settings": {"admin_trusted": ["aa:bb:cc:dd:ee:ff"]},
+                "schedules": {}}, f, ensure_ascii=False)
+        _st3 = store.Store()
+        _tok = _st3.issue_session()
+        check("受信任设备可以直接发后台会话；不信任的设备不行",
+              _st3.is_trusted_admin("AA:BB:CC:DD:EE:FF") is True and
+              _st3.is_trusted_admin("11:22:33:44:55:66") is False and
+              _st3.check_session(_tok) is True)
+    finally:
+        store.RUNTIME_PATH = _old_rt3
+    admin("/api/admin/settings", {
+        "settings": {"admin_trusted": [], "daily_cap_minutes": orig_cap,
+                     "note": orig_settings["note"]}})
+
     # ---- 3.12.0 正确率放行：答错当场加题 + 达标放行（配在题库上）----
     code, res = set_pass_rule(pass_mode="rate", pass_rate_percent=80,
                               wrong_add_questions=2)
@@ -2608,6 +2646,13 @@ def main():
           ".notes-panel.open { display:block; }" in admin_html and
           "panel.classList.toggle('open');" in admin_html and
           "panel.style.display" not in admin_html)
+    check("设置页可选择免密进入后台的手机（3.48.0）",
+          "免密进入后台的手机" in admin_html and
+          'id="trusted-list"' in admin_html and
+          'id="trusted-save"' in admin_html and
+          "function loadTrustedDevices(" in admin_html and
+          "function saveTrustedDevices(" in admin_html and
+          "admin_trusted" in admin_html)
     check("说明收进标题旁的小 i 图标，点击才展开（3.44.0）",
           ".info-btn {" in admin_html and ".notes-panel {" in admin_html and
           "function buildInfoPanels(" in admin_html and

@@ -494,6 +494,15 @@
       <textarea id="note" rows="3"></textarea>
       <div class="row"><button id="save-settings">保存设置</button></div>
 
+      <h2 style="margin-top:22px">免密进入后台的手机</h2>
+      <p class="hint">勾选你自己的手机：用这台手机打开 <code>/admin</code> 时不再要求输入管理密码，
+        直接进后台。不要勾选孩子的设备；取消勾选并保存后恢复需要密码。</p>
+      <div id="trusted-list"><p class="hint">正在读取设备列表…</p></div>
+      <div class="row">
+        <button class="mini" id="trusted-save">保存免密手机</button>
+        <button class="mini ghost" id="trusted-refresh">刷新设备列表</button>
+      </div>
+
       <h2 style="margin-top:22px">程序更新</h2>
       <p class="verline">当前版本 <code id="ver-cur">-</code>　远端最新 <code id="ver-new">-</code></p>
       <p class="hint" style="margin-top:8px">从 GitHub 拉最新代码替换，只换程序文件，
@@ -3099,6 +3108,7 @@
     if (name === 'settings') {
       loadAiConfig();                          // 3.23.0：AI 连接配置挪到系统设置
       loadTizhuangStatus();                    // 3.32.0：题庄 License / 额度
+      loadTrustedDevices();                    // 3.48.0：免密进入后台的手机
     }
     el('open-settings').className = name === 'settings' ? 'mini' : 'mini ghost';
   }
@@ -3125,6 +3135,8 @@
   };
   el('fb-refresh').onclick = loadFeedback;
   el('mk-refresh').onclick = loadMistakes;
+  el('trusted-save').onclick = saveTrustedDevices;
+  el('trusted-refresh').onclick = loadTrustedDevices;
   Array.prototype.forEach.call(el('lstat-range').querySelectorAll('button'),
     function (b) {
       b.onclick = function () {
@@ -3364,6 +3376,50 @@
       toast(res.data.ok ? '设置已保存，立即生效' : (res.data.detail || '保存失败'));
     });
   };
+
+  // ---------- 3.48.0：免密进入后台的手机 ----------
+
+  function loadTrustedDevices() {
+    return api('/api/admin/devices').then(function (res) {
+      if (!requireAuth(res)) return;
+      var rows = (res.data && res.data.devices) || [];
+      var trusted = (state && state.settings && state.settings.admin_trusted) || [];
+      var box = el('trusted-list');
+      if (!rows.length) {
+        box.innerHTML = '<p class="hint">' + escHtml(
+          (res.data && (res.data.hint || res.data.detail)) ||
+          '没有可选的设备（路由器设备列表为空）。') + '</p>';
+        return;
+      }
+      box.innerHTML = rows.map(function (d) {
+        var on = trusted.indexOf(d.mac) >= 0;
+        return '<label class="chk" style="display:block;padding:3px 0">' +
+          '<input type="checkbox" data-tmac="' + escHtml(d.mac) + '"' +
+          (on ? ' checked' : '') + '> ' + escHtml(d.name || d.mac) +
+          '　<span class="hint">' + escHtml(d.ip || '') + ' · ' +
+          escHtml(d.mac) + '</span></label>';
+      }).join('');
+    }).catch(function () {});
+  }
+
+  function saveTrustedDevices() {
+    var macs = [];
+    Array.prototype.forEach.call(
+      document.querySelectorAll('input[data-tmac]'), function (cb) {
+        if (cb.checked) macs.push(cb.getAttribute('data-tmac'));
+      });
+    api('/api/admin/settings', { settings: { admin_trusted: macs } })
+      .then(function (res) {
+        if (!requireAuth(res)) return;
+        if (!res.data.ok) { toast(res.data.detail || '保存失败'); return; }
+        if (state && state.settings) {
+          state.settings.admin_trusted = res.data.settings.admin_trusted;
+        }
+        toast(macs.length
+          ? '已设置 ' + macs.length + ' 台免密手机'
+          : '已关闭免密进入后台');
+      }).catch(function () {});
+  }
 
   // ---------- 程序更新 ----------
 
