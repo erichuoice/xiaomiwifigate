@@ -124,6 +124,27 @@ def _bank_id(st, data):
     return st.first_bank()["id"]
 
 
+def _device_view(mac, name, rec, bank):
+    """3.50.6：首页每台设备的当前状态（给上网中的设备显示倒计时）。"""
+    left = grants.minutes_left(rec)
+    if left is None:
+        state = "permanent"
+    elif left > 0:
+        state = "online"
+    else:
+        state = "blocked"
+    return {
+        "mac": mac,
+        "name": name,
+        "state": state,
+        "remaining_minutes": left,
+        "expire_at": rec.get("expire_at"),
+        "free": bool(rec.get("free")),
+        "limit_mode": str(bank.get("limit_mode") or "block"),
+        "throttle_kbps": int(bank.get("throttle_kbps") or 0),
+    }
+
+
 def _home_payload(st, adapter):
     """后台首页：每个学生一张卡（储蓄余额 / 今日获得 / 设备 / 最近明细）。"""
     try:
@@ -155,7 +176,8 @@ def _home_payload(st, adapter):
             "enabled": b.get("enabled", True),
             "questions": len(b.get("questions") or []),
             "tiers": b.get("tiers") or [],
-            "devices": [{"mac": m, "name": names.get(m, "")}
+            "devices": [_device_view(m, names.get(m, ""),
+                                     all_grants.get(m) or {}, b)
                         for m in (b.get("devices") or [])],
             "savings_minutes": sav["minutes"],
             "earned_today": earned,

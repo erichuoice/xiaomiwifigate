@@ -196,7 +196,13 @@
   .homecard .hsav { display:flex; align-items:baseline; gap:6px; margin:10px 0 2px;
     font-size:13px; color:var(--muted); }
   .homecard .hsav b { font-size:22px; color:var(--accent); font-variant-numeric:tabular-nums; }
-  .homecard .hdev { font-size:12.5px; color:#444; }
+  .homecard .hdev { font-size:12.5px; color:#444; display:flex; gap:6px;
+    align-items:baseline; flex-wrap:wrap; margin-top:3px; }
+  .homecard .hstate { font-size:11.5px; padding:1px 7px; border-radius:999px; }
+  .homecard .hstate.ok { background:#e4f6ee; color:#0f7a5a; }
+  .homecard .hstate.warn { background:#fff6e5; color:#8a5a00; }
+  .homecard .hstate.off { background:#fdeaea; color:#b03030; }
+  .homecard .tick { font-variant-numeric:tabular-nums; color:var(--accent); font-weight:600; }
   .homecard .hbtns { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
   .homecard .hrew { margin-top:10px; border-top:1px dashed var(--line); padding-top:10px; }
   .homecard .hrew .hrow { display:flex; gap:8px; align-items:center; }
@@ -3265,6 +3271,60 @@
     });
   }
 
+  var homeSkew = 0, homeTickTimer = null;
+
+  function fmtLeft(sec) {
+    sec = Math.max(0, Math.floor(sec));
+    var h = Math.floor(sec / 3600);
+    var m = Math.floor((sec % 3600) / 60);
+    var s2 = sec % 60;
+    function p2(n) { return (n < 10 ? '0' : '' ) + n; }
+    return (h ? h + ':' + p2(m) + ':' + p2(s2) : p2(m) + ':' + p2(s2));
+  }
+
+  /** 3.50.6：一台设备的当前状态（上网中显示剩余时间倒计时）。 */
+  function devStateHtml(d) {
+    if (d.state === 'permanent') {
+      return ' <span class="hstate ok">永久放行</span>';
+    }
+    if (d.state === 'online') {
+      return ' <span class="hstate ok">上网中</span> ' +
+        '<span class="tick" data-expire="' + escHtml(String(d.expire_at || 0)) +
+        '">—</span>';
+    }
+    if (d.limit_mode === 'throttle') {
+      return ' <span class="hstate warn">已限速 ' + (d.throttle_kbps || 0) +
+        ' KB/s</span>';
+    }
+    return ' <span class="hstate off">已断网</span>';
+  }
+
+  function startHomeTicker(serverNow) {
+    homeSkew = Date.now() / 1000 - Number(serverNow || 0);
+    if (homeTickTimer) { clearInterval(homeTickTimer); homeTickTimer = null; }
+    var ticks = document.querySelectorAll('#home-cards .tick');
+    if (!ticks.length) return;
+    var reloading = false;
+    var step = function () {
+      var now = Date.now() / 1000 - homeSkew;
+      var expired = false;
+      Array.prototype.forEach.call(ticks, function (t) {
+        var exp = Number(t.getAttribute('data-expire') || 0);
+        var left = exp - now;
+        if (left <= 0) { t.textContent = '马上结束'; expired = true; return; }
+        t.textContent = '剩 ' + fmtLeft(left);
+      });
+      if (expired && !reloading) {
+        reloading = true;
+        clearInterval(homeTickTimer);
+        homeTickTimer = null;
+        setTimeout(loadHome, 1500);   // 到点后刷新一次，拿最新状态
+      }
+    };
+    step();
+    homeTickTimer = setInterval(step, 1000);
+  }
+
   function renderHome(data) {
     var box = el('home-cards');
     var list = data.students || [];
@@ -3288,15 +3348,20 @@
     list.forEach(function (s) {
       var card = document.createElement('div');
       card.className = 'homecard';
-      var devNames = (s.devices || []).map(function (d) { return d.name || d.mac; });
       var meta = [s.stage, s.grade].filter(Boolean).join(' · ');
       var html = '';
       html += '<div class="hn">' + escHtml(s.name) + '</div>';
       html += '<div class="hmeta">' + escHtml(meta || '未填年级') + ' · ' +
         (s.questions || 0) + ' 道题</div>';
       html += '<div class="hsav">可消费 <b>' + (s.savings_minutes || 0) + '</b> 分钟</div>';
-      html += '<div class="hdev">设备：' +
-        (devNames.length ? escHtml(devNames.join('、')) : '还没有设备') + '</div>';
+      if ((s.devices || []).length) {
+        s.devices.forEach(function (d) {
+          html += '<div class="hdev"><span>' + escHtml(d.name || d.mac) +
+            '</span>' + devStateHtml(d) + '</div>';
+        });
+      } else {
+        html += '<div class="hdev">还没有设备</div>';
+      }
       html += '<div class="hdev">今日已得 ' + (s.earned_today || 0) +
         ' 分钟 · 已释放 ' + (s.spent_today || 0) + ' 分钟</div>';
       html += '<div class="hbtns">' +
@@ -3363,6 +3428,7 @@
         if (m) f.querySelector('.hrew-min').value = m;
       };
     });
+    startHomeTicker(data.server_now);
   }
 
   function enterStudent(bid) {

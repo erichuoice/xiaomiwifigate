@@ -1540,6 +1540,12 @@ def main():
           str(_row and _row.get("savings_minutes")))
     check("后台首页带奖励明细",
           any(e.get("kind") == "reward" for e in (_row or {}).get("ledger") or []))
+    _dev = ((_row or {}).get("devices") or [{}])[0]
+    check("首页设备带当前状态与到期时间（3.50.6）",
+          "state" in _dev and "expire_at" in _dev and
+          "remaining_minutes" in _dev and _dev.get("state") == "online" and
+          (_dev.get("expire_at") or 0) > 0,
+          str({k: _dev.get(k) for k in ("state", "remaining_minutes", "expire_at")}))
     check("奖励后自动记住行为，首页下拉能选到（3.50.2）",
           any(p.get("reason") == "做家务"
               for p in (home.get("reward_presets") or [])))
@@ -1871,6 +1877,11 @@ def main():
           "rewardPresets" in admin_html and
           "select[data-preset]" in admin_html and
           "奖惩时间" in admin_html and 'min="-1440"' in admin_html)
+    check("首页设备状态有倒计时（上网中显示剩余时间）（3.50.6）",
+          "function startHomeTicker(" in admin_html and
+          "function devStateHtml(" in admin_html and
+          "data-expire" in admin_html and "上网中" in admin_html and
+          "fmtLeft" in admin_html)
     check("后台有「时间记录」页签（每天/每周/每月）（3.50.3）",
           'id="tabbtn-log"' in admin_html and 'id="tab-log"' in admin_html and
           "function loadSavingsLog(" in admin_html and
