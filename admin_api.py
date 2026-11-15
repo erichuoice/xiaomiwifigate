@@ -577,6 +577,23 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
         return 200, {"ok": True, "banks": rows,
                      "detail": learning.ability(which) if which else None}, None
 
+    if path == "/api/admin/learning/stats" and method == "GET":
+        who = str((query.get("bank") or [""])[0]).strip().lower()
+        if not who:
+            bank = st.first_bank()
+            who = bank["id"] if bank else ""
+        if not who:
+            return 404, {"ok": False, "detail": "题库不存在"}, None
+        return 200, dict(learning.stats(who), ok=True, learner=who), None
+
+    if path == "/api/admin/question/stats" and method == "GET":
+        bid = str((query.get("bank") or [""])[0]).strip()
+        bank = st.bank(bid) if bid else st.first_bank()
+        if not bank:
+            return 404, {"ok": False, "detail": "题库不存在"}, None
+        return 200, {"ok": True, "bank_id": bank["id"],
+                     "stats": learning.question_stats(bank["id"])}, None
+
     if path == "/api/admin/learning/wrong/delete" and method == "POST":
         data = _body(raw)
         who = str(data.get("bank_id") or data.get("mac") or "").strip().lower()

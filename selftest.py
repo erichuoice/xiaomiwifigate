@@ -1024,6 +1024,44 @@ def main():
               for w in (res.get("detail") or {}).get("wrong") or []))
     learning.clear("bank_subj_test")
 
+    # 3.47.0：每道题统计 + 学习统计（天/周/月/科目）
+    _old_l4 = learning.PATH
+    try:
+        learning.PATH = os.path.join(tempfile.mkdtemp(prefix="wg-stats-"), "learning.json")
+        _now = time.time()
+        for _i, _ok in enumerate([True, False, True]):
+            learning.record_answer("bank_stats", {
+                "id": "st1", "text": "统计题", "type": "single",
+                "options": ["A", "B"], "answer": 0, "subject": "数学",
+                "topic": "加法"}, _ok, ts=_now - _i * 86400)
+        learning.record_answer("bank_stats", {
+            "id": "st2", "text": "英语题", "type": "judge",
+            "options": ["正确", "错误"], "answer": 0, "subject": "英语",
+            "topic": "时态"}, False, ts=_now)
+        _qs = learning.question_stats("bank_stats")
+        check("每道题统计做过/答对/答错次数",
+              _qs.get("st1", {}).get("total") == 3 and _qs["st1"]["right"] == 2 and
+              _qs["st1"]["wrong"] == 1 and _qs["st2"]["total"] == 1 and
+              _qs["st2"]["wrong"] == 1)
+        _ls = learning.stats("bank_stats", now=_now)
+        check("学习统计按天/周/月/科目聚合",
+              len(_ls["day"]) == 30 and len(_ls["week"]) == 12 and
+              len(_ls["month"]) == 12 and
+              any(r["total"] == 1 for r in _ls["day"]) and
+              {x["subject"] for x in _ls["subjects"]} == {"数学", "英语"} and
+              all("accuracy" in r for r in _ls["day"]))
+    finally:
+        learning.PATH = _old_l4
+
+    code, res = admin("/api/admin/question/stats?bank=" + _lb)
+    check("题目统计接口返回每道题的次数",
+          code == 200 and isinstance(res.get("stats"), dict))
+    code, res = admin("/api/admin/learning/stats?bank=" + _lb)
+    check("学习统计接口返回天/周/月/科目序列",
+          code == 200 and all(k in res for k in
+                              ("day", "week", "month", "subjects")) and
+          len(res["day"]) == 30 and len(res["week"]) == 12 and len(res["month"]) == 12)
+
     # 3.34.0：错题本里编辑题目 + 学生异议反馈
     _b34 = (cur_state.get("banks") or [{}])[0]
     _q34 = (_b34.get("questions") or [{}])[0]
@@ -2547,6 +2585,17 @@ def main():
           "这里只显示<b>当前管理对象</b>的反馈" in admin_html and
           "loadFeedback()" in admin_html and
           "/api/admin/feedback' + (bid ?" in admin_html)
+    check("题目卡片显示做过/对/错次数 + 学习统计图表（3.47.0）",
+          "function loadQuestionStats(" in admin_html and
+          "做过 ' + qs.total + ' 次 · 对 '" in admin_html and
+          "function loadLearningStats(" in admin_html and
+          "function trendSvg(" in admin_html and
+          "function subjectsSvg(" in admin_html and
+          'id="lstat-range"' in admin_html and
+          'id="lstat-trend"' in admin_html and
+          'id="lstat-subjects"' in admin_html and
+          'data-range="day"' in admin_html and 'data-range="week"' in admin_html and
+          'data-range="month"' in admin_html and "学习统计" in admin_html)
     check("动态生成的说明也会收进小 i 图标（3.45.0）",
           "function addInfoPanel(" in admin_html and
           "function collectNotes(" in admin_html and

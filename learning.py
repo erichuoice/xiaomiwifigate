@@ -522,6 +522,122 @@ def weak_topics_for(who, limit=3):
     return [w["topic"] for w in weak_topics(dev, limit)]
 
 
+def question_stats(who):
+    """3.47.0：每道题的作答次数 / 答对 / 答错（按人=题库统计，题目页显示用）。"""
+    key = str(who or "").strip().lower()
+    if not key:
+        return {}
+    with _lock:
+        dev = dict(_dev(_load(), key, create=False))
+    out = {}
+    for h in dev.get("history") or []:
+        qid = str(h.get("qid") or "").strip()
+        if not qid:
+            continue
+        rec = out.setdefault(qid, {"qid": qid, "total": 0, "right": 0,
+                                   "wrong": 0, "last": 0})
+        rec["total"] += 1
+        if h.get("ok"):
+            rec["right"] += 1
+        else:
+            rec["wrong"] += 1
+        ts = int(h.get("ts") or 0)
+        if ts > rec["last"]:
+            rec["last"] = ts
+    return out
+
+
+def _bucket(ts):
+    lt = time.localtime(ts)
+    return time.strftime("%Y-%m-%d", lt)
+
+
+def stats(who, now=None):
+    """3.47.0：按天 / 周 / 月的时间序列 + 每科汇总（学习情况页图表用）。"""
+    now = float(now or time.time())
+    key = str(who or "").strip().lower()
+    with _lock:
+        dev = dict(_dev(_load(), key, create=False))
+    hist = [h for h in (dev.get("history") or []) if h.get("ts")]
+
+    def empty(label):
+        return {"label": label, "total": 0, "right": 0, "wrong": 0, "accuracy": None}
+
+    def add(row, h):
+        row["total"] += 1
+        if h.get("ok"):
+            row["right"] += 1
+        else:
+            row["wrong"] += 1
+
+    def finish(rows):
+        for r in rows:
+            r["accuracy"] = round(r["right"] / r["total"], 3) if r["total"] else None
+        return rows
+
+    # 每天：最近 30 天
+    days = []
+    day_index = {}
+    for i in range(29, -1, -1):
+        d = time.strftime("%Y-%m-%d", time.localtime(now - i * 86400))
+        row = empty(d[5:])         # MM-DD
+        row["date"] = d
+        days.append(row)
+        day_index[d] = row
+    # 每周：最近 12 个自然周（周一开始）
+    weeks = []
+    week_index = {}
+    lt = time.localtime(now)
+    monday = now - ((lt.tm_wday) * 86400)
+    for i in range(11, -1, -1):
+        start = monday - i * 7 * 86400
+        label = time.strftime("%m-%d", time.localtime(start))
+        row = empty(label + " 周")
+        row["date"] = time.strftime("%Y-%m-%d", time.localtime(start))
+        weeks.append(row)
+        week_index[row["date"]] = row
+    # 每月：最近 12 个月
+    months = []
+    month_index = {}
+    y, m = lt.tm_year, lt.tm_mon
+    for i in range(11, -1, -1):
+        yy, mm = y, m - i
+        while mm <= 0:
+            mm += 12
+            yy -= 1
+        label = "%d-%02d" % (yy, mm)
+        row = empty(label)
+        row["date"] = label
+        months.append(row)
+        month_index[label] = row
+
+    subjects = {}
+    for h in hist:
+        ts = float(h["ts"])
+        d = _bucket(ts)
+        if d in day_index:
+            add(day_index[d], h)
+        lt2 = time.localtime(ts)
+        monday2 = time.strftime("%Y-%m-%d",
+                                time.localtime(ts - lt2.tm_wday * 86400))
+        if monday2 in week_index:
+            add(week_index[monday2], h)
+        mon = time.strftime("%Y-%m", lt2)
+        if mon in month_index:
+            add(month_index[mon], h)
+        subject = str(h.get("subject") or "").strip() or "未标注"
+        row = subjects.setdefault(subject, {"subject": subject, "total": 0,
+                                            "right": 0, "wrong": 0})
+        add(row, h)
+    for row in subjects.values():
+        row["accuracy"] = round(row["right"] / row["total"], 3) if row["total"] else None
+    subj_list = sorted(subjects.values(),
+                       key=lambda x: (x["accuracy"] if x["accuracy"] is not None else 2,
+                                      -x["total"]))
+    return {"day": finish(days), "week": finish(weeks), "month": finish(months),
+            "subjects": subj_list, "total": len(hist)}
+
+
 def patch_wrong(qid, q, fields=("text", "options", "answer", "explain", "topic",
                                 "subject", "type")):
     """3.34.0：后台改了题目后，把所有孩子错题本里这道题的副本一起更新。"""

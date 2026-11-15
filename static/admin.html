@@ -39,6 +39,11 @@
   .notes-panel { display:none; margin:8px 0 4px; padding:10px 12px;
     border-radius:10px; background:#f7f9fb; border:1px dashed var(--line); }
   .notes-panel.open { display:block; }
+  /* 3.47.0：学习统计图表 */
+  .chart { margin:8px 0 4px; }
+  .chart svg { width:100%; height:auto; display:block; }
+  .chart text { font-size:10px; fill:var(--muted); }
+  .chart .axis { stroke:var(--line); stroke-width:1; }
   .notes-panel > p.hint, .notes-panel > div { margin:0 0 6px; background:none;
     border:0; padding:0; }
   .notes-panel > *:last-child { margin-bottom:0; }
@@ -677,6 +682,16 @@
         轮到时会插入原题或同知识点的类似题；掌握度偏低的知识点会被多抽到（但一轮最多占一半）。</p>
       <div id="learn-cards"></div>
 
+      <h3 style="margin-top:18px">学习统计</h3>
+      <div class="row" id="lstat-range">
+        <button class="mini" data-range="day">每天</button>
+        <button class="mini ghost" data-range="week">每周</button>
+        <button class="mini ghost" data-range="month">每月</button>
+      </div>
+      <div id="lstat-trend" class="chart"></div>
+      <h3>每科正确率</h3>
+      <div id="lstat-subjects" class="chart"></div>
+
       <h3>错题本与弱项</h3>
       <div class="hidebank">
         <label class="fld" for="learn-sel">选择题库（人）</label>
@@ -927,7 +942,11 @@
     loadBankProgress(b.id);
     if (el('tab-learning').style.display !== 'none') {
       loadLearning(b.id);
+      loadLearningStats();
       loadFeedback();
+    }
+    if (el('tab-questions') && el('tab-questions').style.display !== 'none') {
+      loadQuestionStats();
     }
     if (el('tab-mistakes') && el('tab-mistakes').style.display !== 'none') loadMistakes();
     if (el('tab-devices').style.display !== 'none') {
@@ -940,6 +959,16 @@
     try { saved = localStorage.getItem('wifigate.current_bank') || ''; } catch (e) {}
     if (saved && banks.some(function (b) { return b.id === saved; })) return saved;
     return banks.length ? banks[0].id : '';
+  }
+
+  function loadQuestionStats() {
+    var bid = currentBankId || '';
+    return api('/api/admin/question/stats' + (bid ? '?bank=' + encodeURIComponent(bid) : ''))
+      .then(function (res) {
+        if (!requireAuth(res)) return;
+        qStats = (res.data && res.data.stats) || {};
+        renderList();
+      }).catch(function () {});
   }
 
   function renderBankSel() {
@@ -1177,9 +1206,14 @@
       brief.textContent = q.text || '（未填写题干）';
       var meta = document.createElement('div'); meta.className = 'qmeta';
       var typeCn = { single: '单选', multi: '多选', judge: '判断' }[q.type] || '单选';
+      var qs = qStats[q.id];
+      var statPill = qs
+        ? '<span class="pill">做过 ' + qs.total + ' 次 · 对 ' + qs.right +
+          ' · 错 ' + qs.wrong + '</span>'
+        : '<span class="pill">做过 0 次</span>';
       meta.innerHTML = escHtml([typeCn, q.stage || '未分学段', q.grade, q.subject,
         q.star ? '★' + q.star : ''].filter(Boolean).join(' · ') +
-        (q.id ? ' · ' + q.id : ' · 保存后分配 ID')) + qScopeBits(q);
+        (q.id ? ' · ' + q.id : ' · 保存后分配 ID')) + qScopeBits(q) + ' ' + statPill;
       brief.appendChild(meta);
       var ops = document.createElement('div'); ops.style.flex = '0 0 auto';
       var edit = document.createElement('button');
@@ -1288,6 +1322,7 @@
     try { _aiMode = localStorage.getItem('wifigate.ai_mode') || 'manual'; } catch (e) {}
     setAiMode(_aiMode);
     loadAiConfig();      // 学段/年级/教材下拉要用到 AI 配置里的选项
+    loadQuestionStats(); // 3.47.0：题目页要显示每道题做过/对/错次数
   }
 
   function loadState() {
@@ -2384,6 +2419,8 @@
   // ---------- 3.34.0：题目反馈列表 ----------
 
   var feedbackItems = [];
+  var qStats = {};                 // 3.47.0：每道题的作答次数
+  var lstats = null, lstatRange = 'day';   // 3.47.0：学习统计
 
   // ---------- 3.36.0：错题分析 ----------
 
@@ -2545,6 +2582,89 @@
       el('learn-dl-json').href = '/api/admin/learning/wrong' + q +
         (q ? '&format=json' : '?format=json');
     }
+  }
+
+  // ---------- 3.47.0：学习统计（每天/每周/每月 + 每科） ----------
+
+  function loadLearningStats() {
+    var bid = currentBankId || '';
+    return api('/api/admin/learning/stats' + (bid ? '?bank=' + encodeURIComponent(bid) : ''))
+      .then(function (res) {
+        if (!requireAuth(res)) return;
+        lstats = res.data || null;
+        renderLearningStats();
+      }).catch(function () {});
+  }
+
+  function trendSvg(rows, range) {
+    var W = 640, H = 190, padL = 34, padR = 40, padT = 14, padB = 26;
+    var n = Math.max(1, rows.length);
+    var innerW = W - padL - padR, innerH = H - padT - padB;
+    var maxTotal = 1;
+    rows.forEach(function (r) { if (r.total > maxTotal) maxTotal = r.total; });
+    var step = innerW / n;
+    var bars = '', labels = '', line = '', dots = '';
+    rows.forEach(function (r, i) {
+      var x = padL + i * step + step * 0.18;
+      var bw = Math.max(2, step * 0.64);
+      var h = innerH * (r.total / maxTotal);
+      var y = padT + innerH - h;
+      bars += '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' +
+        bw.toFixed(1) + '" height="' + h.toFixed(1) + '" rx="2" fill="#cfe0f7"></rect>';
+      if (r.accuracy != null) {
+        var ax = x + bw / 2;
+        var ay = padT + innerH - innerH * r.accuracy;
+        line += (line ? 'L' : 'M') + ax.toFixed(1) + ',' + ay.toFixed(1) + ' ';
+        dots += '<circle cx="' + ax.toFixed(1) + '" cy="' + ay.toFixed(1) +
+          '" r="2.6" fill="#1a6fd4"></circle>';
+      }
+      var show = range === 'day' ? (i % 5 === 0 || i === n - 1) : true;
+      if (show) {
+        labels += '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (H - 8) +
+          '" text-anchor="middle">' + escHtml(r.label) + '</text>';
+      }
+    });
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img">' +
+      '<line class="axis" x1="' + padL + '" y1="' + (padT + innerH) + '" x2="' +
+      (W - padR) + '" y2="' + (padT + innerH) + '"></line>' +
+      '<text x="2" y="' + (padT + 8) + '">' + maxTotal + ' 题</text>' +
+      '<text x="2" y="' + (padT + innerH) + '">0</text>' +
+      '<text x="' + (W - 2) + '" y="' + (padT + 8) + '" text-anchor="end">100%</text>' +
+      '<text x="' + (W - 2) + '" y="' + (padT + innerH) + '" text-anchor="end">0%</text>' +
+      bars + '<path d="' + line + '" fill="none" stroke="#1a6fd4" stroke-width="1.6"></path>' +
+      dots + labels + '</svg>';
+  }
+
+  function subjectsSvg(list) {
+    if (!list || !list.length) return '<p class="hint">还没有按科目的答题数据。</p>';
+    var W = 640, rowH = 26, labelW = 70, barW = W - labelW - 96;
+    var H = list.length * rowH + 8;
+    var out = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img">';
+    list.forEach(function (s, i) {
+      var y = i * rowH + 5;
+      var acc = s.accuracy == null ? 0 : s.accuracy;
+      var w = Math.max(2, barW * acc);
+      out += '<text x="0" y="' + (y + 12) + '">' + escHtml(s.subject) + '</text>' +
+        '<rect x="' + labelW + '" y="' + y + '" width="' + barW +
+        '" height="14" rx="7" fill="#eef1f5"></rect>' +
+        '<rect x="' + labelW + '" y="' + y + '" width="' + w.toFixed(1) +
+        '" height="14" rx="7" fill="#1a6fd4"></rect>' +
+        '<text x="' + (labelW + barW + 8) + '" y="' + (y + 12) + '">' +
+        (acc * 100).toFixed(0) + '% · ' + s.total + ' 题</text>';
+    });
+    return out + '</svg>';
+  }
+
+  function renderLearningStats() {
+    if (!lstats) return;
+    var rows = lstats[lstatRange] || [];
+    el('lstat-trend').innerHTML = trendSvg(rows, lstatRange);
+    el('lstat-subjects').innerHTML = subjectsSvg(lstats.subjects || []);
+    Array.prototype.forEach.call(el('lstat-range').querySelectorAll('button'),
+      function (b) {
+        b.className = b.getAttribute('data-range') === lstatRange
+          ? 'mini' : 'mini ghost';
+      });
   }
 
   function loadLearning(bankId) {
@@ -2960,6 +3080,7 @@
     if (name === 'quiz') syncImportBank();
     if (name === 'questions') {
       loadBankProgress(currentBankId);   // 3.33.0：刷新「已学章节」，题卡上的标记要用
+      loadQuestionStats();               // 3.47.0：做题次数
       renderList();
       if (el('qs-bank')) el('qs-bank').textContent = (banks[cur] || {}).name || '';
       loadTizhuangStatus();
@@ -2971,6 +3092,7 @@
     }
     if (name === 'learning') {
       loadLearning(currentBankId || el('learn-sel').value || '');
+      loadLearningStats();
       loadFeedback();
     }
     if (name === 'mistakes') loadMistakes();
@@ -3003,6 +3125,13 @@
   };
   el('fb-refresh').onclick = loadFeedback;
   el('mk-refresh').onclick = loadMistakes;
+  Array.prototype.forEach.call(el('lstat-range').querySelectorAll('button'),
+    function (b) {
+      b.onclick = function () {
+        lstatRange = b.getAttribute('data-range');
+        renderLearningStats();
+      };
+    });
   el('learn-gomk').onclick = function () { switchTab('mistakes'); };
   el('ai-mode-manual').onclick = function () { setAiMode('manual'); };
   el('tz-preview').onclick = tzPreview;
