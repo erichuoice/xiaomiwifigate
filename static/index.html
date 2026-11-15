@@ -191,6 +191,8 @@
       <div class="chips" id="chips"></div>
       <div class="qtext" id="qtext"></div>
       <div id="options"></div>
+      <p class="hint" id="answer-hint" style="margin:8px 0 0">
+        单选 / 判断：点一下选项就直接提交；多选：选好后点下面的按钮。</p>
       <div class="feedback" id="feedback"></div>
     </div>
   </div>
@@ -211,7 +213,8 @@
     info: null, question: null, index: 0, total: 0, results: [],
     picked: [], locked: false, busy: false, answered: false,
     next: null, tier: 0, timer: null, target: null, targetName: '',
-    cdTimer: null, clockSkew: 0, schTimer: null, focus: []
+    cdTimer: null, clockSkew: 0, schTimer: null, focus: [],
+    autoTimer: null          // 答对后 1 秒自动下一题的定时器
   };
   var LETTERS = 'ABCDEFGH';
 
@@ -496,21 +499,26 @@
       row.appendChild(mark);
       row.appendChild(label);
       row.onclick = function () {
-        if (S.answered || S.locked) return;
+        if (S.answered || S.locked || S.busy) return;
         if (multi) {
           var at = S.picked.indexOf(idx);
           if (at >= 0) S.picked.splice(at, 1); else S.picked.push(idx);
-        } else {
-          S.picked = [idx];
+          Array.prototype.forEach.call(box.children, function (n, i) {
+            n.classList.toggle('picked', S.picked.indexOf(i) >= 0);
+          });
+          setMain('确认答案', S.picked.length > 0);
+          return;
         }
+        // 3.35.0：单选 / 判断选中即提交（不用再点按钮）
+        S.picked = [idx];
         Array.prototype.forEach.call(box.children, function (n, i) {
           n.classList.toggle('picked', S.picked.indexOf(i) >= 0);
         });
-        setMain('确认答案', S.picked.length > 0);
+        submit();
       };
       box.appendChild(row);
     });
-    setMain('确认答案', false);
+    setMain(multi ? '确认答案' : '选中答案就提交', false);
   }
 
   function renderQuestion(payload) {
@@ -522,6 +530,8 @@
     S.next = null;
     S.answered = false;
     S.busy = false;
+    clearTimeout(S.autoTimer);
+    S.autoTimer = null;
     hidePanel();
     el('pick-card').style.display = 'none';
     showQuiz(true);
@@ -830,6 +840,14 @@
         S.next = d.question;
         setMain('下一题', true);
         el('main').onclick = nextQuestion;
+        if (d.correct) {
+          // 3.35.0：答对了只停留 1 秒就自动进入下一题（答错才需要手动点）
+          clearTimeout(S.autoTimer);
+          S.autoTimer = setTimeout(function () {
+            S.autoTimer = null;
+            nextQuestion();
+          }, 1000);
+        }
         return;
       }
 
@@ -884,6 +902,8 @@
   }
 
   function nextQuestion() {
+    clearTimeout(S.autoTimer);
+    S.autoTimer = null;
     if (!S.next) { loadInfo(); return; }
     var payload = { question: S.next, index: S.index, total: S.total, results: S.results };
     el('main').onclick = submit;

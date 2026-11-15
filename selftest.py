@@ -2419,6 +2419,15 @@ def main():
           "按模式走会漏清" in server_html)
 
     # ---- 3.20.0 导航按「管理对象」组织 ----
+    check("答题页单选/判断选中即提交、答对 1 秒自动下一题（3.35.0）",
+          "选中答案就提交" in index_html and
+          "S.picked = [idx];" in index_html and
+          "        submit();" in index_html and
+          "if (d.correct) {" in index_html and
+          "S.autoTimer = setTimeout(function () {" in index_html and
+          "}, 1000);" in index_html and
+          "clearTimeout(S.autoTimer);" in index_html and
+          "单选 / 判断：点一下选项就直接提交" in index_html)
     check("学情页有学科分析 / 错题编辑 / 题目反馈（3.34.0）",
           "学科分析" in admin_html and "最需要加强" in admin_html and
           callable(getattr(learning, "subject_stats", None)) and
