@@ -315,7 +315,7 @@
       <div class="hint" id="bank-dev" style="margin-top:12px"></div>
 
       <h2 style="margin-top:22px">限制方式<span class="count">到点后怎么限制</span></h2>
-      <p class="hint">答完题到点、或进入禁止答题时段时，用哪种方式限制这台设备：
+      <p class="hint">答完题到点、或进入禁止消费时段时，用哪种方式限制这台设备：
         「直接断网」= 老做法，完全不能上网；「限速」= <b>不切断外网，只把速度降到下面这个值</b>，
         孩子还能上网但很慢，答对题就恢复全速。限速值单位 KB/s（1 Mbps ≈ 125 KB/s，2 Mbps ≈ 250 KB/s）。
         小米的限速器不是线性的，实测有效速度约为填的值乘 0.3~0.7：填 20 大约只有 6 KB/s，填 250 大约 150 KB/s。</p>
@@ -453,9 +453,10 @@
         <b>暂时放行的设备，名称旁会显示实时倒计时</b>（答题解锁同样显示），
         到点自动刷新；永久放行不显示倒计时。</p>
       <p class="hint">设备名下方的「时段设置」可按周一～周日设定两类时段：
-        <b>可答题时段</b>（答题换上网时间，放行截到时段结束）和
+        <b>可消费时段</b>（把储蓄换成上网时间，放行截到时段结束）和
         <b>免答题 · 自由上网时段</b>（到点自动放行、不用答题，结束自动恢复限制）。
-        两类时段外不能答题、设备保持限制。家长手动点「放行」属于临时破例，不受时段限制。</p>
+        <b>3.50.0 起时段只管消费、不管答题</b>：时段外孩子照样能答题攒时间，只是不能释放上网。
+        家长手动点「放行」属于临时破例，不受时段限制。</p>
 
       <h2 style="margin-top:18px">添加受控设备</h2>
       <p class="hint">从路由器设备列表里挑一台加给<b>当前管理对象</b>（也可以直接填 MAC，设备不在线也能加）；
@@ -850,16 +851,18 @@
   <div class="sheet">
     <h2>上网时段 · <span id="sch-name"></span></h2>
     <p class="hint">每天可以配<b>两类</b>时段（各自可以写多个，用逗号隔开）：
-      <b>① 可答题时段</b>——允许孩子答题换上网时间，放行时长最多到本时段结束；
+      <b>① 可消费时段</b>——孩子可以在这段时间里把储蓄换成上网时间，放行时长最多到本时段结束；
       <b>② 免答题 · 自由上网时段</b>——到点自动放行、不用答题，时段结束自动恢复限制。
-      两类时段外设备保持限制状态；某天留空 = 当天不开放；整周留空 = 不限制。
+      <b>答题不受时段限制</b>：时段外也能答题攒时间，只是不能消费；
+      消费时如果会跨过时段结束，答题页会先弹提醒，坚持释放也照常放行，到点仍然自动断网。
+      某天留空 = 当天不能消费；整周留空 = 不限制。
       格式 <code>18:00-20:00</code>，支持跨夜 <code>22:00-06:00</code> 与全天 <code>00:00-24:00</code>。</p>
     <label class="chk"><input type="checkbox" id="sch-enabled"> 启用这台设备的时段限制</label>
-    <p class="hint" style="margin-bottom:4px">快捷填入「可答题时段」那一列（下面每行左边是
-      可答题、右边是免答题自由上网）：</p>
+    <p class="hint" style="margin-bottom:4px">快捷填入「可消费时段」那一列（下面每行左边是
+      可消费、右边是免答题自由上网）：</p>
     <div class="row" style="align-items:center">
       <input type="text" id="sch-batch" value="18:00-20:00" style="flex:1 1 150px;width:auto"
-             aria-label="批量填入的可答题时段">
+             aria-label="批量填入的可消费时段">
       <button class="mini" data-preset="all">每天</button>
       <button class="mini" data-preset="workday">工作日</button>
       <button class="mini" data-preset="weekend">周末</button>
@@ -1486,10 +1489,10 @@
     };
   }
 
-  // ---------- 设备答题时段 ----------
+  // ---------- 设备消费时段（3.50.0：只限制消费，不限制答题） ----------
 
   // 时段规则里每个窗口是 [开始, 结束] 或 [开始, 结束, 'free']；
-  // 拆成「可答题」和「免答题」两组文本，分别填到两列输入框里。
+  // 拆成「可消费」和「免答题」两组文本，分别填到两列输入框里。
   function schedText(rule) {
     var out = {quiz: [], free: []};
     if (!rule || !rule.days) return out;
@@ -1512,9 +1515,9 @@
     var st = (schedInfo[d.mac] || {}).status || {};
     var tag = document.createElement('span');
     tag.className = 'sch-tag' + (st.limited ? (st.allowed ? ' ok' : ' no') : '');
-    // 三种状态：自由上网（免答题）/ 可答题 / 禁止答题
+    // 三种状态：自由上网（免答题）/ 可消费 / 禁止消费（3.50.0：只限制消费，不限制答题）
     tag.textContent = st.limited
-      ? (st.free ? '自由上网' : (st.allowed ? '可答题' : '禁止答题'))
+      ? (st.free ? '自由上网' : (st.allowed ? '可消费' : '禁止消费'))
       : '未设时段';
     line.appendChild(tag);
     var btn = document.createElement('button');
@@ -1526,8 +1529,8 @@
     sum.className = 'sch-sum';
     sum.textContent = st.limited
       ? (st.summary || '') + (!st.allowed && st.next_label ? ' · 下次 ' + st.next_label : '')
-      : '随时可答题';
-    sum.title = st.limited ? (st.summary || '') : '未设置时段限制';
+      : '随时可消费';
+    sum.title = st.limited ? (st.summary || '') : '未设置时段：随时可以消费';
     line.appendChild(sum);
     td.appendChild(line);
   }
@@ -1546,7 +1549,7 @@
     var box = el('sch-days'); box.innerHTML = '';
     var head = document.createElement('div');
     head.className = 'day-head';
-    head.innerHTML = '<span></span><span>可答题时段（答题换上网）</span>' +
+    head.innerHTML = '<span></span><span>可消费时段（把储蓄换成上网）</span>' +
       '<span>免答题 · 自由上网时段</span>';
     box.appendChild(head);
     WEEK.forEach(function (name, i) {
@@ -1554,7 +1557,7 @@
       var lb = document.createElement('label'); lb.textContent = name;
       var qi = document.createElement('input');
       qi.type = 'text'; qi.id = 'sch-day-' + i;
-      qi.placeholder = '如 18:00-20:00，多个用逗号隔开；留空 = 不能答题';
+      qi.placeholder = '如 18:00-20:00，多个用逗号隔开；留空 = 不能消费';
       qi.value = texts.quiz[i] || '';
       var fi = document.createElement('input');
       fi.type = 'text'; fi.id = 'sch-free-' + i;
@@ -1607,12 +1610,12 @@
       .then(function (res) {
         if (!requireAuth(res)) return;
         if (!res.data.ok) { showSchErr(res.data.detail || '保存失败'); return; }
-        closeSchedule(); toast('答题时段已保存'); refreshDevices();
+        closeSchedule(); toast('消费时段已保存'); refreshDevices();
       }).catch(function () { showSchErr('保存失败，请检查网络'); });
   }
 
   function deleteSchedule() {
-    if (!confirm('删除这台设备的答题时段？删除后随时可以答题放行。')) return;
+    if (!confirm('删除这台设备的消费时段？删除后随时可以消费放行（答题本来就不限时段）。')) return;
     api('/api/admin/schedule', { mac: schMac, schedule: null })
       .then(function (res) {
         if (!requireAuth(res)) return;
@@ -1872,7 +1875,7 @@
           if (x.limit_mode) d.limit_mode = x.limit_mode;
           if (x.throttle_kbps != null) d.throttle_kbps = x.throttle_kbps;
         });
-        // 合并答题时段规则与服务端算好的当前状态
+        // 合并消费时段规则与服务端算好的当前状态
         schedInfo = {};
         var rules = c.schedules || {}, states = c.status || {};
         Object.keys(rules).forEach(function (mac) {

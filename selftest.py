@@ -298,13 +298,13 @@ def main():
     check("周一 19:00 允许答题，20:00 结束",
           st["allowed"] and st["ends_hhmm"] == "20:00")
     st = schedule.window_state(week, at(0, 21))
-    check("周一 21:00 禁止答题并给出下次时间",
+    check("周一 21:00 禁止消费并给出下次时间",
           not st["allowed"] and st["next_label"] == "周二 18:00")
     st = schedule.window_state(week, at(5, 10))
     check("周六按周末规则 09:00-22:00 允许",
           st["allowed"] and st["ends_hhmm"] == "22:00")
-    check("时段说明包含下次开放时间",
-          "下次可答题" in schedule.hint(schedule.window_state(week, at(0, 21))))
+    check("时段说明包含下次可消费时间",
+          "下次可消费" in schedule.hint(schedule.window_state(week, at(0, 21))))
 
     night = schedule.normalize({"enabled": True, "days": ["22:00-06:00"] * 7})
     st = schedule.window_state(night, at(0, 23))
@@ -387,7 +387,7 @@ def main():
           str({k: st_free.get(k) for k in ("free", "allowed", "free_hhmm")}))
     check("自由上网时段结束后恢复禁止",
           not schedule.window_state(mixed, at(0, 21, 30))["allowed"])
-    check("答题时段内 free=False",
+    check("消费时段内 free=False",
           not schedule.window_state(mixed, at(0, 7, 45))["free"])
     check("答题页提示会说明自由上网时段",
           "自由上网" in schedule.hint(st_free) and "21:00" in schedule.hint(st_free))
@@ -1558,8 +1558,24 @@ def main():
           sst.get("next_label", ""))
     check("时段状态返回翻转时间供前端自动刷新", bool(sst.get("change_at")))
     code, res = start(0, target=sch_mac)
-    check("时段外不能开始答题", code == 403 and
-          res.get("reason") == "outside_schedule", res.get("detail", "")[:60])
+    check("时段外照样可以答题（3.50.0：时段只限制消费）",
+          code == 200, res.get("detail", "")[:60])
+
+    # 3.50.0：消费受时段限制
+    code, res = admin("/api/admin/savings/reward",
+                      {"bank": first_bank_id, "minutes": 30, "note": "自检时段"})
+    check("时段测试前先给该学生存 30 分钟", code == 200 and
+          (res.get("saved") or {}).get("minutes") == 30,
+          str((res.get("saved") or {}).get("minutes")))
+    code, res = admin("/api/savings/release",
+                      {"minutes": 5, "target": sch_mac})
+    check("时段外不能消费（答题不受影响）",
+          code == 403 and res.get("reason") == "outside_schedule",
+          str(res.get("detail"))[:50])
+    check("时段外消费失败不影响储蓄余额",
+          admin("/api/admin/home")[1].get("students") and
+          next((x for x in admin("/api/admin/home")[1]["students"]
+                if x["bank"] == first_bank_id), {}).get("savings_minutes") == 30)
 
     code, res = admin("/api/admin/schedule", {
         "mac": sch_mac,
@@ -1569,6 +1585,39 @@ def main():
           (res.get("status") or {}).get("allowed") is True)
     code, res = start(0, target=sch_mac)
     check("时段内可以开始答题", code == 200, "HTTP %s" % code)
+    admin("/api/admin/device/wan", {"mac": sch_mac, "wan": False})
+    code, res = admin("/api/savings/release",
+                      {"minutes": 5, "target": sch_mac})
+    check("时段内可以消费", code == 200 and res.get("ok") is True and
+          res.get("minutes") == 5 and res.get("savings_minutes") == 25,
+          str(res.get("savings_minutes")))
+
+    # 时段快结束时消费：放行截到时段结束，只扣实际用到的分钟
+    _now = time.localtime()
+    _now_min = _now.tm_hour * 60 + _now.tm_min
+    if _now_min < 1436:
+        _s = max(0, _now_min - 10)
+        _e = _now_min + 3
+        _short = ["", "", "", "", "", "", ""]
+        _short[_now.tm_wday] = "%02d:%02d-%02d:%02d" % (
+            _s // 60, _s % 60, _e // 60, _e % 60)
+        admin("/api/admin/device/wan", {"mac": sch_mac, "wan": False})
+        code, res = admin("/api/admin/schedule", {
+            "mac": sch_mac,
+            "schedule": {"enabled": True, "days": _short},
+        })
+        check("可消费时段只留 3 分钟也能保存", code == 200)
+        code, res = admin("/api/savings/release",
+                          {"minutes": 25, "target": sch_mac})
+        _granted = int(res.get("minutes") or 0)
+        check("跨过时段结束的消费被截到时段结束",
+              code == 200 and res.get("ok") is True and
+              res.get("ends_hhmm") == "%02d:%02d" % (_e // 60, _e % 60) and
+              0 < _granted <= 4,
+              "granted=%s ends=%s" % (_granted, res.get("ends_hhmm")))
+        check("只扣实际用到的分钟，其余留在储蓄里",
+              res.get("savings_minutes") == 25 - _granted,
+              str(res.get("savings_minutes")))
 
     # 3.17.0：免答题自由上网时段——后台保存后 status 里 free=True
     now_lt = time.localtime()
@@ -1635,15 +1684,37 @@ def main():
     check("后台有按周时段设置弹窗与接口",
           "openSchedule" in admin_html and "/api/admin/schedule" in admin_html
           and "data-preset" in admin_html)
-    check("后台设备页显示可答题/禁止答题状态",
-          "sch-tag" in admin_html and "禁止答题" in admin_html and
+    check("后台设备页显示可消费/禁止消费状态",
+          "sch-tag" in admin_html and "禁止消费" in admin_html and
           "schChangePending" in admin_html)
     with open(os.path.join(BASE, "static", "index.html"), encoding="utf-8") as f:
         index_html = f.read()
     check("答题页处理时段外提示并到点自动刷新",
           "outside_schedule" in index_html and
           "scheduleAutoRefresh" in index_html and
-          "现在不是答题时间" in index_html)
+          "现在不在可消费时段" in index_html)
+
+    # ---- 3.50.0 时段只限制消费 ----
+    check("答题页不再按时段藏题目（3.50.0）",
+          "现在不是答题时间" not in index_html and
+          "现在不在可消费时段" in index_html and
+          "答题不限时间" in index_html)
+    check("答题页有可消费时段提示与跨时段结束的提醒弹窗",
+          'id="sav-win"' in index_html and "function winStateOf(" in index_html and
+          'id="sav-mask"' in index_html and "function openWinWarn(" in index_html and
+          "仍然释放" in index_html and "会跨过时段结束" in index_html)
+    check("后台把时段改叫「可消费时段」",
+          "可消费时段" in admin_html and "可答题时段" not in admin_html and
+          "禁止答题" not in admin_html and "可消费" in admin_html)
+    with open(os.path.join(BASE, "server.py"), encoding="utf-8") as _f:
+        _srv350 = _f.read()
+    _start_src = _srv350[_srv350.index("def _start"):_srv350.index("def _answer")]
+    check("服务端只拦消费、不拦答题（3.50.0）",
+          "时段只管「消费」，答题随时都能答" in _srv350 and
+          "outside_schedule" not in _start_src and
+          '"ends_at": st.get("ends_at")' in _srv350 and
+          "schedule.hint(st)" in _srv350,
+          "开始答题处不再有 outside_schedule")
 
     # ---- 3.49.0 时间储蓄：答题页 / 后台首页 / 服务端 ----
     check("答题页有时间储蓄卡片与消费入口",

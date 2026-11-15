@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""设备答题时段：每台设备可按周一~周日配置多个「可以答题放行」的时间段。
+"""设备消费时段：每台设备可按周一~周日配置多个「可以把时间换成上网」的时间段。
 
-两种时段（3.17.0 起每天都可以各配多个）：
-  · 答题时段            —— 可以答题，放行时长最多到本时段结束
+3.50.0 起时段不再限制答题，只限制「消费」（把储蓄里的分钟数释放成上网时间）：
+  · 消费时段            —— 可以消费放行，放行时长最多到本时段结束；答题随时都能答
   · 自由上网时段（免答题）—— 到点自动放行，不需要答题；时段结束自动恢复限制
-  · 两种时段之外         —— 不能开始答题，已有放行会被自动回收
+  · 两种时段之外         —— 不能消费（但可以照常答题攒时间），已有放行会被自动回收
   · 家长在后台手动点「放行」属于临时破例，不受时段限制
 
 自由上网时段的写法是在时间段前加 `free:`，例如 `free:18:00-19:00`；
@@ -12,7 +12,7 @@
 
 时间按服务所在时区解释（容器已设 TZ=Asia/Shanghai），
 格式 HH:MM，支持 22:00-06:00 这种跨午夜时段，00:00-24:00 表示全天。
-留空的星期 = 当天不允许答题；整周都留空 = 不限制（等同没配规则）。
+留空的星期 = 当天不允许消费；整周都留空 = 不限制（等同没配规则）。
 """
 
 import re
@@ -32,7 +32,7 @@ class ScheduleError(ValueError):
 
 
 class OutsideSchedule(Exception):
-    """当前不在允许答题的时段。"""
+    """当前不在允许消费（放行）的时段。"""
 
 
 def _minutes(text, allow_24=False):
@@ -59,7 +59,7 @@ def parse_window(raw):
     """把一个时间段规范化成 ["开始","结束"]；start>end 表示跨午夜。
 
     3.17.0 起支持免答题的「自由上网时段」：在时间段前加 `free:`，
-    返回 ["开始","结束","free"]；普通答题时段仍返回两个元素。
+    返回 ["开始","结束","free"]；普通消费时段仍返回两个元素。
     """
     kind = ""
     if isinstance(raw, str):
@@ -171,12 +171,14 @@ def _blank_state(ts, wday, minute, sched):
 
 
 def window_state(sched, ts=None):
-    """算当前时刻是否允许答题，以及状态下一次翻转的时间。
+    """算当前时刻是否允许消费，以及状态下一次翻转的时间。
+
+    3.50.0 起 allowed 只表示「能不能消费/放行」，答题不受它限制。
 
     返回字段：
-      limited/allowed/unlimited  规则状态
+      limited/allowed/unlimited  规则状态（allowed = 现在可以消费）
       ends_at / ends_hhmm        本时段结束（用于夹住放行时长）
-      next_start / next_label    下次可答题时间（给提示用）
+      next_start / next_label    下次可消费时间（给提示用）
       change_at                  下次状态翻转时刻（前端据此自动刷新）
       today_text / summary       展示用文字
     """
@@ -260,7 +262,7 @@ def _win_text(w):
 def summary(sched):
     """一周规则的可读摘要，尽量合并相同的天。"""
     if not limited(sched):
-        return "未设置（随时可答题）"
+        return "未设置（随时可消费）"
     days = sched["days"]
     parts = []
     for i in range(7):
@@ -277,21 +279,21 @@ def summary(sched):
 
 
 def hint(st):
-    """给答题页看的时段说明。"""
+    """给答题页看的时段说明（3.50.0 起这段只管消费，不管答题）。"""
     if not st or st.get("unlimited"):
         return ""
     if st.get("free"):
         return "现在是免答题自由上网时段，到 %s 结束（不用答题）" % st["free_hhmm"]
     if st.get("allowed"):
-        return "当前可答题，本时段到 %s 结束" % st["ends_hhmm"]
+        return "现在可以消费，本时段到 %s 结束" % st["ends_hhmm"]
     if st.get("next_label"):
-        return "现在不在答题时间（%s）。下次可答题：%s" % (
+        return "现在不在可消费时段（%s）。下次可消费：%s" % (
             st.get("today_text"), st["next_label"])
-    return "现在不在答题时间（%s）" % st.get("today_text")
+    return "现在不在可消费时段（%s）" % st.get("today_text")
 
 
 def clamp_expire(expire, sched, ts=None):
-    """把放行到期时间夹在本时段结束之前；时段外拒绝放行。
+    """把放行到期时间夹在本时段结束之前；时段外拒绝放行（不能消费）。
 
     自由上网时段（免答题）同样算「可放行」，放行时长也截到时段结束。
 

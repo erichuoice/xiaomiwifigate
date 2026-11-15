@@ -133,6 +133,23 @@
   .savledger b { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
   .savledger .plus { color: var(--ok); }
   .savledger .minus { color: var(--no); }
+  .savwin { font-size: 12.5px; color: var(--muted); margin-top: 6px; line-height: 1.6; }
+  .savwin b { color: var(--text); }
+  /* 3.50.0：消费会跨过时段结束时的提醒弹窗 */
+  .savmask {
+    position: fixed; inset: 0; z-index: 50; padding: 24px;
+    display: none; align-items: center; justify-content: center;
+    background: rgba(15, 23, 42, .45);
+  }
+  .savmask.show { display: flex; }
+  .savdlg {
+    width: 100%; max-width: 380px; background: #fff; border-radius: 16px;
+    padding: 20px; box-shadow: 0 20px 50px rgba(0, 0, 0, .25);
+  }
+  .savdlg h3 { margin: 0 0 8px; font-size: 17px; }
+  .savdlg p { margin: 0; font-size: 14px; color: #374151; line-height: 1.7; }
+  .savdlg .dlgbtns { display: flex; gap: 10px; margin-top: 18px; }
+  .savdlg .dlgbtns button { width: auto; flex: 1; padding: 11px; font-size: 15px; }
 
   .qtext { font-size: 18px; font-weight: 600; line-height: 1.55; margin-bottom: 16px; white-space: pre-wrap; }
 
@@ -205,6 +222,7 @@
   <div class="card savcard" id="sav-card" style="display:none">
     <div class="ptitle">时间储蓄<span class="savmode" id="sav-mode"></span></div>
     <div class="savline">现在可以消费 <b id="sav-min">0</b> 分钟</div>
+    <div class="savwin" id="sav-win"></div>
     <div class="savrow">
       <button type="button" class="savbtn" id="sav-use">消费</button>
       <button type="button" class="savbtn ghost" id="sav-reload">刷新</button>
@@ -220,6 +238,19 @@
       <p class="hint" id="sav-tip" style="margin:8px 0 0"></p>
     </div>
     <div class="savledger" id="sav-ledger"></div>
+  </div>
+
+  <!-- 3.50.0：释放会跨过本时段结束时的提醒（点「仍然释放」照常放行，到点仍会自动断网） -->
+  <div class="savmask" id="sav-mask" role="dialog" aria-modal="true"
+       aria-labelledby="sav-dlg-title">
+    <div class="savdlg">
+      <h3 id="sav-dlg-title"></h3>
+      <p id="sav-dlg-text"></p>
+      <div class="dlgbtns">
+        <button type="button" class="savbtn ghost" id="sav-dlg-cancel">取消</button>
+        <button type="button" class="savbtn" id="sav-dlg-ok">仍然释放</button>
+      </div>
+    </div>
   </div>
 
   <div id="result" class="panel"></div>
@@ -271,7 +302,7 @@
     picked: [], locked: false, busy: false, answered: false,
     next: null, tier: 0, timer: null, target: null, targetName: '',
     cdTimer: null, clockSkew: 0, schTimer: null, focus: [],
-    savings: 0, savTarget: '', savBusy: false,
+    savings: 0, savTarget: '', savBusy: false, savWin: null, savPending: 0,
     autoTimer: null          // 答对后 1 秒自动下一题的定时器
   };
   var LETTERS = 'ABCDEFGH';
@@ -373,7 +404,9 @@
     var txt;
     if (left === null) txt = '<b>已永久放行</b>';
     else if (left > 0) txt = '当前还能上网 <b>' + left + '</b> 分钟';
-    else txt = '<span class="pill off">已断网</span> 答题后即可恢复';
+    else txt = '<span class="pill off">已断网</span> ' +
+      (info.savings_mode === 'direct' ? '答题后即可恢复'
+        : '答题攒时间，消费后即可上网');
     box.innerHTML = txt;
     if (info.today_minutes > 0 || info.daily_cap_minutes > 0) {
       var pill = document.createElement('span');
@@ -415,7 +448,7 @@
         b.appendChild(fr);
       } else if (sch.limited && !sch.allowed) {
         var no = document.createElement('small');
-        no.textContent = '当前不可答题';
+        no.textContent = '当前不可消费';
         b.appendChild(no);
       }
       b.onclick = function () {
@@ -424,16 +457,10 @@
         renderTargets(info);
         renderTiers(t);
         renderSavings(t, info);
-        if (sch.limited && !sch.allowed) {
-          el('pick-card').style.display = 'none';
-          showPanel('info', '这台设备现在不是答题时间',
-            '<p>' + esc(sch.hint || '') + '</p>');
-        } else if (sch.limited && sch.free) {
-          el('pick-card').style.display = 'none';
-          showPanel('info', '这台设备现在自由上网',
+        if (sch.limited && sch.free) {
+          showPanel('info', '现在自由上网',
             '<p>' + esc(sch.hint || '') + '</p>' +
-            '<p style="font-size:12.5px;color:#6b7280">这个时段不用答题；' +
-            '到点后如果想继续上网，再来答题就行。</p>');
+            '<p style="font-size:12.5px;color:#6b7280">这个时段不用答题，也不用消费。</p>');
         } else {
           el('result').style.display = 'none';
         }
@@ -730,7 +757,24 @@
     S.schTimer = setTimeout(loadInfo, delay);
   }
 
-  /* ---------- 时间储蓄（3.49.0） ---------- */
+  /* ---------- 时间储蓄（3.49.0）+ 可消费时段（3.50.0） ---------- */
+
+  function serverNow() { return Date.now() / 1000 - S.clockSkew; }
+
+  /** 一台设备现在的消费状态：unlimited 不限 / allowed 可消费 / free 自由时段 / closed 时段外 */
+  function winStateOf(target) {
+    var sch = (target && target.schedule) || (S.info && S.info.schedule) || {};
+    if (!sch || sch.unlimited || !sch.limited) return { state: 'unlimited' };
+    if (sch.free) return { state: 'free', free: sch.free_hhmm };
+    if (sch.allowed) {
+      return {
+        state: 'allowed', ends: sch.ends_hhmm, endsAt: sch.ends_at || 0,
+        left: sch.ends_at ? Math.max(0, Math.floor(
+          (sch.ends_at - serverNow()) / 60)) : null
+      };
+    }
+    return { state: 'closed', next: sch.next_label, today: sch.today_text };
+  }
 
   function renderSavChips(min) {
     var box = el('sav-chips');
@@ -759,11 +803,29 @@
     var min = Number(target.savings_minutes || 0);
     S.savings = min;
     S.savTarget = target.mac || '';
+    var win = winStateOf(target);
+    S.savWin = win;
     card.style.display = 'block';
     el('sav-min').textContent = min;
     el('sav-mode').textContent = (info && info.savings_mode === 'direct')
       ? '（已设成答对直接放行）' : '';
-    el('sav-use').disabled = min <= 0;
+    var canUse = min > 0 && (win.state === 'allowed' || win.state === 'unlimited');
+    el('sav-use').disabled = !canUse;
+    var line;
+    if (win.state === 'free') {
+      line = '现在是免答题自由上网时段' +
+        (win.free ? '（到 ' + esc(win.free) + '）' : '') + '，不用消费';
+    } else if (win.state === 'closed') {
+      line = '现在不在可消费时段' +
+        (win.next ? '，下次可消费：<b>' + esc(win.next) + '</b>' : '') +
+        '；答题不限时间，可以先答题攒着';
+    } else if (win.state === 'allowed') {
+      line = '可消费时段到 <b>' + esc(win.ends || '') + '</b> 结束' +
+        (win.left != null ? '，本时段还能用 <b>' + win.left + '</b> 分钟' : '');
+    } else {
+      line = '随时可以消费';
+    }
+    el('sav-win').innerHTML = line;
     el('sav-picker').style.display = 'none';
     el('sav-tip').textContent = '';
     renderSavChips(min);
@@ -784,6 +846,41 @@
   function releaseSavings() {
     var minutes = Number(el('sav-custom').value || 0);
     if (!(minutes > 0)) { el('sav-tip').textContent = '请填要释放的分钟数'; return; }
+    var win = S.savWin || { state: 'unlimited' };
+    if (win.state === 'closed') {
+      el('sav-tip').textContent = '现在不在可消费时段' +
+        (win.next ? '，下次可消费：' + win.next : '');
+      return;
+    }
+    if (win.state === 'free') {
+      el('sav-tip').textContent = '现在是自由上网时段，不用消费';
+      return;
+    }
+    if (win.state === 'allowed' && win.left != null && minutes > win.left) {
+      openWinWarn(minutes, win);
+      return;
+    }
+    doRelease(minutes);
+  }
+
+  /** 3.50.0：会跨过本时段结束先提醒；坚持释放也照常放行，到点仍然自动断网。 */
+  function openWinWarn(minutes, win) {
+    S.savPending = minutes;
+    el('sav-dlg-title').textContent = '会跨过时段结束，确定释放吗？';
+    el('sav-dlg-text').innerHTML =
+      '本时段到 <b>' + esc(win.ends || '') + '</b> 结束，现在释放 <b>' + minutes +
+      '</b> 分钟，本时段只剩 <b>' + win.left + '</b> 分钟可用。' +
+      '到点设备会自动断网，只扣实际用掉的分钟，剩下的留在储蓄里。';
+    el('sav-dlg-ok').textContent = '仍然释放 ' + minutes + ' 分钟';
+    el('sav-mask').classList.add('show');
+  }
+
+  function closeWinWarn() {
+    S.savPending = 0;
+    el('sav-mask').classList.remove('show');
+  }
+
+  function doRelease(minutes) {
     if (S.savBusy) return;
     S.savBusy = true;
     el('sav-go').disabled = true;
@@ -850,23 +947,7 @@
           return;
         }
         if (data.locked_for > 0) { startLock(data.locked_for); return; }
-        // 3.17.0：免答题的自由上网时段，直接告诉孩子现在能上网、到几点
-        if (data.schedule && data.schedule.limited && data.schedule.free) {
-          showPanel('info', '现在是自由上网时段',
-            '<p>' + esc(data.schedule.hint || '') + '</p>' +
-            '<p style="font-size:12.5px;color:#6b7280">这个时段不用答题，直接能上网；' +
-            '到点后会恢复限制，到时再答题就行。</p>');
-          scheduleAutoRefresh(data.schedule);
-          return;
-        }
-        // 设备设了答题时段：时段外不展示题目，直接说明下次开放时间
-        if (data.schedule && data.schedule.limited && !data.schedule.allowed) {
-          showPanel('info', '现在不是答题时间',
-            '<p>' + esc(data.schedule.hint || '当前时段不能通过答题放行。') + '</p>' +
-            '<p style="font-size:12.5px;color:#6b7280">' +
-            esc(data.schedule.summary || '') + '</p>');
-          return;
-        }
+        // 3.50.0：设备时段只管「消费」，答题随时都能答（攒时间），所以这里不再拦。
         var list = data.targets || [];
         if ((!data.need && !data.pick_target) || !list.length) {
           showPanel('info', '这台设备不用答题',
@@ -883,23 +964,15 @@
         renderTargets(data);
         renderTiers(chosen);
         renderSavings(chosen, data);
-        var blocked = chosen.schedule && chosen.schedule.limited &&
-                      !chosen.schedule.allowed;
         var freeNow = chosen.schedule && chosen.schedule.limited &&
                       chosen.schedule.free;
         if (list.length === 1 && (chosen.tiers || []).length === 1 &&
-            !blocked && !freeNow) startTier(0);
-        if (blocked) {
-          showQuiz(false);
-          el('pick-card').style.display = 'none';
-          showPanel('info', '这台设备现在不是答题时间',
-            '<p>' + esc(chosen.schedule.hint || '') + '</p>');
-        } else if (freeNow) {
-          showQuiz(false);
-          el('pick-card').style.display = 'none';
-          showPanel('info', '这台设备现在自由上网',
+            !freeNow) startTier(0);
+        if (freeNow) {
+          showPanel('info', '现在自由上网',
             '<p>' + esc(chosen.schedule.hint || '') + '</p>' +
-            '<p style="font-size:12.5px;color:#6b7280">这个时段不用答题。</p>');
+            '<p style="font-size:12.5px;color:#6b7280">这个时段不用答题，也不用消费；' +
+            '想先把时间攒着，也可以现在答题。</p>');
         }
       })
       .catch(function () {
@@ -933,7 +1006,7 @@
       }
       if (d.reason === 'outside_schedule') {
         showQuiz(false);
-        showPanel('info', '现在不是答题时间', '<p>' + esc(d.detail || '') + '</p>');
+        showPanel('info', '现在不是可消费时段', '<p>' + esc(d.detail || '') + '</p>');
         return;
       }
       if (d.reason === 'not_managed') {
@@ -978,8 +1051,8 @@
       }
       if (d.reason === 'outside_schedule') {
         showQuiz(false);
-        showPanel('info', '答案对了，但已过答题时间',
-          '<p>' + esc(d.detail || '现在不能放行，请在允许的时段内重新答题。') + '</p>');
+        showPanel('info', '答案对了，但现在不在可消费时段',
+          '<p>' + esc(d.detail || '现在不能放行，等可消费时段再来。') + '</p>');
         return;
       }
       if (d.reason === 'not_managed') {
@@ -1111,6 +1184,15 @@
   };
   el('sav-go').onclick = releaseSavings;
   el('sav-reload').onclick = loadInfo;
+  el('sav-dlg-cancel').onclick = closeWinWarn;
+  el('sav-dlg-ok').onclick = function () {
+    var m = S.savPending;
+    closeWinWarn();
+    if (m > 0) doRelease(m);
+  };
+  el('sav-mask').onclick = function (ev) {
+    if (ev.target === el('sav-mask')) closeWinWarn();
+  };
 
   el('main').onclick = submit;
   loadInfo();

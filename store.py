@@ -5,11 +5,11 @@
   题库（bank）  一组题目 + 一组奖励档位 + 一组受控设备 MAC
   档位（tier）  答对 N 道题 → 换 M 分钟上网时间（M = 0 表示一直放行）
   设备归属      每台受控设备只属于一个题库，不同题库管不同设备
-  答题时段      每台设备按周一~周日设定「可以答题放行」的时间窗口
+  消费时段      每台设备按周一~周日设定「可以消费放行」的时间窗口（3.50.0 起不限制答题）
 
 两层配置：
   静态 config.json          端口、路由器凭证、后台密码、限流（容器里只读）
-  可变 state/runtime.json   题库 / 档位 / 设备归属 / 答题时段 / 提示语（可写、持久化）
+  可变 state/runtime.json   题库 / 档位 / 设备归属 / 消费时段 / 提示语（可写、持久化）
 
 题目字段：
   id / stage(小学|初中) / grade(年级) / subject(科目) / type(single|multi|judge)
@@ -649,7 +649,7 @@ class Store:
                 "update_auto_check": bool(s.get("update_auto_check", True)),
                 "update_auto_apply": bool(s.get("update_auto_apply", False)),
             },
-            # 每台设备的答题时段：mac → {enabled, days}，见 schedule.py
+            # 每台设备的消费时段：mac → {enabled, days}，见 schedule.py
             "schedules": {},
         }
 
@@ -900,7 +900,7 @@ class Store:
             self._write(self._runtime)
         return clean
 
-    # ---- 设备答题时段 ----
+    # ---- 设备消费时段（3.50.0 起只限制消费） ----
 
     def schedules(self):
         """全部规则（mac → 规则），供后台设备页与守护线程使用。"""

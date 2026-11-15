@@ -167,6 +167,8 @@ def schedule_public(st):
         "free": bool(st.get("free")), "free_hhmm": st.get("free_hhmm"),
         "next_label": st["next_label"], "summary": st["summary"],
         "today_text": st["today_text"], "ends_hhmm": st["ends_hhmm"],
+        # 3.50.0：答题页要用 ends_at 算「本时段还能消费多少分钟」，再决定要不要提醒
+        "ends_at": st.get("ends_at"), "next_start": st.get("next_start"),
         "change_at": st["change_at"],
     }
 
@@ -424,7 +426,7 @@ def note_wrong(ip):
 def grant(ip, mac, bank_id, bank_name, minutes, count_cap=True):
     """放行并重新计时：从现在起算本次档位时长，不在原有到期时间上叠加。
 
-    设备设了答题时段时，本次放行最多到「当前时段结束」，不会跨进禁止时段；
+    设备设了消费时段时，本次放行最多到「当前时段结束」，不会跨进禁止时段；
     若答题过程中刚好跨过时段边界，则拒绝放行（不碰路由器）。
 
     count_cap=False 用于「消费储蓄」：这些分钟在存入时已经计入每日上限，
@@ -576,7 +578,7 @@ def _sync_free_windows(grants, states, now):
 
 
 def reblock_worker():
-    """到点回收 + 时段兜底：配额用完、或进入禁止答题时段，把设备断网。"""
+    """到点回收 + 时段兜底：配额用完、或进入禁止消费时段，把设备断网。"""
     while True:
         time.sleep(REBLOCK_INTERVAL)
         try:
@@ -585,20 +587,20 @@ def reblock_worker():
                 now = time.time()
                 changed = False
 
-                # ---- 时段状态一次算好：自由上网时段 / 答题时段 / 禁止时段 ----
+                # ---- 时段状态一次算好：自由上网时段 / 可消费时段 / 禁止消费时段 ----
                 states = {mac: schedule.window_state(sched, now)
                           for mac, sched in STORE.schedules().items()}
                 # 免答题时段：到点自动放行（放行记录写到时段结束）
                 if _sync_free_windows(grants, states, now):
                     changed = True
 
-                # ---- 答题时段：进入禁止时段时，设备保持断网 ----
+                # ---- 可消费时段：进入禁止时段时，设备保持断网（答题不受影响） ----
                 for mac, st in states.items():
                     if not st["limited"]:
                         _sched_blocked.pop(mac, None)
                         continue
                     if st["allowed"]:
-                        # 自由上网 / 可答题时段：不在这里限制
+                        # 自由上网 / 可消费时段：不在这里限制
                         _sched_blocked[mac] = False
                         continue
                     rec = grants.get(mac)
@@ -614,7 +616,7 @@ def reblock_worker():
                         continue
                     try:
                         mode = restrict_mac(mac, STORE.bank_for_mac(mac),
-                                            "禁止答题时段")
+                                            "禁止消费时段")
                         _sched_blocked[mac] = True
                         rec["reblocked"] = True
                         rec["reblocked_at"] = now
@@ -1297,14 +1299,8 @@ class Handler(BaseHTTPRequestHandler):
         if not bank:
             return self._json({"ok": False, "reason": "not_managed",
                                "detail": "这台设备不在受控清单里"}, 403)
-        # 时段外的设备不能开始答题（代答同样受这台设备的规则约束）
-        st = schedule_of(mac)
-        if st["limited"] and not st["allowed"]:
-            return self._json({
-                "ok": False, "reason": "outside_schedule",
-                "detail": schedule.hint(st),
-                "schedule": schedule_public(st),
-            }, 403)
+        # 3.50.0：时段只管「消费」，答题随时都能答（攒时间）。
+        # 所以这里不再拦时段外的答题，只在答题页提示什么时候可以消费。
         try:
             tier_index = int(payload.get("tier", 0))
         except (TypeError, ValueError):
@@ -1588,7 +1584,14 @@ class Handler(BaseHTTPRequestHandler):
         if st.get("limited") and st.get("free"):
             return self._json({"ok": False, "reason": "free_window",
                                "detail": "现在是自由上网时段，不用消费储蓄",
+                               "schedule": schedule_public(st),
                                "savings_minutes": sav["minutes"]}, 409)
+        if st.get("limited") and not st.get("allowed"):
+            # 3.50.0：时段只限制消费，所以时段外答题可以、消费不行
+            return self._json({"ok": False, "reason": "outside_schedule",
+                               "detail": schedule.hint(st),
+                               "schedule": schedule_public(st),
+                               "savings_minutes": sav["minutes"]}, 403)
         left = minutes_left(load_grants().get(mac) or {})
         if left is None:
             return self._json({"ok": False, "reason": "already",
