@@ -37,9 +37,8 @@ def _save(items):
 
 def add(mac="", bank_id="", qid="", text="", note=""):
     """新增一条反馈；note 为空返回 None（没写内容就不记）。"""
+    # 3.40.0：说明可以不写（学生点一下就反馈），记空字符串即可
     note = str(note or "").strip()[:300]
-    if not note:
-        return None
     item = {
         "id": "fb_" + secrets.token_hex(4),
         "ts": int(time.time()),

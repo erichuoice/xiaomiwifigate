@@ -1137,8 +1137,6 @@ class Handler(BaseHTTPRequestHandler):
         if payload is None:
             return self._json({"ok": False, "detail": "请求格式不正确"}, 400)
         note = str(payload.get("note") or "").strip()
-        if not note:
-            return self._json({"ok": False, "detail": "请写下问题说明"}, 400)
         if len(note) > 300:
             return self._json({"ok": False, "detail": "说明太长了（最多 300 字）"}, 400)
         ip = client_ip(self)

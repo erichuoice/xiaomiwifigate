@@ -1067,6 +1067,17 @@ def main():
           code == 200 and any(f.get("id") == _fid and f.get("status") == "done"
                               for f in res.get("items") or []))
     admin("/api/admin/feedback/delete", {"id": _fid})
+    # 3.40.0：不写说明也能一键反馈
+    code, _raw_fb2 = call("/api/feedback", {"id": _qid34, "text": "无说明测试"})
+    _res2 = _maybe_json(_raw_fb2)
+    code2, _fb2 = admin("/api/admin/feedback")
+    _empty = next((f for f in (_fb2.get("items") or [])
+                   if f.get("text") == "无说明测试"), None)
+    check("学生反馈不写说明也能提交，后台能看到", code == 200 and _res2.get("ok") is True and
+          _empty is not None and (_empty.get("note") or "") == "",
+          str(_res2)[:80])
+    if _empty:
+        admin("/api/admin/feedback/delete", {"id": _empty["id"]})
 
     # 3.36.0：错题分析页（原因/学科/知识点/题型）
     _old_l3 = learning.PATH
@@ -2508,7 +2519,8 @@ def main():
           "题目反馈" in admin_html and "function loadFeedback(" in admin_html and
           "id=\"qedit-mask\"" in admin_html and
           "/api/feedback" in index_html and "这题是不是出错了" in index_html and
-          "function addDispute(" in index_html)
+          "function addDispute(" in index_html and
+          "note: ''" in index_html and "已反馈，家长会在后台看到" in index_html)
     check("学情页可按学科删除错题记录（3.39.0）",
           callable(getattr(learning, "delete_wrong_by_subject", None)) and
           "data-delsub" in admin_html and

@@ -586,43 +586,34 @@
     btn.className = 'ghost';
     btn.style.fontSize = '13px';
     btn.textContent = '这题是不是出错了？点这里反馈';
+    // 3.40.0：点一下就提交，不用写说明
     btn.onclick = function () {
-      bar.innerHTML = '';
-      var ta = document.createElement('textarea');
-      ta.rows = 2;
-      ta.placeholder = '哪里有问题？比如：答案错了 / 选项不对 / 这题还没学过';
-      ta.style.width = '100%';
-      ta.style.margin = '6px 0';
-      ta.style.fontSize = '14px';
-      var send = document.createElement('button');
-      send.type = 'button';
-      send.textContent = '提交反馈';
-      send.style.marginRight = '8px';
-      var cancel = document.createElement('button');
-      cancel.type = 'button';
-      cancel.className = 'ghost';
-      cancel.textContent = '取消';
-      cancel.onclick = function () { bar.innerHTML = ''; bar.appendChild(btn); };
-      send.onclick = function () {
-        var note = ta.value.trim();
-        if (!note) { ta.focus(); return; }
-        send.disabled = true;
-        var q = S.question || {};
-        fetch('/api/feedback', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'same-origin',
-          body: JSON.stringify({ id: q.id || '', text: q.text || '', note: note })
-        }).then(function (r) { return r.json(); }).then(function (d) {
+      if (btn.disabled) return;
+      btn.disabled = true;
+      btn.textContent = '正在提交…';
+      var q = S.question || {};
+      fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ id: q.id || '', text: q.text || '', note: '' })
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        if (d.ok) {
           bar.innerHTML = '<span style="font-size:13px;color:#0f7a5a">' +
-            (d.ok ? '已提交，家长会在后台看到，谢谢！' : esc(d.detail || '提交失败')) + '</span>';
-        }).catch(function () {
-          send.disabled = false;
+            '已反馈，家长会在后台看到，谢谢！</span>';
+        } else {
+          btn.disabled = false;
+          btn.textContent = '这题是不是出错了？点这里反馈';
           bar.insertAdjacentHTML('beforeend',
-            '<span style="color:#b03030;font-size:13px"> 提交失败，请稍后再试</span>');
-        });
-      };
-      bar.appendChild(ta); bar.appendChild(send); bar.appendChild(cancel);
+            '<span style="color:#b03030;font-size:13px"> ' +
+            esc(d.detail || '提交失败，请稍后再试') + '</span>');
+        }
+      }).catch(function () {
+        btn.disabled = false;
+        btn.textContent = '这题是不是出错了？点这里反馈';
+        bar.insertAdjacentHTML('beforeend',
+          '<span style="color:#b03030;font-size:13px"> 提交失败，请稍后再试</span>');
+      });
     };
     bar.appendChild(btn);
     fb.appendChild(bar);

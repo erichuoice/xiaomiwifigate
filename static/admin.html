@@ -2469,7 +2469,7 @@
       html += '<tr><td class="mono">' + ts + '</td>' +
         '<td>' + escHtml(f.bank_name || f.mac || '') + '</td>' +
         '<td>' + escHtml((f.text || '').slice(0, 40)) + '</td>' +
-        '<td>' + escHtml(f.note || '') + '</td>' +
+        '<td>' + (f.note ? escHtml(f.note) : '<span class="hint">（未写说明）</span>') + '</td>' +
         '<td>' + (f.status === 'open'
           ? '<span class="pill no">待处理</span>'
           : '<span class="pill ok">已处理</span>') + '</td>' +
