@@ -809,10 +809,20 @@
     el('sav-min').textContent = min;
     el('sav-mode').textContent = (info && info.savings_mode === 'direct')
       ? '（已设成答对直接放行）' : '';
-    var canUse = min > 0 && (win.state === 'allowed' || win.state === 'unlimited');
+    // 3.50.1：设备还在上网（有剩余分钟）时不能消费，先用完。
+    // remaining_minutes = null 表示「永久放行」，同样不用消费。
+    var remain = target.remaining_minutes === null
+      ? null : Number(target.remaining_minutes || 0);
+    S.savRemain = remain;
+    var canUse = min > 0 && remain === 0 &&
+      (win.state === 'allowed' || win.state === 'unlimited');
     el('sav-use').disabled = !canUse;
     var line;
-    if (win.state === 'free') {
+    if (remain === null) {
+      line = '这台设备已经永久放行，不用再消费';
+    } else if (remain > 0) {
+      line = '这台设备现在还有 <b>' + remain + '</b> 分钟，用完再消费';
+    } else if (win.state === 'free') {
       line = '现在是免答题自由上网时段' +
         (win.free ? '（到 ' + esc(win.free) + '）' : '') + '，不用消费';
     } else if (win.state === 'closed') {
@@ -846,6 +856,14 @@
   function releaseSavings() {
     var minutes = Number(el('sav-custom').value || 0);
     if (!(minutes > 0)) { el('sav-tip').textContent = '请填要释放的分钟数'; return; }
+    if (S.savRemain === null) {
+      el('sav-tip').textContent = '这台设备已经永久放行，不用再消费';
+      return;
+    }
+    if (S.savRemain > 0) {
+      el('sav-tip').textContent = '设备现在还有 ' + S.savRemain + ' 分钟，用完再消费';
+      return;
+    }
     var win = S.savWin || { state: 'unlimited' };
     if (win.state === 'closed') {
       el('sav-tip').textContent = '现在不在可消费时段' +
@@ -870,7 +888,8 @@
     el('sav-dlg-text').innerHTML =
       '本时段到 <b>' + esc(win.ends || '') + '</b> 结束，现在释放 <b>' + minutes +
       '</b> 分钟，本时段只剩 <b>' + win.left + '</b> 分钟可用。' +
-      '到点设备会自动断网，只扣实际用掉的分钟，剩下的留在储蓄里。';
+      '到点设备会自动断网，只扣本时段还能用的分钟（不足 1 分钟按 1 分钟算），' +
+      '剩下的留在储蓄里。';
     el('sav-dlg-ok').textContent = '仍然释放 ' + minutes + ' 分钟';
     el('sav-mask').classList.add('show');
   }
@@ -903,6 +922,13 @@
         }
         return;
       }
+      // 3.50.1：刷新卡片上的余额，收起选择器，避免显示旧数字
+      el('sav-min').textContent = d.savings_minutes || 0;
+      el('sav-picker').style.display = 'none';
+      el('sav-custom').value = '';
+      el('sav-use').disabled = Number(d.savings_minutes || 0) <= 0;
+      S.savings = Number(d.savings_minutes || 0);
+      S.savRemain = Number(d.remaining_minutes || 0);
       showQuiz(false);
       el('pick-card').style.display = 'none';
       showPanel('ok', '已释放 ' + d.minutes + ' 分钟',

@@ -235,6 +235,21 @@ def debit(bank_id, minutes, kind="release", reason="", by=""):
         return out
 
 
+def export_all():
+    """3.50.1：整份备份 JSON 里带上储蓄，换 NAS 恢复不会丢余额。"""
+    with _lock:
+        data = _load()
+    return {"version": VERSION, "banks": data["banks"]}
+
+
+def import_all(raw):
+    """导入备份里的 savings（没有就跳过）；返回导入的学生数。"""
+    with _lock:
+        data = _normalize(raw if isinstance(raw, dict) else {})
+        _save(data)
+        return {"banks": len(data["banks"])}
+
+
 def drop_bank(bank_id):
     """删除学生时顺手清掉他的储蓄，避免同名新学生继承旧余额。"""
     bid = str(bank_id or "").strip()

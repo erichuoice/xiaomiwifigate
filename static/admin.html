@@ -252,6 +252,7 @@
       <p class="hint">每个学生一张卡：点「进入管理」切换到他的后台页面；
         也可以直接奖励时间 —— 奖励会存进他的时间储蓄，等他在答题页点「消费」才变成上网时长。</p>
       <div id="home-cards" class="homegrid"></div>
+      <p class="hint" id="home-mode" style="display:none"></p>
       <p class="hint" id="home-tip" style="display:none"></p>
     </div>
 
@@ -3143,6 +3144,15 @@
   function renderHome(data) {
     var box = el('home-cards');
     var list = data.students || [];
+    var modeEl = el('home-mode');
+    if (modeEl) {
+      if (data.savings_mode === 'direct') {
+        modeEl.style.display = 'block';
+        modeEl.textContent = '当前设置：答对直接放行（不经过时间储蓄）；家长奖励仍会存进储蓄。';
+      } else {
+        modeEl.style.display = 'none';
+      }
+    }
     box.innerHTML = '';
     var tip = el('home-tip');
     if (!list.length) {

@@ -10,6 +10,7 @@
 测试会临时新建「自检题库」并改设置，结束时用备份接口整份还原。
 """
 
+import hashlib
 import http.cookiejar
 import json
 import os
@@ -19,6 +20,7 @@ import shutil
 import sys
 import time
 import tempfile
+import threading
 import urllib.error
 import urllib.request
 
@@ -1422,6 +1424,15 @@ def main():
         check("储蓄单元：非法分钟数被拒绝",
               savings.credit("bank_unit", 0).get("ok") is False and
               savings.debit("bank_unit", -5).get("ok") is False)
+        savings.credit("bank_unit", 33, kind="reward", reason="导出测试",
+                       count_toward_day=False)
+        _bak = savings.export_all()
+        savings.drop_bank("bank_unit")
+        _imp = savings.import_all(_bak)
+        check("储蓄单元：随整份备份导出/导入不丢余额（3.50.1）",
+              savings.state_of("bank_unit")["minutes"] == 33 and
+              _imp.get("banks") == 1,
+              str(savings.state_of("bank_unit")["minutes"]))
     finally:
         savings.PATH = _sav_real_path
         shutil.rmtree(_sav_tmp, ignore_errors=True)
@@ -1504,6 +1515,52 @@ def main():
           code == 409 and res.get("reason") == "insufficient" and
           res.get("savings_minutes") == 35, str(res.get("detail"))[:40])
 
+    # 3.50.1：并发消费必须串行，不能「少扣多放」
+    admin("/api/admin/device/wan", {"mac": mac, "wan": False})
+    _bid = test_bank.get("id", "")
+    _before = savings.state_of(_bid)["minutes"]
+    _race = {}
+
+    def _race_release(key, minutes):
+        _race[key] = admin("/api/savings/release", {"minutes": minutes},
+                           ip=IP_MAIN)
+
+    _t1 = threading.Thread(target=_race_release, args=("a", 1))
+    _t2 = threading.Thread(target=_race_release, args=("b", _before))
+    _t1.start()
+    _t2.start()
+    _t1.join()
+    _t2.join()
+    _ok = [r for r in _race.values()
+           if r[0] == 200 and (r[1] or {}).get("ok")]
+    _ok_min = sum((r[1] or {}).get("minutes") or 0 for r in _ok)
+    _after = savings.state_of(_bid)["minutes"]
+    check("并发消费只成功一次，不会少扣多放（3.50.1）",
+          len(_ok) == 1 and _before - _after == _ok_min,
+          "扣减 %s / 成功放行 %s / 成功次数 %s"
+          % (_before - _after, _ok_min, len(_ok)))
+    admin("/api/admin/device/wan", {"mac": mac, "wan": False})
+
+    # 3.50.1：孩子不能消费别的同学名下的设备
+    _other_ip = "10.%d.21.99" % SEED
+    _oh = hashlib.md5(_other_ip.encode("utf-8")).hexdigest()
+    _other_mac = "02:%s:%s:%s:%s:%s" % (_oh[0:2], _oh[2:4], _oh[4:6],
+                                        _oh[6:8], _oh[8:10])
+    code, res = admin("/api/admin/bank", {
+        "name": "跨库消费自检", "tiers": [{"questions": 1, "minutes": 10}],
+        "devices": [_other_mac],
+        "questions": [{"type": "single", "text": "跨库自检 1+1=?",
+                       "options": ["1", "2"], "answer": 1, "explain": "",
+                       "stage": "小学", "subject": "数学", "star": 1}]})
+    _other_bid = (res.get("bank") or {}).get("id") or ""
+    code, res = admin("/api/savings/release",
+                      {"minutes": 1, "target": _other_mac}, ip=IP_MAIN)
+    check("不能消费别的学生的储蓄（3.50.1）",
+          code == 403 and res.get("reason") == "other_student",
+          str(res.get("detail"))[:40])
+    if _other_bid:
+        admin("/api/admin/bank/delete", {"id": _other_bid})
+
     # 切回 direct：保持原来的「答对直接放行」
     admin("/api/admin/unlock", {})
     admin("/api/admin/settings", {"settings": {"savings_mode": "direct"}})
@@ -1561,6 +1618,14 @@ def main():
     check("时段外照样可以答题（3.50.0：时段只限制消费）",
           code == 200, res.get("detail", "")[:60])
 
+    # 3.50.1：direct 模式（答对直接放行）禁止时段不能开始答题
+    admin("/api/admin/settings", {"settings": {"savings_mode": "direct"}})
+    code, res = start(0, target=sch_mac)
+    check("direct 模式禁止时段不能开始答题（3.50.1）",
+          code == 403 and res.get("reason") == "outside_schedule",
+          str(res.get("detail"))[:50])
+    admin("/api/admin/settings", {"settings": {"savings_mode": "savings"}})
+
     # 3.50.0：消费受时段限制
     code, res = admin("/api/admin/savings/reward",
                       {"bank": first_bank_id, "minutes": 30, "note": "自检时段"})
@@ -1576,6 +1641,13 @@ def main():
           admin("/api/admin/home")[1].get("students") and
           next((x for x in admin("/api/admin/home")[1]["students"]
                 if x["bank"] == first_bank_id), {}).get("savings_minutes") == 30)
+    _code, _raw = call("/api/admin/export.json", opener=_opener)
+    _backup_now = _maybe_json(_raw)
+    _sav_bk = (_backup_now.get("savings") or {}).get("banks") or {}
+    check("整份备份 JSON 带上时间储蓄（3.50.1）",
+          isinstance(_backup_now.get("savings"), dict) and
+          (_sav_bk.get(first_bank_id) or {}).get("minutes") == 30,
+          str((_sav_bk.get(first_bank_id) or {}).get("minutes")))
 
     code, res = admin("/api/admin/schedule", {
         "mac": sch_mac,
@@ -1709,12 +1781,13 @@ def main():
     with open(os.path.join(BASE, "server.py"), encoding="utf-8") as _f:
         _srv350 = _f.read()
     _start_src = _srv350[_srv350.index("def _start"):_srv350.index("def _answer")]
-    check("服务端只拦消费、不拦答题（3.50.0）",
-          "时段只管「消费」，答题随时都能答" in _srv350 and
-          "outside_schedule" not in _start_src and
+    check("服务端只拦消费、不拦答题（3.50.0；3.50.1 起 direct 模式例外）",
+          "savings 模式答题随时都能答" in _srv350 and
+          "if earn_mode() == \"direct\":" in _start_src and
+          "outside_schedule" in _start_src and
           '"ends_at": st.get("ends_at")' in _srv350 and
           "schedule.hint(st)" in _srv350,
-          "开始答题处不再有 outside_schedule")
+          "savings 模式不拦，direct 模式保留")
 
     # ---- 3.49.0 时间储蓄：答题页 / 后台首页 / 服务端 ----
     check("答题页有时间储蓄卡片与消费入口",

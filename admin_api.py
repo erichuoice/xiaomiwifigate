@@ -22,6 +22,7 @@ import router_adapter
 import savings
 import schedule
 import feedback
+import grants
 import store
 import tizhuang
 import updater
@@ -131,10 +132,20 @@ def _home_payload(st, adapter):
         names = {}
     states = savings.all_states()
     cfg = st.snapshot()
+    mode = str(cfg["settings"].get("savings_mode", "savings"))
+    try:
+        all_grants = grants.load_grants()
+    except Exception:
+        all_grants = {}
     students = []
     for b in st.banks():
         sav = states.get(b["id"]) or {"minutes": 0, "earned_today": 0,
                                       "spent_today": 0, "ledger": []}
+        # 3.50.1：直接放行模式下今日所得记在 grants 里，首页也要算上
+        g_today = 0
+        for m in b.get("devices") or []:
+            g_today = max(g_today, grants.granted_today(all_grants.get(m) or {}))
+        earned = max(int(sav.get("earned_today") or 0), g_today)
         students.append({
             "bank": b["id"],
             "name": b["name"],
@@ -147,7 +158,7 @@ def _home_payload(st, adapter):
             "devices": [{"mac": m, "name": names.get(m, "")}
                         for m in (b.get("devices") or [])],
             "savings_minutes": sav["minutes"],
-            "earned_today": sav["earned_today"],
+            "earned_today": earned,
             "spent_today": sav["spent_today"],
             "ledger": sav["ledger"],
         })
@@ -155,7 +166,7 @@ def _home_payload(st, adapter):
         "ok": True,
         "students": students,
         "server_now": time.time(),
-        "savings_mode": cfg["settings"].get("savings_mode", "savings"),
+        "savings_mode": mode,
         "daily_cap_minutes": int(cfg["settings"].get("daily_cap_minutes", 0) or 0),
     }
 
@@ -408,14 +419,22 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
 
     if path == "/api/admin/backup/import" and method == "POST":
         data = _body(raw)
+        payload = data.get("data") or data
         try:
-            summary = st.import_all(data.get("data") or data)
+            summary = st.import_all(payload)
         except store.StoreError as exc:
             return 400, {"ok": False, "detail": str(exc)}, None
-        return 200, {"ok": True, "summary": summary, "banks": st.banks()}, None
+        # 3.50.1：备份里有储蓄就一起恢复；旧备份没有就保留现有余额
+        saved = None
+        if isinstance(payload.get("savings"), dict):
+            saved = savings.import_all(payload["savings"])
+        return 200, {"ok": True, "summary": summary, "banks": st.banks(),
+                     "savings": saved}, None
 
     if path == "/api/admin/export.json" and method == "GET":
-        body = json.dumps(st.export_all(), ensure_ascii=False, indent=2)
+        payload = st.export_all()
+        payload["savings"] = savings.export_all()   # 3.50.1：整份备份带储蓄
+        body = json.dumps(payload, ensure_ascii=False, indent=2)
         return 200, Raw(body, "application/json; charset=utf-8",
                         "wifi-gate-backup.json"), None
 
