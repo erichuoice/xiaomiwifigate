@@ -34,6 +34,21 @@
   .qedit { background:var(--card); border-radius:14px; width:100%; max-width:620px;
     max-height:88vh; overflow:auto; padding:18px; }
   .qedit textarea, .qedit input { width:100%; }
+  /* 3.37.2：错题分析列表排版（原来太挤） */
+  .mk-item { border:1px solid var(--line); border-radius:10px; padding:12px 14px;
+    margin:10px 0; background:#fff; }
+  .mk-head { display:flex; gap:8px; align-items:flex-start; margin-bottom:6px; }
+  .mk-badge { flex:0 0 auto; background:var(--nosoft); color:var(--no);
+    border-radius:99px; padding:2px 9px; font-size:12px; font-weight:600; }
+  .mk-text { flex:1; font-weight:600; line-height:1.55; word-break:break-word; }
+  .mk-opt { display:block; padding:3px 0 3px 4px; font-size:13.5px; line-height:1.5; }
+  .mk-opt.ok { color:var(--ok); font-weight:600; }
+  .mk-line { margin-top:8px; font-size:13px; color:var(--muted); line-height:1.65; }
+  .mk-line b { color:var(--ok); }
+  .mk-meta { margin-top:10px; display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+  .mk-meta .pill { margin:0; }
+  .mk-row { padding:7px 0; border-bottom:1px dashed var(--line); font-size:13.5px; }
+  .mk-row:last-child { border-bottom:0; }
   .objswitch select { width:auto; padding:6px 10px; font-size:13px; }
   .tabs { display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap; }
   .tabs button { flex:1 1 92px; padding:10px 4px; }
@@ -2328,24 +2343,24 @@
     var causes = d.causes || [];
     el('mk-causes').innerHTML = causes.length
       ? causes.map(function (c) {
-          return '<div class="wrong-line">· ' + escHtml(c) + '</div>';
+          return '<div class="mk-row">· ' + escHtml(c) + '</div>';
         }).join('')
       : '<p class="hint">没有明显集中的错题，保持练习即可。</p>';
 
     var html = '';
     (d.subjects || []).forEach(function (x) {
-      html += '<div class="wrong-line"><b>' + escHtml(x.subject) + '</b>　错题 ' +
+      html += '<div class="mk-row"><b>' + escHtml(x.subject) + '</b>　错题 ' +
         x.wrong_count + '　待复习 ' + x.due +
         (x.accuracy == null ? '' : '　正确率 ' + Math.round(x.accuracy * 100) + '%') +
         '</div>';
     });
     (d.topics || []).slice(0, 15).forEach(function (t) {
-      html += '<div class="wrong-line"><span class="pill">知识点</span>' +
+      html += '<div class="mk-row"><span class="pill">知识点</span>' +
         escHtml(t.topic) + '　错 ' + t.wrong_count + ' 次' +
         (t.due ? '　<span class="pill no">待复习</span>' : '') + '</div>';
     });
     (d.types || []).forEach(function (t) {
-      html += '<div class="wrong-line"><span class="pill">' + escHtml(t.name) +
+      html += '<div class="mk-row"><span class="pill">' + escHtml(t.name) +
         '</span> ' + t.count + ' 道</div>';
     });
     el('mk-breakdown').innerHTML = html || '<p class="hint">还没有错题数据。</p>';
@@ -2362,21 +2377,24 @@
         var correct = Array.isArray(it.answer)
           ? (it.answer || []).indexOf(i) >= 0
           : it.answer === i;
-        return '<span class="' + (correct ? 'pill ok' : 'pill') + '">' +
-          String.fromCharCode(65 + i) + '. ' + escHtml(String(o).slice(0, 40)) +
-          '</span>';
-      }).join(' ');
+        return '<div class="mk-opt' + (correct ? ' ok' : '') + '">' +
+          String.fromCharCode(65 + i) + '. ' + escHtml(String(o)) +
+          (correct ? '　✓' : '') + '</div>';
+      }).join('');
       var tag = it.due ? '<span class="pill no">该复习了</span>'
                        : (it.due_at ? '<span class="pill">已安排复习</span>' : '');
-      return '<div class="wrong-line">' +
-        '<b>错 ' + it.count + ' 次</b>　' + escHtml(it.text) +
-        (opts ? '<br>' + opts : '') +
-        '<br><span class="hint">答案：' + escHtml(answerTextOf(it)) +
-        (it.explain ? '　解析：' + escHtml(it.explain) : '') + '</span>' +
-        '<br><span class="pill">' + escHtml(it.topic || '知识点未标注') + '</span>' +
+      return '<div class="mk-item">' +
+        '<div class="mk-head"><span class="mk-badge">错 ' + it.count + ' 次</span>' +
+        '<div class="mk-text">' + escHtml(it.text) + '</div></div>' +
+        (opts ? '<div class="mk-opts">' + opts + '</div>' : '') +
+        '<div class="mk-line">答案：<b>' + escHtml(answerTextOf(it)) + '</b>' +
+        (it.explain ? '　解析：' + escHtml(it.explain) : '') + '</div>' +
+        '<div class="mk-meta">' +
+        '<span class="pill">' + escHtml(it.topic || '知识点未标注') + '</span>' +
         (it.chapter ? '<span class="pill">' + escHtml(it.chapter) + '</span>' : '') + tag +
-        ' <button class="mini ghost" data-mkedit="' + escHtml(it.qid) + '">编辑题目</button>' +
-        '</div>';
+        '<button class="mini ghost" data-mkedit="' + escHtml(it.qid) +
+        '" style="margin-left:auto">编辑题目</button>' +
+        '</div></div>';
     }).join('');
     Array.prototype.forEach.call(el('mk-list').querySelectorAll('button[data-mkedit]'), function (b) {
       b.onclick = function () {

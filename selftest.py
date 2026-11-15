@@ -2465,6 +2465,11 @@ def main():
           "按模式走会漏清" in server_html)
 
     # ---- 3.20.0 导航按「管理对象」组织 ----
+    check("错题分析列表改成卡片式排版（3.37.2）",
+          ".mk-item {" in admin_html and ".mk-badge {" in admin_html and
+          ".mk-opt {" in admin_html and ".mk-meta {" in admin_html and
+          'class="mk-item"' in admin_html and 'class="mk-badge"' in admin_html and
+          'class="mk-opt' in admin_html)
     check("错题分析页 + 学生错题本入口 + 换题回到顶部（3.36.0）",
           "function loadMistakes(" in admin_html and
           "function renderMistakes(" in admin_html and
