@@ -2237,6 +2237,7 @@
         '">编辑</button></div>';
     }).join('') : '<p class="hint">没有错题记录。</p>';
     box.innerHTML = html;
+    collectNotes(box);
     Array.prototype.forEach.call(box.querySelectorAll('button[data-qedit]'), function (b) {
       b.onclick = function () {
         openQuestionEditor(b.getAttribute('data-qedit'), currentBankId);
@@ -3340,13 +3341,58 @@
   };
 
   // 3.44.0：注解统一收进「标题旁的小 i 图标」，点击才展开，页面只留正文
+  function addInfoPanel(heading, nodes) {
+    if (!nodes || !nodes.length) return;
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'info-btn';
+    btn.title = '说明';
+    btn.textContent = 'i';
+    heading.appendChild(btn);
+    var panel = document.createElement('div');
+    panel.className = 'notes-panel';
+    // 放在这一节内容之后、下一个标题之前，展开时不会跑到正文上面
+    var ref = heading.nextElementSibling;
+    while (ref && !/^H[23]$/.test(ref.tagName)) ref = ref.nextElementSibling;
+    heading.parentNode.insertBefore(panel, ref);
+    nodes.forEach(function (n) { panel.appendChild(n); });
+    btn.onclick = function () {
+      panel.classList.toggle('open');
+      btn.className = panel.classList.contains('open')
+        ? 'info-btn on' : 'info-btn';
+    };
+  }
+
+  // 把 root 里每个标题后面的「说明类」p.hint 收进该标题的 i 图标下。
+  // 带 id 的是动态状态/结果行，必须一直可见，不收。
+  function collectNotes(root) {
+    if (!root) return;
+    var sections = [], cur = null;
+    Array.prototype.slice.call(root.children).forEach(function (node) {
+      if (!node.tagName) return;
+      var tag = node.tagName.toUpperCase();
+      if (tag === 'H2' || tag === 'H3') {
+        cur = { heading: node, nodes: [] };
+        sections.push(cur);
+        return;
+      }
+      if (!cur) return;
+      if ((node.tagName === 'P' || node.tagName === 'DIV') &&
+          node.classList && node.classList.contains('hint') && !node.id) {
+        cur.nodes.push(node);
+      }
+    });
+    sections.forEach(function (sec) {
+      if (sec.nodes.length) addInfoPanel(sec.heading, sec.nodes);
+    });
+  }
+
   function buildInfoPanels() {
     var SPECIAL = { 'bank-progress-box': 1, 'tz-status-box': 1, 'ai-scope-box': 1 };
     Array.prototype.forEach.call(document.querySelectorAll('.card'), function (card) {
       if (card.id === 'login') return;
-      var kids = Array.prototype.slice.call(card.children);
       var sections = [], cur = null;
-      kids.forEach(function (node) {
+      Array.prototype.slice.call(card.children).forEach(function (node) {
         if (!node.tagName) return;
         var tag = node.tagName.toUpperCase();
         if (tag === 'H2' || tag === 'H3') {
@@ -3363,30 +3409,13 @@
           if (node.parentNode) node.parentNode.removeChild(node);
           return;
         }
-        // 只收「静态说明」；带 id 的是动态状态/结果行，必须一直可见
         if ((node.tagName === 'P' || node.tagName === 'DIV') &&
             node.classList && node.classList.contains('hint') && !node.id) {
           cur.nodes.push(node);
         }
       });
       sections.forEach(function (sec) {
-        if (!sec.nodes.length) return;
-        var heading = sec.heading;
-        var btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'info-btn';
-        btn.title = '说明';
-        btn.textContent = 'i';
-        heading.appendChild(btn);
-        var panel = document.createElement('div');
-        panel.className = 'notes-panel';
-        heading.parentNode.insertBefore(panel, heading.nextSibling);
-        sec.nodes.forEach(function (n) { panel.appendChild(n); });
-        btn.onclick = function () {
-          panel.classList.toggle('open');
-          btn.className = panel.classList.contains('open')
-            ? 'info-btn on' : 'info-btn';
-        };
+        if (sec.nodes.length) addInfoPanel(sec.heading, sec.nodes);
       });
     });
   }

@@ -2541,6 +2541,14 @@ def main():
           "这里只显示<b>当前管理对象</b>的反馈" in admin_html and
           "loadFeedback()" in admin_html and
           "/api/admin/feedback' + (bid ?" in admin_html)
+    check("动态生成的说明也会收进小 i 图标（3.45.0）",
+          "function addInfoPanel(" in admin_html and
+          "function collectNotes(" in admin_html and
+          "collectNotes(box);" in admin_html and
+          "只显示当前还有错题的学科" in admin_html and
+          "最需要加强" in admin_html and
+          "heading.nextElementSibling" in admin_html and
+          "while (ref && !/^H[23]$/.test(ref.tagName))" in admin_html)
     check("说明小 i 图标点一次就展开（3.44.1）",
           ".notes-panel.open { display:block; }" in admin_html and
           "panel.classList.toggle('open');" in admin_html and
