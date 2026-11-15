@@ -2574,6 +2574,14 @@ def main():
           'id="open-settings"' in admin_html and
           "switchTab('settings')" in admin_html,
           "题目卡片结束@%s，导入@%s" % (_qs_end, admin_html.index('id="imp-text"')))
+    _learn_end = _card_end(admin_html, '<div id="tab-learning"')
+    check("错题分析卡片是独立页签、不嵌在学习情况卡片里（3.37.1）",
+          'id="tabbtn-mistakes"' in admin_html and
+          'id="tab-mistakes"' in admin_html and
+          admin_html.index('id="tab-mistakes"') > _learn_end and
+          "if (name === 'mistakes') loadMistakes();" in admin_html,
+          "学习情况卡片结束@%s，错题分析卡片@%s"
+          % (_learn_end, admin_html.index('id="tab-mistakes"')))
 
     # ---- 3.19.0 错题本下载 ----
     check("学情页有错题本下载入口",
