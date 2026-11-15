@@ -474,6 +474,20 @@
     return (t && t.pass_rule) || (S.info && S.info.pass_rule) || {};
   }
 
+  /** 3.50.7：每个档位可以有自己的放行规则（严格全对 / 正确率+加题）。 */
+  function tierRule(t, tier) {
+    return (tier && tier.pass_rule) || ruleOf(t);
+  }
+
+  function tiersVary(t) {
+    var seen = {};
+    (t.tiers || []).forEach(function (tier) {
+      var r = tierRule(t, tier);
+      seen[(r.mode || 'rate') + ':' + (r.rate || 80) + ':' + (r.add || 0)] = 1;
+    });
+    return Object.keys(seen).length > 1;
+  }
+
   function passRuleText(t) {
     var rule = ruleOf(t);
     if (rule.mode === 'strict')
@@ -506,10 +520,12 @@
           ? '答对后的时间会先存进储蓄，点「消费」才变成上网时间。'
           : '答对后将放行「' + label(t) + '」。')
       : '';
-    el('pick-desc').textContent = who + passRuleText(t) + ' ' + limitText(t);
-    var rule = ruleOf(t);
+    el('pick-desc').textContent = who +
+      (tiersVary(t) ? '各档位的放行规则不同，以档位说明为准。' : passRuleText(t)) +
+      ' ' + limitText(t);
     var saveTime = earnMode() === 'savings';
     (t.tiers || []).forEach(function (tier, i) {
+      var rule = tierRule(t, tier);
       var b = document.createElement('button');
       b.type = 'button';
       b.className = 'tier';

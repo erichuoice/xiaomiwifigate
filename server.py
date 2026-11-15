@@ -216,8 +216,8 @@ def start_round(ip, mac, bank, tier_index):
         "bank_id": bank["id"], "bank_name": bank["name"], "mac": mac,
         "tier": tier_index, "minutes": int(tier["minutes"]),
         "questions": questions, "focus": focus,
-        # 本轮采用题库自己的放行规则；开答后后台改了规则也不会打断这一轮
-        "pass_rule": pass_rule(bank),
+        # 3.50.7：本轮采用「这个档位」的放行规则；开答后后台改了规则也不打断
+        "pass_rule": tier_pass_rule(bank, tier_index),
         "idx": 0, "results": [], "ts": time.time(),
     }
     with _mutex:
@@ -282,6 +282,27 @@ def pass_rule(bank=None):
         rate_v, add_v = int(rate), int(add)
     except (TypeError, ValueError):
         rate_v, add_v = 80, 2
+    return {"mode": "strict" if mode == "strict" else "rate",
+            "rate": rate_v, "add": max(0, add_v)}
+
+
+def tier_pass_rule(bank, tier_index):
+    """3.50.7：取某个奖励档位的放行规则；档位没配就回落到题库默认。"""
+    base = pass_rule(bank)
+    try:
+        tier = bank["tiers"][int(tier_index)]
+    except (KeyError, IndexError, TypeError, ValueError):
+        return base
+    if not isinstance(tier, dict):
+        return base
+    mode = str(tier.get("pass_mode") or base["mode"]).strip().lower()
+    rate = tier.get("pass_rate_percent")
+    add = tier.get("wrong_add_questions")
+    try:
+        rate_v = int(rate) if rate is not None else base["rate"]
+        add_v = int(add) if add is not None else base["add"]
+    except (TypeError, ValueError):
+        rate_v, add_v = base["rate"], base["add"]
     return {"mode": "strict" if mode == "strict" else "rate",
             "rate": rate_v, "add": max(0, add_v)}
 

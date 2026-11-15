@@ -192,8 +192,13 @@ def validate_questions(raw, allow_empty=False):
 
 # ---------------------------------------------------------------- 档位校验
 
-def validate_tiers(raw, total_questions, fallback_minutes=60, strict=True):
-    """奖励档位：[{questions: 3, minutes: 30}, ...]，按题数升序去重。"""
+def validate_tiers(raw, total_questions, fallback_minutes=60, strict=True,
+                   pass_default=None):
+    """奖励档位：[{questions: 3, minutes: 30, pass_mode...}, ...]，按题数升序去重。
+
+    3.50.7：每个档位可以带自己的放行规则（严格全对 / 正确率 + 答错加题），
+    没带的档位沿用 pass_default（题库默认规则），保存时补齐成显式字段。
+    """
     if not raw:
         raw = [{"questions": min(3, max(1, total_questions or 3)),
                 "minutes": int(fallback_minutes)}]
@@ -230,7 +235,20 @@ def validate_tiers(raw, total_questions, fallback_minutes=60, strict=True):
                 raise StoreError("有重复的档位：%s 道题" % qn)
             continue
         seen.add(qn)
-        out.append({"questions": qn, "minutes": mins})
+        # 3.50.7：只有档位显式写了规则才落盘；没写的继续跟题库默认规则走，
+        # 这样后台（或脚本）改题库级规则时，没单独配过的档位仍会生效。
+        has_rule = any(k in t for k in ("pass_mode", "pass_rate_percent",
+                                        "wrong_add_questions"))
+        item = {"questions": qn, "minutes": mins}
+        if has_rule:
+            tier_rule = validate_pass_rule(
+                {k: t.get(k) for k in ("pass_mode", "pass_rate_percent",
+                                       "wrong_add_questions")},
+                pass_default)
+            item.update({"pass_mode": tier_rule["pass_mode"],
+                         "pass_rate_percent": tier_rule["pass_rate_percent"],
+                         "wrong_add_questions": tier_rule["wrong_add_questions"]})
+        out.append(item)
     if not out:
         raise StoreError("至少设置一档奖励")
     out.sort(key=lambda t: t["questions"])
@@ -394,14 +412,15 @@ def validate_bank(data, strict=True, pass_default=None, limit_default=None,
     if not name:
         raise StoreError("题库名称不能为空")
     questions = validate_questions(data.get("questions") or [], allow_empty=False)
-    tiers = validate_tiers(data.get("tiers"), len(questions), strict=strict)
+    # 放行规则存在题库上：老题库没有这几个字段时沿用传进来的默认值
+    # （升级时由全局设置填充，保证原本的开关原样保留）。
+    rule = validate_pass_rule(data, pass_default)
+    tiers = validate_tiers(data.get("tiers"), len(questions), strict=strict,
+                           pass_default=rule)
     devices = validate_macs(data.get("devices") or [])
     bid = str(data.get("id") or "").strip() or ("bank_" + secrets.token_hex(3))
     if not BANK_ID_RE.match(bid):
         raise StoreError("题库 ID 不合法（只能是字母、数字、下划线、短横线）")
-    # 放行规则存在题库上：老题库没有这几个字段时沿用传进来的默认值
-    # （升级时由全局设置填充，保证原本的开关原样保留）。
-    rule = validate_pass_rule(data, pass_default)
     limit = validate_limit_rule(data, limit_default)
     scope = validate_scope(data, scope_default)
     return {
@@ -787,12 +806,25 @@ class Store:
                                if b.get("wrong_add_questions") is not None
                                else DEFAULT_PASS_RULE["wrong_add_questions"]),
                 }
+                tiers_public = []
+                for t in b["tiers"]:
+                    item = copy.deepcopy(t)
+                    item["pass_rule"] = {
+                        "mode": item.get("pass_mode") or rule["mode"],
+                        "rate": int(item.get("pass_rate_percent")
+                                    if item.get("pass_rate_percent") is not None
+                                    else rule["rate"]),
+                        "add": int(item.get("wrong_add_questions")
+                                   if item.get("wrong_add_questions") is not None
+                                   else rule["add"]),
+                    }
+                    tiers_public.append(item)
                 for mac in b["devices"]:
                     out.append({
                         "mac": mac,
                         "bank_id": b["id"],
                         "bank_name": b["name"],
-                        "tiers": copy.deepcopy(b["tiers"]),
+                        "tiers": tiers_public,
                         "pass_rule": dict(rule),
                         "limit_mode": b.get("limit_mode") or DEFAULT_LIMIT["limit_mode"],
                         "throttle_kbps": int(b.get("throttle_kbps")
@@ -941,8 +973,9 @@ class Store:
         """题库变大/变小后，收掉已答不到的档位，至少保留一档。"""
         out = [t for t in tiers if t["questions"] <= total]
         if not out:
-            out = [{"questions": min(3, max(1, total)),
-                    "minutes": (tiers[0]["minutes"] if tiers else 60)}]
+            base = dict(tiers[0]) if tiers else {"minutes": 60}
+            base["questions"] = min(3, max(1, total))
+            out = [base]
         return out
 
     def apply_questions(self, bank_id, questions, mode="append"):

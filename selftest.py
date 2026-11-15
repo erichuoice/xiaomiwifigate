@@ -750,6 +750,74 @@ def main():
         "settings": {"admin_trusted": [], "daily_cap_minutes": orig_cap,
                      "note": orig_settings["note"]}})
 
+    # 3.50.7：每个档位可以各配放行规则
+    _pt_ip = "10.%d.21.66" % SEED
+    _ph = hashlib.md5(_pt_ip.encode("utf-8")).hexdigest()
+    _pt_mac = "02:%s:%s:%s:%s:%s" % (_ph[0:2], _ph[2:4], _ph[4:6],
+                                     _ph[6:8], _ph[8:10])
+    _pt_bank = {
+        "name": "档位规则自检",
+        "tiers": [
+            {"questions": 1, "minutes": 30, "pass_mode": "strict"},
+            {"questions": 2, "minutes": 60, "pass_mode": "rate",
+             "pass_rate_percent": 70, "wrong_add_questions": 0},
+        ],
+        "devices": [_pt_mac],
+        "questions": [
+            {"type": "single", "text": "档位规则自检：1+1=?", "options": ["2", "3"],
+             "answer": 0, "explain": "", "stage": "小学", "subject": "数学",
+             "star": 1},
+            {"type": "single", "text": "档位规则自检：2+2=?", "options": ["3", "4"],
+             "answer": 1, "explain": "", "stage": "小学", "subject": "数学",
+             "star": 1},
+        ],
+    }
+    code, res = admin("/api/admin/bank", _pt_bank)
+    _pt_id = (res.get("bank") or {}).get("id", "")
+    _pt_tiers = (res.get("bank") or {}).get("tiers") or []
+    check("每个奖励档位可各配放行规则（3.50.7）",
+          code == 200 and len(_pt_tiers) == 2 and
+          _pt_tiers[0].get("pass_mode") == "strict" and
+          _pt_tiers[1].get("pass_mode") == "rate" and
+          _pt_tiers[1].get("pass_rate_percent") == 70,
+          str([(t.get("pass_mode"), t.get("pass_rate_percent"))
+               for t in _pt_tiers]))
+    code, quiz = admin("/api/quiz")
+    _tg = next((t for t in quiz.get("targets") or []
+                if t.get("mac") == _pt_mac), {})
+    check("答题页下发的档位带各自规则（3.50.7）",
+          ((_tg.get("tiers") or [{}])[0].get("pass_rule") or {}).get("mode")
+          == "strict" and
+          ((_tg.get("tiers") or [{}, {}])[1].get("pass_rule") or {}).get("rate")
+          == 70)
+    _pt_ans = {q["id"]: q["answer"] for q in (res.get("bank") or {}).get("questions") or []}
+    code, rnd = start(0, target=_pt_mac)
+    _q = rnd.get("question") or {}
+    _right = _pt_ans.get(_q.get("id"), 0)
+    _wrong = [i for i in range(len(_q.get("options") or []))
+              if i != (_right[0] if isinstance(_right, list) else _right)][0]
+    code, fb = answer(_q.get("id"), [_wrong])
+    check("档位规则：strict 档答错一轮不通过（3.50.7）",
+          fb.get("done") is True and fb.get("all_correct") is False,
+          str({k: fb.get(k) for k in ("done", "all_correct")}))
+    code, rnd = start(1, target=_pt_mac)
+    _last = {}
+    for _ in range(2):
+        _q = rnd.get("question") or {}
+        if not _q:
+            break
+        _a = _pt_ans.get(_q.get("id"), 0)
+        code, _last = answer(_q.get("id"), _a if isinstance(_a, list) else [_a])
+        rnd = _last
+        if _last.get("done"):
+            break
+    check("档位规则：rate 档按自己的阈值通过（3.50.7）",
+          _last.get("done") is True and _last.get("all_correct") is True and
+          _last.get("pass_rate_percent") == 70,
+          str({k: _last.get(k) for k in ("done", "all_correct", "pass_rate_percent")}))
+    if _pt_id:
+        admin("/api/admin/bank/delete", {"id": _pt_id})
+
     # ---- 3.12.0 正确率放行：答错当场加题 + 达标放行（配在题库上）----
     code, res = set_pass_rule(pass_mode="rate", pass_rate_percent=80,
                               wrong_add_questions=2)
@@ -1877,6 +1945,14 @@ def main():
           "rewardPresets" in admin_html and
           "select[data-preset]" in admin_html and
           "奖惩时间" in admin_html and 'min="-1440"' in admin_html)
+    check("后台每档有独立放行规则控件（3.50.7）",
+          "tier-rule" in admin_html and "pass_mode" in admin_html and
+          "答错加" in admin_html and
+          "tiers[i].pass_rate_percent = rule.rate" in admin_html)
+    check("答题页按档位显示各自放行规则（3.50.7）",
+          "function tierRule(" in index_html and
+          "function tiersVary(" in index_html and
+          "tierRule(t, tier)" in index_html)
     check("首页设备状态有倒计时（上网中显示剩余时间）（3.50.6）",
           "function startHomeTicker(" in admin_html and
           "function devStateHtml(" in admin_html and
@@ -2795,8 +2871,10 @@ def main():
           str(admin_html.count("请至少勾选一个科目")))
 
     # ---- 3.12.0 放行规则：按题库配置（答错加题 + 正确率达标）----
-    check("放行规则三条配置放在「题库」页签，不再是全局设置",
-          "放行规则<span class=\"count\">只对本题库生效</span>" in admin_html and
+    check("放行规则放在「题库」页签，且每档可单独设置，不再是全局设置",
+          "放行规则<span class=\"count\">每个档位单独设置</span>" in admin_html and
+          'id="tier-list"' in admin_html and
+          "tier-rule" in admin_html and
           all(w in admin_html for w in
               ('id="bank-pass-mode"', 'id="bank-pass-rate"',
                'id="bank-wrong-add"',
