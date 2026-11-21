@@ -62,6 +62,27 @@ def add(mac="", bank_id="", qid="", text="", note=""):
     return item
 
 
+def get(fid):
+    fid = str(fid or "").strip()
+    if not fid:
+        return None
+    with _lock:
+        return next((x for x in _load() if x.get("id") == fid), None)
+
+
+def set_analysis_error(fid, text):
+    """3.50.9：AI 审核失败/未配置时，把原因记在反馈上（不阻塞学生反馈）。"""
+    fid = str(fid or "").strip()
+    with _lock:
+        items = _load()
+        hit = next((x for x in items if x.get("id") == fid), None)
+        if hit is None:
+            return False
+        hit["analysis_error"] = str(text or "").strip()[:300]
+        _save(items)
+        return True
+
+
 def listing(status=None, bank=None):
     with _lock:
         items = _load()

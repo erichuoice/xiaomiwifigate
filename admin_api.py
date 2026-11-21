@@ -8,6 +8,7 @@
 import csv
 import io
 import json
+import threading
 import re
 import time
 from urllib.parse import parse_qs, urlparse
@@ -23,6 +24,8 @@ import savings
 import schedule
 import feedback
 import grants
+import qa_audit
+import qa_review
 import store
 import tizhuang
 import updater
@@ -764,11 +767,35 @@ def dispatch(st, adapter, method, path, headers, raw, peer):
     if path == "/api/admin/feedback" and method == "GET":
         bid = str((query.get("bank") or [""])[0]).strip()
         items = feedback.listing(bank=bid or None)
-        known = {b["id"]: b["name"] for b in st.banks()}
+        banks = st.banks()
+        known = {b["id"]: b["name"] for b in banks}
+        qmap = {b["id"]: {q["id"] for q in b.get("questions") or []}
+                for b in banks}
         for item in items:
             item["bank_name"] = known.get(item.get("bank_id") or "", "")
+            audit = qa_audit.get(item.get("qid") or "")
+            item["audit"] = audit
+            # 题目是否还在题库里（AI 判定答案有误时会自动删题）
+            item["q_exists"] = bool(
+                item.get("qid") and
+                item.get("qid") in qmap.get(item.get("bank_id") or "", set()))
+            item["ai_deleted"] = bool(audit and audit.get("deleted"))
         return 200, {"ok": True, "items": items,
                      "open": sum(1 for x in items if x.get("status") == "open")}, None
+
+    if path == "/api/admin/feedback/reanalyze" and method == "POST":
+        data = _body(raw)
+        fid = str(data.get("id") or "").strip()
+        if not feedback.get(fid):
+            return 404, {"ok": False, "detail": "反馈不存在"}, None
+        # 3.50.9：强制重新送 AI 审核（清掉旧缓存）；后台线程跑，不卡页面
+        try:
+            threading.Thread(target=qa_review.review_feedback,
+                             args=(st, fid), kwargs={"force": True},
+                             daemon=True).start()
+        except Exception as exc:
+            return 500, {"ok": False, "detail": "启动分析失败：%s" % exc}, None
+        return 200, {"ok": True, "queued": True}, None
 
     if path == "/api/admin/feedback/resolve" and method == "POST":
         data = _body(raw)

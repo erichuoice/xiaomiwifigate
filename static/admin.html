@@ -184,6 +184,12 @@
     background:var(--soft); color:var(--accent); margin-right:4px; white-space:nowrap; }
   .pill.no { background:var(--nosoft); color:var(--no); }
   .pill.ok { background:var(--oksoft); color:var(--ok); }
+  .pill.warn { background:#fff6e5; color:#8a5a00; }
+  .fbaud { margin-top:4px; }
+  .fbaud summary { cursor:pointer; color:var(--accent); font-size:12px; }
+  .fbaud .fbtxt { margin-top:4px; max-width:420px; white-space:pre-wrap;
+    font-size:12px; color:#444; background:#fafbfc; border-left:2px solid var(--line);
+    padding:6px 8px; border-radius:4px; }
   .stat { display:inline-block; min-width:96px; margin:0 12px 8px 0; font-size:13px; }
   .stat b { display:block; font-size:19px; font-weight:600; }
   .learncard { border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:9px; }
@@ -2645,6 +2651,42 @@
 
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
 
+  function aiAuditCell(f) {
+    var a = f.audit;
+    if (!a) {
+      if (f.analysis_error) {
+        return '<span class="pill warn">未分析</span>' +
+          '<div class="hint" style="margin-top:4px">' +
+          escHtml(f.analysis_error) + '</div>';
+      }
+      return '<span class="pill">未送审</span>';
+    }
+    if (a.status === 'pending') return '<span class="pill warn">分析中…</span>';
+    var label = '分析失败', cls = 'warn';
+    if (a.status === 'ok') { label = '答案正确 · 保留'; cls = 'ok'; }
+    else if (a.status === 'bad') {
+      label = a.deleted ? '答案有误 · 已删题' : '答案有误 · 删题失败';
+      cls = a.deleted ? 'no' : 'warn';
+    } else if (a.status === 'gone') { label = '题目已不存在'; cls = 'warn'; }
+    var html = '<span class="pill ' + cls + '">' + escHtml(label) + '</span>';
+    if (a.confidence) {
+      html += ' <span class="hint">置信度 ' + escHtml(a.confidence) + '</span>';
+    }
+    if (a.analysis) {
+      html += '<details class="fbaud"><summary>查看 AI 分析</summary>' +
+        '<div class="fbtxt">' + escHtml(a.analysis) +
+        (a.suggested_answer
+          ? '\n\n建议答案：' + escHtml(a.suggested_answer) : '') + '</div></details>';
+    }
+    if (a.error) {
+      html += '<div class="hint" style="margin-top:3px">' + escHtml(a.error) + '</div>';
+    }
+    if (a.model) {
+      html += '<div class="hint" style="margin-top:2px">模型：' + escHtml(a.model) + '</div>';
+    }
+    return html;
+  }
+
   function renderFeedback() {
     var box = el('fb-list');
     if (!box) return;
@@ -2653,7 +2695,7 @@
       return;
     }
     var html = '<table><thead><tr><th>时间</th><th>学生</th><th>题目</th>' +
-      '<th>说明</th><th>状态</th><th></th></tr></thead><tbody>';
+      '<th>AI 审核</th><th>说明</th><th>状态</th><th></th></tr></thead><tbody>';
     feedbackItems.forEach(function (f) {
       var t = new Date((f.ts || 0) * 1000);
       var ts = t.getFullYear() + '-' + pad2(t.getMonth() + 1) + '-' + pad2(t.getDate()) +
@@ -2661,12 +2703,17 @@
       html += '<tr><td class="mono">' + ts + '</td>' +
         '<td>' + escHtml(f.bank_name || f.mac || '') + '</td>' +
         '<td>' + escHtml((f.text || '').slice(0, 40)) + '</td>' +
+        '<td>' + aiAuditCell(f) + '</td>' +
         '<td>' + (f.note ? escHtml(f.note) : '<span class="hint">（未写说明）</span>') + '</td>' +
         '<td>' + (f.status === 'open'
           ? '<span class="pill no">待处理</span>'
           : '<span class="pill ok">已处理</span>') + '</td>' +
-        '<td><button class="mini ghost" data-fbedit="' + escHtml(f.qid || '') +
-        '" data-fbbank="' + escHtml(f.bank_id || '') + '">编辑题目</button> ' +
+        '<td>' + (f.q_exists
+          ? '<button class="mini ghost" data-fbedit="' + escHtml(f.qid || '') +
+            '" data-fbbank="' + escHtml(f.bank_id || '') + '">编辑题目</button> '
+          : '<span class="hint">题目已删除</span> ') +
+        '<button class="mini ghost" data-fbre="' + escHtml(f.id) +
+        '">重新分析</button> ' +
         '<button class="mini" data-fbdone="' + escHtml(f.id) + '" data-fbstatus="' +
         (f.status === 'open' ? 'done' : 'open') + '">' +
         (f.status === 'open' ? '标记已处理' : '设为待处理') + '</button> ' +
@@ -2689,6 +2736,19 @@
           if (!requireAuth(res)) return;
           loadFeedback();
         }).catch(function () {});
+      };
+    });
+    Array.prototype.forEach.call(box.querySelectorAll('button[data-fbre]'), function (b) {
+      b.onclick = function () {
+        if (b.disabled) return;
+        b.disabled = true;
+        api('/api/admin/feedback/reanalyze', { id: b.getAttribute('data-fbre') })
+          .then(function (res) {
+            if (!requireAuth(res)) return;
+            toast(res.data.ok ? '已重新送 AI 审核，几秒后自动刷新' : '提交失败');
+            setTimeout(loadFeedback, 3000);
+            setTimeout(loadFeedback, 8000);
+          }).catch(function () { b.disabled = false; });
       };
     });
     Array.prototype.forEach.call(box.querySelectorAll('button[data-fbdel]'), function (b) {

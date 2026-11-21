@@ -1043,6 +1043,39 @@ class Store:
             self._write(self._runtime)
         return clean
 
+    def delete_question(self, bank_id, qid):
+        """3.50.9：从题库里删掉一道题（AI 审核判定答案有误时用）。
+
+        返回 True 表示删掉了；题目不存在返回 False。
+        """
+        qid = str(qid or "").strip()
+        if not qid:
+            return False
+        with self._lock:
+            target = next((b for b in self._runtime["banks"]
+                           if b["id"] == bank_id), None)
+            if not target:
+                raise StoreError("题库不存在")
+            keep = [q for q in target["questions"] if q.get("id") != qid]
+            if len(keep) == len(target["questions"]):
+                return False
+            target["questions"] = keep
+            # 档位要求的题数不能超过题库现有题数
+            total = len(keep)
+            fixed = []
+            for t in target.get("tiers") or []:
+                if int(t.get("questions") or 0) > total:
+                    t = dict(t, questions=total)
+                fixed.append(t)
+            target["tiers"] = [t for t in fixed if int(t.get("questions") or 0) >= 1]
+            if not target["tiers"]:
+                target["tiers"] = [{"questions": 1, "minutes": 30,
+                                    "pass_mode": "rate",
+                                    "pass_rate_percent": 80,
+                                    "wrong_add_questions": 2}]
+            self._write(self._runtime)
+        return True
+
     def prune_auto_questions(self, bank_id, keep):
         """只淘汰「定时自动出题」加进来的题（source 以 auto- 开头）中最旧的，
         内置题、手动预览入库的题一律不动；返回实际删掉的道数。

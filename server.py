@@ -30,6 +30,7 @@ import auto_bank
 import feedback
 import mistakes
 import learning
+import qa_review
 import router_adapter
 import savings
 import schedule
@@ -1187,7 +1188,15 @@ class Handler(BaseHTTPRequestHandler):
         log("FEEDBACK mac=%s bank=%s qid=%s note=%s"
             % (mac, (bank or {}).get("id", ""), item.get("qid") if item else "",
                note[:40]))
-        return self._json({"ok": True, "id": (item or {}).get("id", "")})
+        if item and item.get("qid"):
+            # 3.50.9：反馈进后台后，后台线程送 AI 审核（不耽误学生提交）
+            try:
+                threading.Thread(target=qa_review.review_feedback,
+                                 args=(STORE, item["id"]), daemon=True).start()
+            except Exception as exc:
+                log("QA-REVIEW-START-FAIL id=%s err=%s" % (item.get("id"), exc))
+        return self._json({"ok": True, "id": (item or {}).get("id", ""),
+                           "analyzing": bool(item and item.get("qid"))})
 
     def _setup(self):
         """首次配置：接收路由器密码，写 config.json 并立即生效。"""

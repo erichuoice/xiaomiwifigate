@@ -33,6 +33,8 @@ import importer  # noqa: E402
 import learning  # noqa: E402
 import mistakes  # noqa: E402
 import progress  # noqa: E402
+import qa_audit  # noqa: E402
+import qa_review  # noqa: E402
 import router_adapter  # noqa: E402
 import savings  # noqa: E402
 import schedule  # noqa: E402
@@ -1249,6 +1251,118 @@ def main():
           all(f.get("bank_id") == "bank_fb_a" for f in res.get("items") or []))
     feedback.delete(_fb_a["id"])
     feedback.delete(_fb_b["id"])
+
+    # 3.50.9：学生反馈 → AI 审核 → 答案有误删题 / 重复反馈不再调 AI
+    _old_qa_path, _old_fb_path = qa_audit.PATH, feedback.PATH
+    _old_forget = learning.forget_question
+    _qa_dir = tempfile.mkdtemp(prefix="wg-qa-")
+    qa_audit.PATH = os.path.join(_qa_dir, "qa_audit.json")
+    feedback.PATH = os.path.join(_qa_dir, "feedback.json")
+    try:
+        _qa_qs = [
+            {"id": "qa_bad", "type": "single", "text": "1+1=?", "options": ["1", "2"],
+             "answer": 0, "explain": "", "stage": "小学", "subject": "数学", "star": 1},
+            {"id": "qa_ok", "type": "single", "text": "2+2=?", "options": ["3", "4"],
+             "answer": 1, "explain": "", "stage": "小学", "subject": "数学", "star": 1},
+            {"id": "qa_nokey", "type": "single", "text": "3+3=?", "options": ["5", "6"],
+             "answer": 1, "explain": "", "stage": "小学", "subject": "数学", "star": 1},
+        ]
+
+        class _QAStore:
+            def __init__(self):
+                self.bank_obj = {"id": "bank_qa",
+                                 "questions": [dict(x) for x in _qa_qs]}
+                self.deleted = []
+
+            def bank(self, bid):
+                return self.bank_obj if bid == "bank_qa" else None
+
+            def delete_question(self, bid, qid):
+                if any(q["id"] == qid for q in self.bank_obj["questions"]):
+                    self.bank_obj["questions"] = [
+                        q for q in self.bank_obj["questions"] if q["id"] != qid]
+                    self.deleted.append(qid)
+                    return True
+                return False
+
+        _st_qa = _QAStore()
+        _calls = []
+
+        def _fake_ai(q):
+            _calls.append(q["id"])
+            if q["id"] == "qa_bad":
+                return {"answer_ok": False, "confidence": "high",
+                        "analysis": "选项 B 才是正确答案。", "suggested_answer": "B",
+                        "model": "fake", "provider": "fake"}
+            return {"answer_ok": True, "confidence": "high",
+                    "analysis": "答案与解析一致。", "suggested_answer": "",
+                    "model": "fake", "provider": "fake"}
+
+        learning.forget_question = lambda qid: None
+        _fb_bad = feedback.add(mac="qa", bank_id="bank_qa", qid="qa_bad",
+                               text="1+1=?", note="")
+        _r1 = qa_review.review_feedback(_st_qa, _fb_bad["id"], analyzer=_fake_ai)
+        _a1 = qa_audit.get("qa_bad") or {}
+        check("AI 判定答案有误时自动删题并留分析（3.50.9）",
+              _r1.get("ok") is True and _r1.get("deleted") is True and
+              _st_qa.deleted == ["qa_bad"] and _a1.get("status") == "bad" and
+              _a1.get("answer_ok") is False and
+              "选项 B" in (_a1.get("analysis") or ""))
+        _fb_dup = feedback.add(mac="qa", bank_id="bank_qa", qid="qa_bad",
+                               text="1+1=?", note="")
+        _r2 = qa_review.review_feedback(_st_qa, _fb_dup["id"], analyzer=_fake_ai)
+        _a_dup = qa_audit.get("qa_bad") or {}
+        check("同一道题重复反馈不再送 AI（3.50.9）",
+              len(_calls) == 1 and _r2.get("cached") is True and
+              _fb_dup["id"] in (_a_dup.get("feedback_ids") or []))
+        _fb_ok = feedback.add(mac="qa", bank_id="bank_qa", qid="qa_ok",
+                              text="2+2=?", note="")
+        _r3 = qa_review.review_feedback(_st_qa, _fb_ok["id"], analyzer=_fake_ai)
+        _a3 = qa_audit.get("qa_ok") or {}
+        check("AI 判定答案正确时保留题目并保存分析（3.50.9）",
+              _r3.get("ok") is True and _r3.get("deleted") is False and
+              _a3.get("status") == "ok" and _a3.get("answer_ok") is True and
+              "答案与解析一致" in (_a3.get("analysis") or ""))
+        _fb_nokey = feedback.add(mac="qa", bank_id="bank_qa", qid="qa_nokey",
+                                 text="3+3=?", note="")
+        _r4 = qa_review.review_feedback(_st_qa, _fb_nokey["id"],
+                                        cfg={"api_key": ""})
+        _item4 = feedback.get(_fb_nokey["id"]) or {}
+        check("没配 AI Key 时不缓存、提示去配置（3.50.9）",
+              _r4.get("reason") == "no_key" and
+              bool(_item4.get("analysis_error")))
+        _old_chat = ai_bank._chat
+
+        def _fake_chat(cfg, system, user, max_tokens=0, temperature=0):
+            return ('{"answer_ok": true, "confidence": "low", '
+                    '"analysis": "OK", "suggested_answer": ""}', 0.1)
+
+        ai_bank._chat = _fake_chat
+        try:
+            _an = ai_bank.analyze_question(_qa_qs[1],
+                                           {"api_key": "x", "model": "fake"})
+            check("AI 审核结果能解析出结论与分析（3.50.9）",
+                  _an.get("answer_ok") is True and _an.get("analysis") == "OK")
+        finally:
+            ai_bank._chat = _old_chat
+    finally:
+        qa_audit.PATH = _old_qa_path
+        feedback.PATH = _old_fb_path
+        learning.forget_question = _old_forget
+
+    code, _raw = call("/api/feedback", {"id": "no_such_qid_qa",
+                                        "text": "AI 审核测试"})
+    _resp = _maybe_json(_raw)
+    check("反馈提交后会标记送 AI 审核（3.50.9）",
+          code == 200 and _resp.get("ok") is True and
+          _resp.get("analyzing") is True, str(_resp)[:80])
+    code, res = admin("/api/admin/feedback")
+    _fb_item = next((x for x in res.get("items") or []
+                     if x.get("text") == "AI 审核测试"), {})
+    check("后台反馈列表带 AI 审核字段（3.50.9）",
+          "audit" in _fb_item and "q_exists" in _fb_item)
+    if _fb_item.get("id"):
+        admin("/api/admin/feedback/delete", {"id": _fb_item["id"]})
 
     # 3.36.0：错题分析页（原因/学科/知识点/题型）
     _old_l3 = learning.PATH
@@ -3095,6 +3209,10 @@ def main():
           "}, 1000);" in index_html and
           "clearTimeout(S.autoTimer);" in index_html and
           "单选 / 判断：点一下选项就直接提交" in index_html)
+    check("后台反馈列表展示 AI 审核结果与重新分析按钮（3.50.9）",
+          "aiAuditCell" in admin_html and "重新分析" in admin_html and
+          "AI 审核" in admin_html and "feedback/reanalyze" in admin_html and
+          "查看 AI 分析" in admin_html)
     check("学情页有学科分析 / 错题编辑 / 题目反馈（3.34.0）",
           "学科分析" in admin_html and "最需要加强" in admin_html and
           callable(getattr(learning, "subject_stats", None)) and
@@ -3104,7 +3222,7 @@ def main():
           "id=\"qedit-mask\"" in admin_html and
           "/api/feedback" in index_html and "这题是不是出错了" in index_html and
           "function addDispute(" in index_html and
-          "note: ''" in index_html and "已反馈，家长会在后台看到" in index_html and
+          "note: ''" in index_html and "已反馈，后台会自动审核这道题" in index_html and
           "这里只显示<b>当前管理对象</b>的反馈" in admin_html and
           "loadFeedback()" in admin_html and
           "/api/admin/feedback' + (bid ?" in admin_html)

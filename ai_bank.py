@@ -239,7 +239,7 @@ def _endpoint(cfg):
     return base + "/chat/completions"
 
 
-def _chat(cfg, system, user, max_tokens=3600):
+def _chat(cfg, system, user, max_tokens=3600, temperature=0.9):
     key = str(cfg.get("api_key") or "")
     if not key:
         raise AIError("还没填写 API Key")
@@ -248,7 +248,7 @@ def _chat(cfg, system, user, max_tokens=3600):
         "model": cfg["model"] or "deepseek-chat",
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": user}],
-        "temperature": 0.9,
+        "temperature": temperature,
         "max_tokens": max_tokens,
         "stream": False,
     }
@@ -281,6 +281,114 @@ def _chat(cfg, system, user, max_tokens=3600):
     except (ValueError, KeyError, IndexError, TypeError):
         raise AIError("接口返回格式异常，不是标准 chat/completions 响应")
     return content, round(time.time() - started, 1)
+
+
+def _extract_object(content):
+    """从模型回复里抠出一个 JSON 对象（审核结果用）。"""
+    text = str(content or "").strip()
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I).strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start >= 0 and end > start:
+        text = text[start:end + 1]
+    try:
+        data = json.loads(_escape_control(text))
+    except ValueError:
+        try:
+            data = json.loads(_escape_control(text), strict=False)
+        except ValueError as exc:
+            raise AIError("AI 没有返回合法 JSON：%s" % exc)
+    if not isinstance(data, dict):
+        raise AIError("AI 返回的审核结果不是 JSON 对象")
+    return data
+
+
+def _as_bool(value):
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("true", "1", "yes", "y", "对", "是", "正确"):
+        return True
+    if text in ("false", "0", "no", "n", "错", "否", "不正确", "错误"):
+        return False
+    return None
+
+
+def _answer_text(question):
+    """把答案索引转成「B. 选项内容」，给审核 prompt 和结果展示用。"""
+    q = question or {}
+    opts = q.get("options") or []
+    answer = q.get("answer")
+    idxs = answer if isinstance(answer, list) else [answer]
+    parts = []
+    for raw in idxs:
+        try:
+            i = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= i < len(opts):
+            parts.append("%s. %s" % (LETTERS[i], opts[i]))
+        else:
+            parts.append(str(raw))
+    return "；".join(parts) or str(answer)
+
+
+def analyze_question(question, cfg=None):
+    """3.50.9：让 AI 审核一道题的答案是否正确。
+
+    返回 {answer_ok, confidence, analysis, suggested_answer, model, provider, raw, latency}
+    没配 Key / 接口失败时抛 AIError。
+    """
+    cfg = cfg or load_config()
+    q = question or {}
+    if not str(cfg.get("api_key") or ""):
+        raise AIError("还没填写 API Key")
+    opts = q.get("options") or []
+    opt_lines = "\n".join("%s. %s" % (LETTERS[i], o)
+                           for i, o in enumerate(opts[:8]))
+    system = (
+        "你是中小学教研组的审题老师，负责判断题库里一道题的标准答案是否正确。"
+        "要逐项核对题干、选项和答案；如果答案索引与选项内容对不上、或存在另一项更正确，"
+        "就判为答案有误。只输出一个 JSON 对象，不要 markdown、不要解释语气词。"
+    )
+    user = (
+        "请审核下面这道题：\n"
+        "学段：%s；年级：%s；科目：%s；题型：%s\n"
+        "题干：%s\n"
+        "选项：\n%s\n"
+        "题库标注的答案：%s\n"
+        "题库给出的解析：%s\n\n"
+        "请只输出 JSON：\n"
+        '{"answer_ok": true 或 false, "confidence": "high/medium/low", '
+        '"analysis": "详细中文分析：为什么答案对/错，错在哪里", '
+        '"suggested_answer": "如果答案有误，写正确选项/答案；否则空字符串"}\n'
+        "answer_ok=true 表示题库答案正确；false 表示答案有误（需要删题）。"
+        % (q.get("stage") or "未填", q.get("grade") or "未填",
+           q.get("subject") or "未填",
+           {"single": "单选题", "multi": "多选题", "judge": "判断题"}.get(
+               q.get("type") or "", "未填"),
+           str(q.get("text") or "")[:800],
+           opt_lines or "（无选项）",
+           _answer_text(q),
+           str(q.get("explain") or "")[:600])
+    )
+    content, latency = _chat(cfg, system, user, max_tokens=1400, temperature=0.1)
+    data = _extract_object(content)
+    answer_ok = _as_bool(data.get("answer_ok"))
+    if answer_ok is None:
+        raise AIError("AI 审核结果里没有可识别的 answer_ok")
+    conf = str(data.get("confidence") or "medium").strip().lower()
+    if conf not in ("high", "medium", "low"):
+        conf = "medium"
+    return {
+        "answer_ok": bool(answer_ok),
+        "confidence": conf,
+        "analysis": str(data.get("analysis") or "").strip()[:4000],
+        "suggested_answer": str(data.get("suggested_answer") or "").strip()[:300],
+        "model": str(cfg.get("model") or ""),
+        "provider": str(cfg.get("provider") or ""),
+        "raw": str(content)[:4000],
+        "latency": latency,
+    }
 
 
 def test_connection(cfg=None):

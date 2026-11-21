@@ -418,6 +418,30 @@ def record_round(who, all_ok, ts=None):
         _save(data)
 
 
+def forget_question(qid):
+    """3.50.9：题目被删掉后，把所有学生错题本里的这道题一并清掉。
+
+    返回清掉的条数（跨学生合计）。
+    """
+    qid = str(qid or "").strip()
+    if not qid:
+        return 0
+    removed = 0
+    with _lock:
+        data = _load()
+        for dev in data.get("learners", {}).values():
+            if not isinstance(dev, dict):
+                continue
+            wrong = dev.get("wrong") or []
+            keep = [w for w in wrong if w.get("qid") != qid]
+            if len(keep) != len(wrong):
+                removed += len(wrong) - len(keep)
+                dev["wrong"] = keep
+        if removed:
+            _save(data)
+    return removed
+
+
 def delete_wrong_by_subject(who, subject):
     """3.39.0：删掉某个人错题本里某个学科的全部错题记录（不动题库、不动答对记录）。
 

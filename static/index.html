@@ -722,7 +722,7 @@
       }).then(function (r) { return r.json(); }).then(function (d) {
         if (d.ok) {
           bar.innerHTML = '<span style="font-size:13px;color:#0f7a5a">' +
-            '已反馈，家长会在后台看到，谢谢！</span>';
+            '已反馈，后台会自动审核这道题，谢谢！</span>';
         } else {
           btn.disabled = false;
           btn.textContent = '这题是不是出错了？点这里反馈';
